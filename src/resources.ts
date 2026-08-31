@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   createEventBus,
   createExtensionRuntime,
@@ -70,7 +70,10 @@ export class FeishuResourceLoader implements ResourceLoader {
 
     const manager = packageManager(this.agentHome, this.projectRoot, this.projectKey);
     const resolved = await manager.resolve(async () => "skip");
-    const packageSkills = resolved.skills.filter((entry) => entry.enabled).flatMap((entry) => loadSkillsFromDir({ dir: entry.path, source: entry.metadata.source }).skills);
+    const packageSkills = resolved.skills.filter((entry) => entry.enabled && entry.metadata.source !== "auto").flatMap((entry) => {
+      const loaded = loadSkillsFromDir({ dir: entry.path, source: entry.metadata.source }).skills;
+      return loaded.length ? loaded : loadSkillsFromDir({ dir: dirname(entry.path), source: entry.metadata.source }).skills.filter((skill) => skill.filePath === entry.path);
+    });
     const extensionPaths = resolved.extensions.filter((entry) => entry.enabled).map((entry) => entry.path)
       .filter((path) => !path.includes("@mem0/pi-agent-plugin"));
     this.extensions = extensionPaths.length

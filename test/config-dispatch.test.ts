@@ -55,6 +55,7 @@ test("scripted config toggles persist by scope and change the next Feishu Resour
   await manager.installAndPersist(pkg, { local: true });
   projectSource = manager.listConfiguredPackages().find((entry) => entry.scope === "project")!.source;
   assert.equal(runConfig(true, "off").status, 0);
+  assert.equal(await load(), false);
   const projectSettings = readFileSync(join(projectRoot, ".feishu-agent", "settings.json"), "utf8");
   assert.match(projectSettings, /"extensions": \[\]/);
   assert.equal(readFileSync(join(pi, "settings.json"), "utf8"), "PI-SETTINGS-BYTES");
