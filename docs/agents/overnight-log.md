@@ -97,3 +97,8 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Validation: focused Lark identity test, build, and full suite passed.
 - Standards review: one environment override, no config writes/copies, and prompt-only operating guidance; no wrapper tool added.
 - Spec review: explicit `--as user`, constrained `--as bot`, shortcut/help/schema guidance, unrelated-work referral, and profile isolation are covered. `LARK_PROFILE` is the conservative child-process propagation seam. No P0/P1/P2 findings.
+### T13 / #13
+
+- Red/Green: exact action/target/identity/scope approval record and one-shot authorization behavior added; focused/build/full tests pass.
+- Standards review: immutable comparison fields plus a consumed bit; no generalized policy engine or persistent blanket grants.
+- Spec review: ambiguity, widening, identity change, target change, and reuse are rejected with an explicit non-OS-boundary diagnostic. Deferred ceiling: Bash tool-call interception requires a public pre-execution hook not exposed by the current SDK composition. No safe P0/P1/P2 fix without patching Pi.
