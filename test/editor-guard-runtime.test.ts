@@ -18,6 +18,18 @@ test("outer editor guard intercepts Pi-wired submit after custom editor creation
   assert.match(feedback[0], /does not share sessions/);
 });
 
+test("core tool_call hook enforces exact one-shot lark approval and Print termination", async () => {
+  const handlers = new Map<string, Function>();
+  const command = "lark-cli doc delete --id doc-1 --as user --yes";
+  corePolicyExtension(`run ${command}`)({
+    on: (name: string, handler: Function) => handlers.set(name, handler),
+    registerCommand: () => {},
+  } as never);
+  const hook = handlers.get("tool_call")!;
+  assert.equal(await hook({ toolName: "bash", input: { command } }, { mode: "print", ui: { notify: () => {} } }), undefined);
+  const blocked = await hook({ toolName: "bash", input: { command } }, { mode: "print", ui: { notify: () => {} } });
+  assert.deepEqual({ block: blocked.block, terminate: blocked.terminate }, { block: true, terminate: true });
+});
 test("resume startup extension registers a host-owned current-project selector command", () => {
   const commands: string[] = [];
   corePolicyExtension(undefined, true)({
