@@ -125,3 +125,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Red/Green: idempotent Home bootstrap and real `feishu init --identity` dispatch added; focused/build/full tests pass.
 - Standards review: atomic JSON rename, create-if-absent semantics, and explicit identity only; no inferred username/host/email.
 - Spec review: required directories, base SYSTEM.md, `feishu:` identity, non-sensitive Mem0 settings, and preservation of custom system/settings/identity are covered. Deferred ceiling: explicit reset flags are not yet surfaced; current conservative behavior never overwrites. No P0/P1/P2 findings.
+### T18 / #18
+
+- Red/Green: fake authenticated model catalog, fake `lark-cli doctor`, and secret-free model selection behavior added.
+- Validation: focused/build/full tests pass; Pi settings bytes remain unchanged.
+- Standards review: public ModelRuntime and one doctor subprocess; API key presence only, never persisted/printed.
+- Spec review: authenticated selection, independent Feishu default, no-model/Mem0/doctor diagnostics, and credential isolation are implemented. Ceiling: unattended mode selects via `--model`/first available rather than an interactive selector; explicit selection remains required for deterministic automation. No P0/P1/P2 findings.
