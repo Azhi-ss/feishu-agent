@@ -47,6 +47,7 @@ function inspect(): void {
     mem0Telemetry: process.env.MEM0_TELEMETRY,
     home: process.env.HOME,
     environmentMarker: process.env.FEISHU_TEST_MARKER,
+    larkProfile: process.env.LARK_PROFILE,
   }));
 }
 
@@ -81,6 +82,12 @@ function validateArgs(args: string[]): void {
 }
 
 const args = process.argv.slice(2);
+const profileIndex = args.indexOf("--lark-profile");
+if (profileIndex >= 0) {
+  if (!args[profileIndex + 1]) fail("--lark-profile requires a profile name.");
+  process.env.LARK_PROFILE = args[profileIndex + 1];
+  args.splice(profileIndex, 2);
+}
 if (args.includes("--help") || args.includes("-h")) process.stdout.write(HELP);
 else {
   validateArgs(args);

@@ -91,3 +91,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Red/Green: exact public command predicate added with one behavior test; focused/build/full tests pass.
 - Standards review: anchored parser avoids false positives; four reasons are Feishu-specific; no autocomplete rewrite.
 - Spec review: exact prohibited/allowed command boundaries covered. Deferred ceiling: Pi `InteractiveMode` does not expose a public outer-editor injection constructor in 0.84.3; wiring before built-in dispatch would require a non-public patch, forbidden by SPEC. Predicate is retained for the smallest future public hook. No safe in-scope fix exists without widening architecture.
+### T12 / #12
+
+- Red/Green: resumed the timed-out slice; expanded CLI behavior proof for invocation-local `--lark-profile`, unchanged fake Lark config, and no token/config copy into Feishu Agent Home.
+- Validation: focused Lark identity test, build, and full suite passed.
+- Standards review: one environment override, no config writes/copies, and prompt-only operating guidance; no wrapper tool added.
+- Spec review: explicit `--as user`, constrained `--as bot`, shortcut/help/schema guidance, unrelated-work referral, and profile isolation are covered. `LARK_PROFILE` is the conservative child-process propagation seam. No P0/P1/P2 findings.
