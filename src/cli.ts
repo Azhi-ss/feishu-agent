@@ -10,6 +10,7 @@ import { runInteractive, runPrint } from "./runtime.js";
 import { syncOfficialSkills } from "./official-skills.js";
 import { packageManager } from "./packages.js";
 import { initializeHome } from "./init.js";
+import { checkReadiness } from "./readiness.js";
 
 const CORE_TOOLS = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 
@@ -99,7 +100,15 @@ else {
     if (!identity) fail("feishu init requires --identity <stable-id> (or FEISHU_MEMORY_IDENTITY for unattended initialization).");
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
     const result = initializeHome(agentHome, identity);
-    process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\n`);
+    const modelIndex = args.indexOf("--model");
+    const readiness = await checkReadiness(realpathSync(homedir()), agentHome, modelIndex >= 0 ? args[modelIndex + 1] : undefined);
+    const root = projectRoot(realpathSync(process.cwd()));
+    const manager = packageManager(agentHome, root, projectKey(root));
+    if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source.includes("@mem0/pi-agent-plugin"))) {
+      await manager.installAndPersist("npm:@mem0/pi-agent-plugin@0.1.5");
+    }
+    const skills = syncOfficialSkills(join(agentHome, "official-skills"));
+    process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\nModel: ${readiness.model}\nMem0 Package: ready\nOfficial Skills: ${skills.version}\nLark doctor: ${readiness.doctor}\n`);
   }
   else if (args[0] === "skills" && args[1] === "sync") {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");

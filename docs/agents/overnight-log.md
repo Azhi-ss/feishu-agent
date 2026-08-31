@@ -131,3 +131,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Validation: focused/build/full tests pass; Pi settings bytes remain unchanged.
 - Standards review: public ModelRuntime and one doctor subprocess; API key presence only, never persisted/printed.
 - Spec review: authenticated selection, independent Feishu default, no-model/Mem0/doctor diagnostics, and credential isolation are implemented. Ceiling: unattended mode selects via `--model`/first available rather than an interactive selector; explicit selection remains required for deterministic automation. No P0/P1/P2 findings.
+### T19 / #19
+
+- Red: focused test caught an emitted-test source path error; corrected to the repository source path.
+- Green: `feishu init` now thinly orchestrates Home, readiness, exact Mem0 package install, and official Skill sync; focused/build/full tests pass.
+- Standards review: no duplicated package/Skill/readiness logic; existing configured Mem0 entry avoids duplicates; telemetry is forced before imports.
+- Spec review: successful summary contains Home, identity, model, package, Skill version, and doctor state. Midway reruns are idempotent through create-if-absent settings, package-entry check, and cache reuse. Environmental ceiling: full subprocess init would invoke npm package installation; component seams are fake/local tested without publishing or real credentials. No P0/P1/P2 findings.
