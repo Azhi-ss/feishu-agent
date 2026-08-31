@@ -44,3 +44,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: real local fake-model HTTP stream returned `pong`; missing-model case failed early; focused/build/full tests passed.
 - Standards review: public Pi SDK (`ModelRuntime`, session runtime, Print runner) and Node stdlib only; shared auth/catalog are read-only by construction/test; foreign resources disabled.
 - Spec review: independent Feishu default, shared model authentication, Print runner exit, exact core tools, launch-CWD binding, and readiness diagnostic covered. P2 fixed during review: explicit `allowModelNetwork: false`. No remaining P0/P1/P2 findings.
+### T04 / #4
+
+- Red: `npm run build` failed after the behavior test because the custom loader needed Pi's public `createExtensionRuntime`; fixed without broadening resource discovery.
+- Green: focused resource-loader test, build, and full suite passed.
+- Standards review: one explicit ResourceLoader with four allowed private prompt/skill paths; Pi skill parser reused; deterministic project-over-global precedence.
+- Spec review: normative Feishu identity/domain vocabulary, append-only project context, foreign resource exclusion, referral boundary, isolation warning, and shadow diagnostics covered. No remaining P0/P1/P2 findings.

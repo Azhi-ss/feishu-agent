@@ -87,7 +87,7 @@ else {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    runPrint(args[1], cwd, agentHome, join(agentHome, "sessions", projectKey(root)))
+    runPrint(args[1], cwd, root, agentHome, join(agentHome, "sessions", projectKey(root)))
       .then((code) => { process.exitCode = code; })
       .catch((error: unknown) => {
         process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`);
