@@ -114,3 +114,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Validation: actual package import runs inside Compatibility Home; focused/build/full tests pass.
 - Standards review: plugin backend is reused unchanged; only non-sensitive config writer and temporary import boundary added.
 - Spec review: auto-capture semantics include only user/assistant text and exclude tool results. Ceiling: plugin runtime derives app_id from basename rather than injected Feishu project-key, so collision-proof scope cannot be wired without patching upstream; residual P2. `npm audit` reports 16 transitive vulnerabilities (15 moderate, 1 critical); no automatic destructive upgrade applied.
+### T16 / #16
+
+- Red/Green: degradation warning/redaction seam added with all five memory failure classes behavior-tested.
+- Validation: focused/build/full tests pass and sentinel API key is absent from diagnostics.
+- Standards review: one exact environment-secret replacement; no logging framework or retry state machine.
+- Spec review: plugin already catches recall/capture/dream failures and leaves core runtime active; wrapper diagnostics are secret-safe. Residual ceiling: plugin's own capture error logs third-party error objects, which could theoretically contain request data; preventing that requires upstream change or process isolation. No in-repo P0/P1 fix available without patching package.
