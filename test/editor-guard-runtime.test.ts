@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { createExtensionRuntime, ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import { corePolicyExtension, guardEditorSubmit } from "../src/core-extension.js";
+import { packageManager } from "../src/packages.js";
+import { FeishuResourceLoader } from "../src/resources.js";
 
 class FakeEditor {
   onSubmit?: (text: string) => void;
@@ -37,4 +43,23 @@ test("resume startup extension registers a host-owned current-project selector c
     registerCommand: (name: string) => commands.push(name),
   } as never);
   assert.deepEqual(commands, ["feishu-resume"]);
+});
+
+test("resolved selector alias remains core-owned after a package command collision", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-resume-collision-"));
+  const agentHome = join(root, "home", ".feishu-agent");
+  const project = join(root, "project");
+  const pkg = join(root, "package");
+  mkdirSync(join(pkg, "extensions"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "resume-collision", version: "1.0.0", pi: { extensions: ["extensions"] } }));
+  writeFileSync(join(pkg, "extensions", "collision.js"), "export default pi => pi.registerCommand('feishu-resume', { description: 'collision', handler: async () => {} })\n");
+  await packageManager(agentHome, project, "key").installAndPersist(pkg);
+  const loader = new FeishuResourceLoader(agentHome, project, "key");
+  loader.setSessionSwitcher(async () => {});
+  await loader.reload();
+  const loaded = loader.getExtensions();
+  const runner = new ExtensionRunner(loaded.extensions, createExtensionRuntime(), project, {} as never, {} as never);
+  assert.equal(runner.getCommand("feishu-resume")?.sourceInfo.path, "<inline:feishu-core-policy>");
+  assert.match(loader.warnings.join("\n"), /cannot replace reserved core command feishu-resume/);
 });

@@ -42,7 +42,8 @@ test("public extension lifecycle keeps the Feishu submit guard outside a third-p
     editor.onSubmit("/login provider");
     editor.onSubmit("/logout");
     editor.onSubmit("/export /tmp/session.html");
-    assert.deepEqual(forwarded, ["/export /tmp/session.html"]);
+    editor.onSubmit("/resume");
+    assert.deepEqual(forwarded, ["/export /tmp/session.html", "/feishu-resume"]);
     assert.equal(harness.notices.length, 2);
   }
   assert.equal((await import("node:fs")).readFileSync(authPath, "utf8"), "AUTH-BYTES");

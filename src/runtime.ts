@@ -18,7 +18,7 @@ export async function runtimeHostSwitchOverride(runtime: Pick<AgentSessionRuntim
   await runtime.switchSession(path, { cwdOverride: launchCwd });
 }
 
-export async function createRuntime(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, currentRequest?: string, selectSession = false) {
+async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, currentRequest?: string, interactive = false) {
   const piHome = join(process.env.HOME!, ".pi", "agent");
   const modelRuntime = await ModelRuntime.create({ authPath: join(piHome, "auth.json"), modelsPath: join(piHome, "models.json"), allowModelNetwork: false });
   const settingsManager = settingsManagerFor(agentHome, projectRoot);
@@ -27,7 +27,7 @@ export async function createRuntime(cwd: string, projectRoot: string, projectKey
   const resourceLoader = new FeishuResourceLoader(agentHome, projectRoot, projectKey, currentRequest, memory.extension);
   resourceLoader.setMemoryDiagnostic(memory.diagnostic);
   let runtime: AgentSessionRuntime | undefined;
-  if (selectSession) resourceLoader.setSessionSwitcher(async (path) => {
+  if (interactive) resourceLoader.setSessionSwitcher(async (path) => {
     const originalCwd = (await import("@earendil-works/pi-coding-agent")).SessionManager.open(path).getCwd();
     const mismatch = cwdMismatchNotice(originalCwd, cwd);
     if (mismatch) process.stderr.write(`Session Notice: ${mismatch}\n`);
@@ -51,6 +51,10 @@ export async function createRuntime(cwd: string, projectRoot: string, projectKey
   return runtime;
 }
 
+export async function createRuntime(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, currentRequest?: string) {
+  return createRuntimeForMode(cwd, projectRoot, projectKey, agentHome, resume, currentRequest);
+}
+
 export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string): Promise<number> {
   const runtime = await createRuntime(cwd, projectRoot, projectKey, agentHome, false, prompt);
   try { return await runPrintMode(runtime, { mode: "text", initialMessage: prompt }); }
@@ -58,7 +62,7 @@ export async function runPrint(prompt: string, cwd: string, projectRoot: string,
 }
 
 export async function runInteractive(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, selectSession = false): Promise<void> {
-  const runtime = await createRuntime(cwd, projectRoot, projectKey, agentHome, resume, undefined, selectSession);
+  const runtime = await createRuntimeForMode(cwd, projectRoot, projectKey, agentHome, resume, undefined, true);
   try { await new InteractiveMode(runtime, { startupDiagnostics: [...runtime.diagnostics], initialMessage: selectSession ? "/feishu-resume" : undefined }).run(); }
   finally { await runtime.dispose(); }
 }

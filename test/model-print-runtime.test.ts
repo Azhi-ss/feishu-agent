@@ -56,6 +56,30 @@ test("print mode uses shared read-only auth and isolated Feishu default", async 
   } finally { server.close(); }
 });
 
+test("print mode sends a literal /resume prompt instead of invoking the Interactive selector", async () => {
+  let prompt = "";
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => body += chunk);
+    request.on("end", () => {
+      try { prompt = JSON.parse(body).messages.at(-1)?.content ?? ""; } catch {}
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end('data: {"choices":[{"delta":{"content":"literal-resume-response"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const f = fixture(`http://127.0.0.1:${address.port}/v1`);
+  try {
+    const result = await runAsync(f.cwd, f.home, ["-p", "/resume"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /literal-resume-response/);
+    assert.deepEqual(prompt, [{ type: "text", text: "/resume" }]);
+    assert.doesNotMatch(result.stderr, /Extension error|ui\.custom/);
+  } finally { server.close(); }
+});
+
 test("print mode fails before prompting when no authenticated model exists", () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-no-model-"));
   const home = join(root, "home");

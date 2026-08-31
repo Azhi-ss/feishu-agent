@@ -17,7 +17,7 @@ export function guardEditorSubmit(editor: EditorLike, feedback: (message: string
       submit = next && ((text: string) => {
         const reason = prohibitedCommand(text);
         if (reason) feedback(reason);
-        else next(text);
+        else next(text === "/resume" ? "/feishu-resume" : text);
       });
     },
   });

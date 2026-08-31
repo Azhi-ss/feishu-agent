@@ -90,11 +90,13 @@ export class FeishuResourceLoader implements ResourceLoader {
       ],
     });
     await core.reload();
-    this.extensions.extensions.push(...core.getExtensions().extensions);
-    this.extensions.errors.push(...core.getExtensions().errors);
+    const coreExtensions = core.getExtensions();
+    this.extensions.extensions.push(...coreExtensions.extensions);
+    this.extensions.errors.push(...coreExtensions.errors);
     for (const extension of this.extensions.extensions) {
       if (extension.path === "<inline:feishu-core-policy>") continue;
       for (const reserved of CORE_TOOLS) if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);
+      if (extension.commands.delete("feishu-resume")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command feishu-resume.`);
     }
 
     const packageResources = new DefaultResourceLoader({
