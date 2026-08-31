@@ -80,3 +80,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: stable path-hash partition behavior, same-basename separation, central storage, and launch-CWD manager binding pass; build/full suite pass.
 - Standards review: one SHA-256 key helper and Pi SessionManager reuse; no repository transcript paths.
 - Spec review: central project partition and current launch CWD are wired into Print runtime. Deferred ceiling: visible resumed-CWD notice requires continuation/TUI dispatch in Ticket 10. No remaining P0/P1/P2 findings within this ticket.
+### T10 / #10
+
+- Red: build caught a missing dispatch brace before validation; fixed immediately.
+- Green: Interactive composition seam uses Pi's public `InteractiveMode`; focused API composition, build, and full suite pass; Print remains on `runPrintMode`.
+- Standards review: runtime creation is shared once between Print and TUI; no spawning ordinary Pi; session replacement remains owned by `AgentSessionRuntime`.
+- Spec review: default TUI, `-c` continuation, project session pool, local Pi commands and `/model` are inherited through InteractiveMode. Environmental warning: no stable PTY driver is installed, so unattended prompt submission smoke is deferred to release matrix. No remaining code P0/P1/P2 findings.

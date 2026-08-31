@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { runPrint } from "./runtime.js";
+import { runInteractive, runPrint } from "./runtime.js";
 import { syncOfficialSkills } from "./official-skills.js";
 import { packageManager } from "./packages.js";
 
@@ -120,6 +120,13 @@ else {
         process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`);
         process.exitCode = 1;
       });
+  }
+  else if (args.length === 0 || args[0] === "-c" || args[0] === "-r") {
+    const cwd = realpathSync(process.cwd());
+    const root = projectRoot(cwd);
+    const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    runInteractive(cwd, root, projectKey(root), agentHome, args[0] === "-c")
+      .catch((error: unknown) => { process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
   } else {
     process.stderr.write("Feishu Agent runtime is not initialized. Run `feishu init`.\n");
     process.exitCode = 1;
