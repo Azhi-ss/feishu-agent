@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { runPrint } from "./runtime.js";
 
 const CORE_TOOLS = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 
@@ -82,7 +83,17 @@ if (args.includes("--help") || args.includes("-h")) process.stdout.write(HELP);
 else {
   validateArgs(args);
   if (process.env.FEISHU_AGENT_INSPECT === "1") inspect();
-  else {
+  else if (args[0] === "-p") {
+    const cwd = realpathSync(process.cwd());
+    const root = projectRoot(cwd);
+    const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    runPrint(args[1], cwd, agentHome, join(agentHome, "sessions", projectKey(root)))
+      .then((code) => { process.exitCode = code; })
+      .catch((error: unknown) => {
+        process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 1;
+      });
+  } else {
     process.stderr.write("Feishu Agent runtime is not initialized. Run `feishu init`.\n");
     process.exitCode = 1;
   }

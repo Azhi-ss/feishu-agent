@@ -38,3 +38,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: focused CLI-surface test, build, and full `npm test` passed.
 - Standards review: top-level parsing only; no runtime/subcommand implementation; telemetry forced before SDK/package imports.
 - Spec review: exact documented surface, unsupported mode rejection, real HOME/environment preservation, and sandbox warning covered. No P0/P1/P2 findings.
+### T03 / #3
+
+- Red: public Print-mode behavior test was added before the runtime; the minimum Pi SDK runtime then passed it on its first execution.
+- Green: real local fake-model HTTP stream returned `pong`; missing-model case failed early; focused/build/full tests passed.
+- Standards review: public Pi SDK (`ModelRuntime`, session runtime, Print runner) and Node stdlib only; shared auth/catalog are read-only by construction/test; foreign resources disabled.
+- Spec review: independent Feishu default, shared model authentication, Print runner exit, exact core tools, launch-CWD binding, and readiness diagnostic covered. P2 fixed during review: explicit `allowModelNetwork: false`. No remaining P0/P1/P2 findings.
