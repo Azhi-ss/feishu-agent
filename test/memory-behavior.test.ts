@@ -25,6 +25,38 @@ test("Mem0 config enforces stable Feishu project capture without secrets", async
   assert.equal(process.env.MEM0_TELEMETRY, "false");
 });
 
+test("installed Mem0 package factory loads under Compatibility Home without duplicate handlers", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-package-"));
+  const agent = join(root, ".feishu-agent");
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => new Response(String(input).includes("/v1/ping") ? '{"status":"ok"}' : '{"results":[]}', { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  writeMemoryConfig(agent, "alice");
+  process.env.MEM0_API_KEY = "package-key";
+  process.env.MEM0_USER_ID = "foreign-user";
+  const entry = join(process.cwd(), "node_modules", "@mem0", "pi-agent-plugin", "dist", "entry.js");
+  const { discoverAndLoadExtensions, createEventBus } = await import("@earendil-works/pi-coding-agent");
+  const loaded = await withCompatibilityHome(root, agent, async () => {
+    const external = process.env.MEM0_USER_ID;
+    delete process.env.MEM0_USER_ID;
+    try { return await discoverAndLoadExtensions([entry], root, agent, createEventBus()); }
+    finally { process.env.MEM0_USER_ID = external!; }
+  });
+  assert.equal(loaded.errors.length, 0);
+  assert.equal(loaded.extensions.length, 1);
+  const extension = loaded.extensions[0];
+  assert.deepEqual([...extension.tools.keys()], ["mem0_memory"]);
+  assert.equal(new Set(extension.commands.keys()).size, extension.commands.size);
+  assert(extension.commands.size > 0);
+  for (const name of ["session_start", "before_agent_start", "session_shutdown"]) assert.equal(extension.handlers.get(name)?.length, 1);
+  assert.equal(extension.handlers.get("agent_end")?.length, 2);
+  assert.equal(process.env.MEM0_USER_ID, "foreign-user");
+  assert.equal(process.env.MEM0_TELEMETRY, "false");
+  assert.equal(readdirSync(root).includes(".pi"), false);
+  assert.equal(readdirSync(agent).some((name) => name === "mem0-telemetry-id.json"), false);
+  globalThis.fetch = previousFetch;
+});
+
+
 test("healthy Dream uses package semantics and stores its state under Feishu Agent Home", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-memory-dream-")); const agent = join(root, ".feishu-agent");
   writeMemoryConfig(agent, "alice"); process.env.MEM0_API_KEY = "dream-key";

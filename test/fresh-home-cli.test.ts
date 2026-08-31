@@ -26,6 +26,30 @@ function files(root: string): string[] {
   return out;
 }
 
+test("init recovers from interrupted package installation and completes only missing work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-init-recovery-")); const home = join(root, "home"); const project = join(root, "project"); const bin = join(root, "bin");
+  mkdirSync(join(home, ".pi", "agent"), { recursive: true }); mkdirSync(join(home, ".feishu-agent"), { recursive: true }); mkdirSync(project, { recursive: true }); mkdirSync(bin, { recursive: true });
+  writeFileSync(join(home, ".pi", "agent", "auth.json"), JSON.stringify({ fake: { type: "api_key", key: "model-key" } }));
+  writeFileSync(join(home, ".pi", "agent", "models.json"), JSON.stringify({ providers: { fake: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", models: [{ id: "fake-model", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 256 }] } } }));
+  writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\ncase "$*" in "doctor") exit 0;; "--version") echo "lark-cli 1.0.0";; "skills list --json") echo "[]";; esac\n', { mode: 0o755 });
+  const marker = join(root, "install-attempted");
+  writeFileSync(join(bin, "fake-npm"), `#!/bin/sh\nset -eu\nif [ ! -f ${JSON.stringify(marker)} ]; then touch ${JSON.stringify(marker)}; echo interrupted >&2; exit 9; fi\nprefix=""\nwhile [ "$#" -gt 0 ]; do [ "$1" = --prefix ] && { prefix="$2"; break; }; shift; done\nmkdir -p "$prefix/node_modules/@mem0"\nln -s ${JSON.stringify(join(repoRoot, "node_modules", "@mem0", "pi-agent-plugin"))} "$prefix/node_modules/@mem0/pi-agent-plugin"\nprintf '{"dependencies":{"@mem0/pi-agent-plugin":"0.1.5"}}' > "$prefix/package.json"\n`, { mode: 0o755 });
+  writeFileSync(join(home, ".feishu-agent", "settings.json"), JSON.stringify({ npmCommand: [join(bin, "fake-npm")] }));
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: "key", PI_OFFLINE: "1" };
+  const mem0Server = createServer((_request, response) => { response.writeHead(200, { "content-type": "application/json" }); response.end('{"status":"ok"}'); });
+  await new Promise<void>((resolve) => mem0Server.listen(0, "127.0.0.1", resolve));
+  const address = mem0Server.address(); assert(address && typeof address !== "string"); env.MEM0_API_HOST = `http://127.0.0.1:${address.port}`;
+  try {
+    const first = await run(project, env, ["init", "--identity", "alice", "--model", "fake/fake-model"]); assert.notEqual(first.code, 0); assert.match(first.stderr, /interrupted/);
+    const systemBefore = readFileSync(join(home, ".feishu-agent", "SYSTEM.md"));
+    const second = await run(project, env, ["init", "--identity", "bob", "--model", "fake/fake-model"]); assert.equal(second.code, 0, second.stderr);
+    assert.deepEqual(readFileSync(join(home, ".feishu-agent", "SYSTEM.md")), systemBefore);
+    assert.match(readFileSync(join(home, ".feishu-agent", "mem0-config.json"), "utf8"), /feishu:alice/);
+    const settings = JSON.parse(readFileSync(join(home, ".feishu-agent", "settings.json"), "utf8")); assert.equal(settings.packages.filter((entry: string) => entry.includes("@mem0/pi-agent-plugin")).length, 1);
+  } finally { mem0Server.close(); }
+});
+
+
 test("fresh HOME CLI init is idempotent and immediately ready for Print without project .pi or secret leakage", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-init-cli-")); const home = join(root, "home"); const project = join(root, "project"); const bin = join(root, "bin");
   mkdirSync(join(home, ".pi", "agent"), { recursive: true }); mkdirSync(project, { recursive: true }); mkdirSync(bin, { recursive: true });

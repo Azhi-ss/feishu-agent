@@ -40,11 +40,12 @@ feishu install -l ./local-package
 feishu list
 feishu remove package
 feishu update --extensions
-feishu config
+feishu config set npm:package extensions off
+feishu config -l set ./local-package skills off
 feishu skills sync
 ```
 
-Global packages live below `~/.feishu-agent/`; project packages live in `<git-root>/.feishu-agent/`. Manifest Extensions, Skills, Prompts, and Themes load with Pi package filtering semantics; omitted types load all, `[]` loads none, glob exclusions narrow, and exact `+path`/`-path` entries force inclusion/exclusion. `feishu config` starts in Feishu global settings and `feishu config -l` starts in project Feishu settings; the isolated child process prevents Pi's config UI exit behavior from terminating an embedding host. Official and private Feishu Skills never scan ordinary Pi, `.pi`, `.agents`, Codex, or Claude skill roots.
+Global packages live below `~/.feishu-agent/`; project packages live in `<git-root>/.feishu-agent/`. Manifest Extensions, Skills, Prompts, and Themes load with Pi package filtering semantics; omitted types load all, `[]` loads none, glob exclusions narrow, and exact `+path`/`-path` entries force inclusion/exclusion. `feishu config` starts in Feishu global settings and `feishu config -l` starts in project Feishu settings; `feishu config [ -l ] set <source> <resource> <on|off>` is the scriptable equivalent for durable resource toggles. The isolated UI child prevents Pi's config exit behavior from terminating an embedding host. Official and private Feishu Skills never scan ordinary Pi, `.pi`, `.agents`, Codex, or Claude skill roots.
 
 ## Lark Identity and High-risk Approval
 
@@ -52,7 +53,7 @@ Feishu Agent reuses existing `lark-cli` state without copying tokens. Personal-r
 
 ## Long-term Memory
 
-Mem0 automatically captures user messages and Assistant text under the collision-proof Feishu Project key. Raw tool output is not auto-captured; Global memory requires an explicit action. The configured `feishu:<identity>` overrides external `MEM0_USER_ID`, `MEM0_API_KEY` remains environment-only, and telemetry is disabled. Startup performs a bounded health check; recall, capture, or Dream failure emits both terminal and Interactive warnings and disables later memory actions for that degraded session. A later healthy invocation recovers without changing unrelated Feishu settings.
+The direct `mem0ai` dependency is pinned to 3.0.8, the first compatible 3.x release using `uuid` 11.1.1; `npm audit --omit=dev` is clean for the installed production tree. Mem0 automatically captures user messages and Assistant text under the collision-proof Feishu Project key. Raw tool output is not auto-captured; Global memory requires an explicit action. The configured `feishu:<identity>` overrides external `MEM0_USER_ID`, `MEM0_API_KEY` remains environment-only, and telemetry is disabled. Startup performs a bounded health check; recall, capture, or Dream failure emits both terminal and Interactive warnings and disables later memory actions for that degraded session. A later healthy invocation recovers without changing unrelated Feishu settings.
 
 ## Isolation and limitations
 

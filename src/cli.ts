@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { runInteractive, runPrint } from "./runtime.js";
 import { syncOfficialSkills } from "./official-skills.js";
 import { packageManager } from "./packages.js";
-import { dispatchConfig } from "./config.js";
+import { dispatchConfig, setPackageResourceEnabled, type PackageResourceType } from "./config.js";
 import { initializeHome } from "./init.js";
 import { checkReadiness } from "./readiness.js";
 import { CORE_TOOLS, projectKeyFor } from "./policy.js";
@@ -58,6 +58,8 @@ const HELP = `Usage:
   feishu list                    List Feishu Packages
   feishu update [source|--extensions]
   feishu config [-l]
+  feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>
+                                  Open or script Feishu Package resource settings
   feishu skills sync
   feishu -c                      Continue this Feishu Project's latest session
   feishu -r                      Select a session in this Feishu Project
@@ -122,8 +124,19 @@ else {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    const code = await dispatchConfig({ agentHome, projectRoot: root, projectKey: projectKeyFor(root), args: args.slice(1) });
-    process.exitCode = code;
+    if (args.includes("set")) {
+      const local = args.includes("-l") || args.includes("--local");
+      const setIndex = args.indexOf("set");
+      const source = args[setIndex + 1];
+      const resource = args[setIndex + 2] as PackageResourceType | undefined;
+      const state = args[setIndex + 3];
+      if (!source || !resource || !["extensions", "skills", "prompts", "themes"].includes(resource) || !["on", "off"].includes(state ?? "")) fail("Usage: feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>");
+      await setPackageResourceEnabled({ agentHome, projectRoot: root, projectKey: projectKeyFor(root), local, source, resource, enabled: state === "on" });
+      process.stdout.write(`${local ? "Project" : "Global"} Feishu Package ${source} ${resource}: ${state}\n`);
+    } else {
+      const code = await dispatchConfig({ agentHome, projectRoot: root, projectKey: projectKeyFor(root), args: args.slice(1) });
+      process.exitCode = code;
+    }
   }
   else if (["install", "remove", "list", "update"].includes(args[0] ?? "")) {
     const cwd = realpathSync(process.cwd());

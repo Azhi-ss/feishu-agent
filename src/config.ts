@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PackageSource } from "@earendil-works/pi-coding-agent";
 import { packageManager } from "./packages.js";
+import { settingsManagerFor } from "./settings.js";
 
 export interface ConfigDispatchOptions {
   agentHome: string;
@@ -9,6 +11,35 @@ export interface ConfigDispatchOptions {
   projectKey: string;
   args: string[];
   spawnChild?: typeof spawn;
+}
+
+export type PackageResourceType = "extensions" | "skills" | "prompts" | "themes";
+
+export async function setPackageResourceEnabled(options: Omit<ConfigDispatchOptions, "args" | "spawnChild"> & {
+  local: boolean;
+  source: string;
+  resource: PackageResourceType;
+  enabled: boolean;
+}): Promise<void> {
+  const settings = settingsManagerFor(options.agentHome, options.projectRoot);
+  const configured = options.local ? settings.getProjectSettings().packages ?? [] : settings.getGlobalSettings().packages ?? [];
+  let found = false;
+  const packages = configured.map((entry): PackageSource => {
+    const source = typeof entry === "string" ? entry : entry.source;
+    if (source !== options.source) return entry;
+    found = true;
+    if (options.enabled) {
+      if (typeof entry === "string") return entry;
+      const next = { ...entry };
+      delete next[options.resource];
+      return Object.keys(next).length === 1 ? next.source : next;
+    }
+    return { ...(typeof entry === "string" ? { source: entry } : entry), [options.resource]: [] };
+  });
+  if (!found) throw new Error(`No configured Feishu Package: ${options.source}`);
+  if (options.local) settings.setProjectPackages(packages);
+  else settings.setPackages(packages);
+  await settings.flush();
 }
 
 /** Run Pi's unmodified config UI in an isolated child so its process.exit cannot terminate an embedding host. */
