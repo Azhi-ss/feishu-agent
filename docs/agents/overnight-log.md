@@ -1,5 +1,7 @@
 # Overnight implementation log
 
+> Historical execution record. Superseded final-review limitations are corrected in [final-repair-addendum.md](./final-repair-addendum.md); use the current README and full test suite for release claims.
+
 ## Published delivery tickets
 
 - T01: [#1](https://github.com/Azhi-ss/feishu-agent/issues/1) — blocked by none

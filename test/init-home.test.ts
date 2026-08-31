@@ -15,6 +15,9 @@ test("init creates an idempotent private Home without overwriting choices", () =
   assert.equal(second.identity, "feishu:alice");
   assert.equal(readFileSync(join(agent, "SYSTEM.md"), "utf8"), custom);
   assert.equal(readFileSync(join(agent, "settings.json"), "utf8"), settings);
+  const reset = initializeHome(agent, "bob", { identity: true, system: true });
+  assert.equal(reset.identity, "feishu:bob");
+  assert.notEqual(readFileSync(join(agent, "SYSTEM.md"), "utf8"), custom);
   assert.doesNotMatch(readFileSync(join(agent, "mem0-config.json"), "utf8"), /apiKey/);
   assert.throws(() => initializeHome(join(agent, "bad"), ""), /explicit stable/);
 });

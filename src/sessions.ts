@@ -1,15 +1,32 @@
-import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { basename, join } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import { projectKeyFor } from "./policy.js";
+export { projectKeyFor } from "./policy.js";
 
-export function projectKeyFor(projectRoot: string): string {
-  const slug = basename(projectRoot).replace(/[^a-zA-Z0-9._-]+/g, "-") || "project";
-  return `${slug}-${createHash("sha256").update(projectRoot).digest("hex").slice(0, 12)}`;
+export interface SessionSelection {
+  manager: SessionManager;
+  originalCwd?: string;
 }
 
-export function sessionManagerFor(agentHome: string, projectRoot: string, launchCwd: string, resume: boolean) {
-  const sessionDir = join(agentHome, "sessions", projectKeyFor(projectRoot));
-  mkdirSync(sessionDir, { recursive: true });
-  return resume ? SessionManager.continueRecent(launchCwd, sessionDir) : SessionManager.create(launchCwd, sessionDir);
+export function sessionDirectory(agentHome: string, projectRoot: string): string {
+  const dir = join(agentHome, "sessions", projectKeyFor(projectRoot));
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export async function listProjectSessions(agentHome: string, projectRoot: string, launchCwd: string): Promise<SessionInfo[]> {
+  return SessionManager.listAll(sessionDirectory(agentHome, projectRoot));
+}
+
+export async function sessionManagerFor(agentHome: string, projectRoot: string, launchCwd: string, resume: boolean): Promise<SessionSelection> {
+  const sessionDir = sessionDirectory(agentHome, projectRoot);
+  if (!resume) return { manager: SessionManager.create(launchCwd, sessionDir) };
+  const recent = (await SessionManager.listAll(sessionDir)).sort((a, b) => b.modified.getTime() - a.modified.getTime() || b.created.getTime() - a.created.getTime())[0];
+  if (!recent) return { manager: SessionManager.create(launchCwd, sessionDir) };
+  return { manager: SessionManager.open(recent.path, dirname(recent.path), launchCwd), originalCwd: recent.cwd || undefined };
+}
+
+export function cwdMismatchNotice(originalCwd: string | undefined, launchCwd: string): string | undefined {
+  return originalCwd && originalCwd !== launchCwd ? `Resumed session created in ${originalCwd}; runtime CWD is ${launchCwd}.` : undefined;
 }

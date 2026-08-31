@@ -1,9 +1,20 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createEventBus, createExtensionRuntime, discoverAndLoadExtensions, loadSkillsFromDir, type ResourceLoader, type Skill } from "@earendil-works/pi-coding-agent";
+import {
+  createEventBus,
+  createExtensionRuntime,
+  DefaultResourceLoader,
+  discoverAndLoadExtensions,
+  loadSkillsFromDir,
+  type ResourceLoader,
+  type Skill,
+} from "@earendil-works/pi-coding-agent";
 import { packageManager } from "./packages.js";
 import { syncOfficialSkills } from "./official-skills.js";
 import { withCompatibilityHome } from "./compatibility-home.js";
+import { CORE_TOOLS } from "./policy.js";
+import { settingsManagerFor } from "./settings.js";
+import { corePolicyExtension } from "./core-extension.js";
 
 const BASE_IDENTITY = `You are Feishu Agent, the dedicated assistant operating Feishu Runtime for this Feishu Project.
 Use Feishu Skills and optional Long-term Memory while preserving Lark Identity. An exact destructive request may be a High-risk Approval only for that exact operation.
@@ -24,9 +35,10 @@ export class FeishuResourceLoader implements ResourceLoader {
   private themes: ReturnType<ResourceLoader["getThemes"]> = { themes: [], diagnostics: [] };
   readonly warnings: string[] = [];
 
-  constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project") {}
+  constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project", private readonly currentRequest?: string, private readonly memoryExtension?: import("@earendil-works/pi-coding-agent").ExtensionFactory, private readonly selectSession = false) {}
 
   async reload(): Promise<void> {
+    this.warnings.length = 0;
     const system = join(this.agentHome, "SYSTEM.md");
     const contextPaths = [join(this.projectRoot, ".feishu-agent", "AGENTS.md"), join(this.projectRoot, "AGENTS.md")];
     this.agentsFiles = contextPaths.flatMap((path) => {
@@ -44,17 +56,46 @@ export class FeishuResourceLoader implements ResourceLoader {
       official = result.skills;
       if (result.warning) this.warnings.push(result.warning);
     } catch (error) { this.warnings.push(`Official Skills unavailable: ${error instanceof Error ? error.message : String(error)}`); }
-    const resolved = await packageManager(this.agentHome, this.projectRoot, this.projectKey).resolve(async () => "skip");
+
+    const manager = packageManager(this.agentHome, this.projectRoot, this.projectKey);
+    const resolved = await manager.resolve(async () => "skip");
     const packageSkills = resolved.skills.filter((entry) => entry.enabled).flatMap((entry) => loadSkillsFromDir({ dir: entry.path, source: entry.metadata.source }).skills);
-    const extensionPaths = resolved.extensions.filter((entry) => entry.enabled).map((entry) => entry.path);
-    this.extensions = extensionPaths.length ? await withCompatibilityHome(process.env.HOME!, this.agentHome, () => discoverAndLoadExtensions(extensionPaths, this.projectRoot, this.agentHome, createEventBus())) : { extensions: [], errors: [], runtime: createExtensionRuntime() };
+    const extensionPaths = resolved.extensions.filter((entry) => entry.enabled).map((entry) => entry.path)
+      .filter((path) => !path.includes("@mem0/pi-agent-plugin"));
+    this.extensions = extensionPaths.length
+      ? await withCompatibilityHome(process.env.HOME!, this.agentHome, () => discoverAndLoadExtensions(extensionPaths, this.projectRoot, this.agentHome, createEventBus()))
+      : { extensions: [], errors: [], runtime: createExtensionRuntime() };
+    const core = new DefaultResourceLoader({
+      cwd: this.projectRoot,
+      agentDir: this.agentHome,
+      settingsManager: settingsManagerFor(this.agentHome, this.projectRoot),
+      noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      extensionFactories: [
+        ...(this.memoryExtension ? [{ name: "feishu-memory", hidden: true, factory: this.memoryExtension }] : []),
+        { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.selectSession) },
+      ],
+    });
+    await core.reload();
+    this.extensions.extensions.push(...core.getExtensions().extensions);
+    this.extensions.errors.push(...core.getExtensions().errors);
     for (const extension of this.extensions.extensions) {
-      for (const reserved of ["read", "edit", "write", "bash", "grep", "find", "ls"]) {
-        if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);
-      }
+      if (extension.path === "<inline:feishu-core-policy>") continue;
+      for (const reserved of CORE_TOOLS) if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);
     }
-    this.prompts = { prompts: [], diagnostics: [] };
-    this.themes = { themes: [], diagnostics: [] };
+
+    const packageResources = new DefaultResourceLoader({
+      cwd: this.projectRoot,
+      agentDir: this.agentHome,
+      settingsManager: settingsManagerFor(this.agentHome, this.projectRoot),
+      noExtensions: true, noSkills: true, noContextFiles: true,
+      additionalPromptTemplatePaths: resolved.prompts.filter((entry) => entry.enabled).map((entry) => entry.path),
+      additionalThemePaths: resolved.themes.filter((entry) => entry.enabled).map((entry) => entry.path),
+      systemPrompt: this.prompt,
+    });
+    await packageResources.reload();
+    this.prompts = packageResources.getPrompts();
+    this.themes = packageResources.getThemes();
+
     for (const skill of [...official, ...packageSkills, ...global, ...project]) {
       const shadowed = selected.get(skill.name);
       if (shadowed) this.warnings.push(`Skill "${skill.name}" selected ${skill.filePath}; shadowed ${shadowed.filePath}`);

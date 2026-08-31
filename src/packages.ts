@@ -1,6 +1,7 @@
-import { mkdirSync, existsSync, lstatSync, readlinkSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readlinkSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager } from "@earendil-works/pi-coding-agent";
+import { settingsManagerFor } from "./settings.js";
 
 export function packageManager(agentHome: string, projectRoot: string, projectKey: string) {
   const realProjectDir = join(projectRoot, ".feishu-agent");
@@ -12,6 +13,5 @@ export function packageManager(agentHome: string, projectRoot: string, projectKe
     try { symlinkSync(realProjectDir, link, "dir"); }
     catch (error) { throw new Error(`Project Feishu Package storage requires symlink support: ${error instanceof Error ? error.message : String(error)}`); }
   } else if (!lstatSync(link).isSymbolicLink() || readlinkSync(link) !== realProjectDir) throw new Error(`Refusing incompatible project package mapping: ${link}`);
-  const settings = SettingsManager.create(compatCwd, agentHome, { projectTrusted: true });
-  return new DefaultPackageManager({ cwd: compatCwd, agentDir: agentHome, settingsManager: settings });
+  return new DefaultPackageManager({ cwd: compatCwd, agentDir: agentHome, settingsManager: settingsManagerFor(agentHome, projectRoot) });
 }

@@ -14,7 +14,7 @@ test("readiness selects authenticated Feishu model and runs doctor without chang
   writeFileSync(join(agent, "settings.json"), '{}');
   writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\n[ "$1" = doctor ]\n', { mode: 0o755 });
   const before = readFileSync(join(pi, "settings.json"), "utf8"); const oldPath = process.env.PATH; process.env.PATH = `${bin}${delimiter}${oldPath}`; process.env.MEM0_API_KEY = "not-logged";
-  try { assert.equal((await checkReadiness(home, agent, "fake/one")).model, "fake/one"); }
+  try { assert.equal((await checkReadiness(home, agent, "fake/one", { createMemoryClient: () => ({ ping: async () => {} }) })).model, "fake/one"); }
   finally { process.env.PATH = oldPath; }
   assert.equal(readFileSync(join(pi, "settings.json"), "utf8"), before);
   assert.doesNotMatch(readFileSync(join(agent, "settings.json"), "utf8"), /not-logged/);

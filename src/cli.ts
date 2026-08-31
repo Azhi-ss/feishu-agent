@@ -2,17 +2,15 @@
 process.env.MEM0_TELEMETRY = "false";
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { runInteractive, runPrint } from "./runtime.js";
 import { syncOfficialSkills } from "./official-skills.js";
 import { packageManager } from "./packages.js";
 import { initializeHome } from "./init.js";
 import { checkReadiness } from "./readiness.js";
-
-const CORE_TOOLS = ["read", "edit", "write", "bash", "grep", "find", "ls"];
+import { CORE_TOOLS, projectKeyFor } from "./policy.js";
 
 function projectRoot(cwd: string): string {
   try {
@@ -26,11 +24,6 @@ function readIfPresent(path: string): string {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
 }
 
-function projectKey(root: string): string {
-  const slug = basename(root).replace(/[^a-zA-Z0-9._-]+/g, "-") || "project";
-  return `${slug}-${createHash("sha256").update(root).digest("hex").slice(0, 12)}`;
-}
-
 function inspect(): void {
   const launchCwd = realpathSync(process.cwd());
   const root = projectRoot(launchCwd);
@@ -41,7 +34,7 @@ function inspect(): void {
     launchCwd,
     projectRoot: root,
     agentHome,
-    sessionDir: join(agentHome, "sessions", projectKey(root)),
+    sessionDir: join(agentHome, "sessions", projectKeyFor(root)),
     systemPrompt,
     contextFiles,
     skills: [],
@@ -56,7 +49,9 @@ function inspect(): void {
 const HELP = `Usage:
   feishu                         Start Interactive Feishu Runtime
   feishu -p <prompt>             Run one Print-mode turn
-  feishu init                    Initialize Feishu Agent Home
+  feishu init [--identity ID] [--model provider/model]
+                 [--reset-identity] [--reset-model] [--reset-system]
+                                  Initialize/reset explicit Feishu choices
   feishu install <source> [-l]   Install a Feishu Package
   feishu remove <source> [-l]    Remove a Feishu Package
   feishu list                    List Feishu Packages
@@ -99,11 +94,11 @@ else {
     const identity = identityIndex >= 0 ? args[identityIndex + 1] : process.env.FEISHU_MEMORY_IDENTITY;
     if (!identity) fail("feishu init requires --identity <stable-id> (or FEISHU_MEMORY_IDENTITY for unattended initialization).");
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    const result = initializeHome(agentHome, identity);
+    const result = initializeHome(agentHome, identity, { identity: args.includes("--reset-identity"), system: args.includes("--reset-system") });
     const modelIndex = args.indexOf("--model");
-    const readiness = await checkReadiness(realpathSync(homedir()), agentHome, modelIndex >= 0 ? args[modelIndex + 1] : undefined);
+    const readiness = await checkReadiness(realpathSync(homedir()), agentHome, modelIndex >= 0 ? args[modelIndex + 1] : undefined, { resetModel: args.includes("--reset-model") });
     const root = projectRoot(realpathSync(process.cwd()));
-    const manager = packageManager(agentHome, root, projectKey(root));
+    const manager = packageManager(agentHome, root, projectKeyFor(root));
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source.includes("@mem0/pi-agent-plugin"))) {
       await manager.installAndPersist("npm:@mem0/pi-agent-plugin@0.1.5");
     }
@@ -119,18 +114,37 @@ else {
       fail(`Official Skill synchronization failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  else if (args[0] === "config") {
+    const cwd = realpathSync(process.cwd());
+    const root = projectRoot(cwd);
+    const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    const compatCwd = join(agentHome, ".compat", "projects", projectKeyFor(root));
+    packageManager(agentHome, root, projectKeyFor(root));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      process.chdir(compatCwd);
+      process.env.PI_CODING_AGENT_DIR = agentHome;
+      const { main } = await import("@earendil-works/pi-coding-agent");
+      await main(["config", "--approve"]);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  }
   else if (["install", "remove", "list", "update"].includes(args[0] ?? "")) {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    const manager = packageManager(agentHome, root, projectKey(root));
+    const manager = packageManager(agentHome, root, projectKeyFor(root));
     const local = args.includes("-l");
     const source = args.slice(1).find((arg) => !arg.startsWith("-"));
     try {
       if (args[0] === "install" && source) await manager.installAndPersist(source, { local });
       else if (args[0] === "remove" && source) {
         if (!await manager.removeAndPersist(source, { local })) fail(`No matching Feishu Package: ${source}`);
-      } else if (args[0] === "update") await manager.update(source);
+      } else if (args[0] === "update") await manager.update(args.includes("--extensions") ? undefined : source);
       else if (args[0] === "list") for (const entry of manager.listConfiguredPackages()) process.stdout.write(`${entry.scope}\t${entry.source}\n`);
       else fail(`${args[0]} requires a package source.`);
     } catch (error) { fail(`Feishu Package command failed: ${error instanceof Error ? error.message : String(error)}`); }
@@ -139,7 +153,7 @@ else {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    runPrint(args[1], cwd, root, projectKey(root), agentHome)
+    runPrint(args[1], cwd, root, projectKeyFor(root), agentHome)
       .then((code) => { process.exitCode = code; })
       .catch((error: unknown) => {
         process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -150,7 +164,7 @@ else {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    runInteractive(cwd, root, projectKey(root), agentHome, args[0] === "-c")
+    runInteractive(cwd, root, projectKeyFor(root), agentHome, args[0] === "-c", args[0] === "-r")
       .catch((error: unknown) => { process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
   } else {
     process.stderr.write("Feishu Agent runtime is not initialized. Run `feishu init`.\n");

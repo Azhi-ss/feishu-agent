@@ -10,15 +10,15 @@ function atomicJson(path: string, value: unknown): void {
   renameSync(temporary, path);
 }
 
-export function initializeHome(agentHome: string, identity: string): { created: string[]; identity: string } {
+export function initializeHome(agentHome: string, identity: string, reset: { identity?: boolean; system?: boolean } = {}): { created: string[]; identity: string } {
   if (!identity.trim()) throw new Error("Init requires an explicit stable Memory Identity.");
   const directories = ["sessions", "skills", "official-skills", ".compat/projects", "packages", "memory-state"];
   for (const directory of directories) mkdirSync(join(agentHome, directory), { recursive: true });
   const created: string[] = [];
   const system = join(agentHome, "SYSTEM.md");
-  if (!existsSync(system)) { writeFileSync(system, DEFAULT_SYSTEM + "\n"); created.push(system); }
+  if (!existsSync(system) || reset.system) { writeFileSync(system, DEFAULT_SYSTEM + "\n"); created.push(system); }
   const mem0Path = join(agentHome, "mem0-config.json");
-  if (!existsSync(mem0Path)) { atomicJson(mem0Path, memoryConfig(identity)); created.push(mem0Path); }
+  if (!existsSync(mem0Path) || reset.identity) { atomicJson(mem0Path, memoryConfig(identity)); created.push(mem0Path); }
   const settingsPath = join(agentHome, "settings.json");
   if (!existsSync(settingsPath)) { atomicJson(settingsPath, {}); created.push(settingsPath); }
   const saved = JSON.parse(readFileSync(mem0Path, "utf8")) as { userId: string };
