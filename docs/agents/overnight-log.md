@@ -102,3 +102,8 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Red/Green: exact action/target/identity/scope approval record and one-shot authorization behavior added; focused/build/full tests pass.
 - Standards review: immutable comparison fields plus a consumed bit; no generalized policy engine or persistent blanket grants.
 - Spec review: ambiguity, widening, identity change, target change, and reuse are rejected with an explicit non-OS-boundary diagnostic. Deferred ceiling: Bash tool-call interception requires a public pre-execution hook not exposed by the current SDK composition. No safe P0/P1/P2 fix without patching Pi.
+### T14 / #14
+
+- Red/Green: temporary compatibility Home mapping and success/failure restoration test added; focused/build/full tests pass.
+- Standards review: one symlink and `try/finally`; nested/concurrent initialization fails explicitly instead of corrupting process-global HOME; no credential copies.
+- Spec review: `.pi/agent` resolves to Feishu Agent Home only during the guarded boundary and normal subprocess HOME is restored. Real-plugin later-hook behavior is gated by Ticket 15. No P0/P1/P2 findings.
