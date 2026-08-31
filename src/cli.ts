@@ -9,6 +9,7 @@ import { basename, join } from "node:path";
 import { runInteractive, runPrint } from "./runtime.js";
 import { syncOfficialSkills } from "./official-skills.js";
 import { packageManager } from "./packages.js";
+import { initializeHome } from "./init.js";
 
 const CORE_TOOLS = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 
@@ -92,6 +93,14 @@ if (args.includes("--help") || args.includes("-h")) process.stdout.write(HELP);
 else {
   validateArgs(args);
   if (process.env.FEISHU_AGENT_INSPECT === "1") inspect();
+  else if (args[0] === "init") {
+    const identityIndex = args.indexOf("--identity");
+    const identity = identityIndex >= 0 ? args[identityIndex + 1] : process.env.FEISHU_MEMORY_IDENTITY;
+    if (!identity) fail("feishu init requires --identity <stable-id> (or FEISHU_MEMORY_IDENTITY for unattended initialization).");
+    const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    const result = initializeHome(agentHome, identity);
+    process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\n`);
+  }
   else if (args[0] === "skills" && args[1] === "sync") {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
     try {

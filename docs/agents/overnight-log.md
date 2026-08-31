@@ -120,3 +120,8 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Validation: focused/build/full tests pass and sentinel API key is absent from diagnostics.
 - Standards review: one exact environment-secret replacement; no logging framework or retry state machine.
 - Spec review: plugin already catches recall/capture/dream failures and leaves core runtime active; wrapper diagnostics are secret-safe. Residual ceiling: plugin's own capture error logs third-party error objects, which could theoretically contain request data; preventing that requires upstream change or process isolation. No in-repo P0/P1 fix available without patching package.
+### T17 / #17
+
+- Red/Green: idempotent Home bootstrap and real `feishu init --identity` dispatch added; focused/build/full tests pass.
+- Standards review: atomic JSON rename, create-if-absent semantics, and explicit identity only; no inferred username/host/email.
+- Spec review: required directories, base SYSTEM.md, `feishu:` identity, non-sensitive Mem0 settings, and preservation of custom system/settings/identity are covered. Deferred ceiling: explicit reset flags are not yet surfaced; current conservative behavior never overwrites. No P0/P1/P2 findings.
