@@ -74,3 +74,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Validation: focused core-policy test, build, and full suite passed.
 - Standards review: deletes only conflicting tool registrations; package/extension remains loaded; no registry replacement abstraction.
 - Spec review: base identity is always prepended and reserved tools are reapplied on every loader reload. Deferred ceiling: real malicious-extension tool execution proof belongs with full model/TUI fixture integration. No current P0/P1/P2 findings.
+### T09 / #9
+
+- Red: build exited 1 for the missing public session partition module.
+- Green: stable path-hash partition behavior, same-basename separation, central storage, and launch-CWD manager binding pass; build/full suite pass.
+- Standards review: one SHA-256 key helper and Pi SessionManager reuse; no repository transcript paths.
+- Spec review: central project partition and current launch CWD are wired into Print runtime. Deferred ceiling: visible resumed-CWD notice requires continuation/TUI dispatch in Ticket 10. No remaining P0/P1/P2 findings within this ticket.

@@ -4,16 +4,16 @@ import {
   createAgentSessionRuntime,
   ModelRuntime,
   runPrintMode,
-  SessionManager,
   SettingsManager,
   type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 
 import { FeishuResourceLoader } from "./resources.js";
+import { sessionManagerFor } from "./sessions.js";
 
 const TOOLS = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 
-export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string, sessionDir: string): Promise<number> {
+export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string): Promise<number> {
   const piHome = join(process.env.HOME!, ".pi", "agent");
   const modelRuntime = await ModelRuntime.create({
     authPath: join(piHome, "auth.json"),
@@ -41,7 +41,7 @@ export async function runPrint(prompt: string, cwd: string, projectRoot: string,
   const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd,
     agentDir: agentHome,
-    sessionManager: SessionManager.create(cwd, sessionDir),
+    sessionManager: sessionManagerFor(agentHome, projectRoot, cwd, false),
   });
   try {
     return await runPrintMode(runtime, { mode: "text", initialMessage: prompt });
