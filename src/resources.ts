@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { createEventBus, createExtensionRuntime, discoverAndLoadExtensions, loadSkillsFromDir, type ResourceLoader, type Skill } from "@earendil-works/pi-coding-agent";
 import { packageManager } from "./packages.js";
 import { syncOfficialSkills } from "./official-skills.js";
+import { withCompatibilityHome } from "./compatibility-home.js";
 
 const BASE_IDENTITY = `You are Feishu Agent, the dedicated assistant operating Feishu Runtime for this Feishu Project.
 Use Feishu Skills and optional Long-term Memory while preserving Lark Identity. An exact destructive request may be a High-risk Approval only for that exact operation.
@@ -46,7 +47,7 @@ export class FeishuResourceLoader implements ResourceLoader {
     const resolved = await packageManager(this.agentHome, this.projectRoot, this.projectKey).resolve(async () => "skip");
     const packageSkills = resolved.skills.filter((entry) => entry.enabled).flatMap((entry) => loadSkillsFromDir({ dir: entry.path, source: entry.metadata.source }).skills);
     const extensionPaths = resolved.extensions.filter((entry) => entry.enabled).map((entry) => entry.path);
-    this.extensions = extensionPaths.length ? await discoverAndLoadExtensions(extensionPaths, this.projectRoot, this.agentHome, createEventBus()) : { extensions: [], errors: [], runtime: createExtensionRuntime() };
+    this.extensions = extensionPaths.length ? await withCompatibilityHome(process.env.HOME!, this.agentHome, () => discoverAndLoadExtensions(extensionPaths, this.projectRoot, this.agentHome, createEventBus())) : { extensions: [], errors: [], runtime: createExtensionRuntime() };
     for (const extension of this.extensions.extensions) {
       for (const reserved of ["read", "edit", "write", "bash", "grep", "find", "ls"]) {
         if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);

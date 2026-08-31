@@ -107,3 +107,10 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Red/Green: temporary compatibility Home mapping and success/failure restoration test added; focused/build/full tests pass.
 - Standards review: one symlink and `try/finally`; nested/concurrent initialization fails explicitly instead of corrupting process-global HOME; no credential copies.
 - Spec review: `.pi/agent` resolves to Feishu Agent Home only during the guarded boundary and normal subprocess HOME is restored. Real-plugin later-hook behavior is gated by Ticket 15. No P0/P1/P2 findings.
+### T15 / #15
+
+- Red: actual-package probe first used a non-exported helper, then caught telemetry not forced in the isolated module test; corrected to public APIs and the same pre-import telemetry policy as the CLI.
+- Green: installed unmodified `@mem0/pi-agent-plugin@0.1.5`; behavior test verifies namespaced identity, project capture params, context injection config, raw tool-result exclusion, no API key on disk, and telemetry off.
+- Validation: actual package import runs inside Compatibility Home; focused/build/full tests pass.
+- Standards review: plugin backend is reused unchanged; only non-sensitive config writer and temporary import boundary added.
+- Spec review: auto-capture semantics include only user/assistant text and exclude tool results. Ceiling: plugin runtime derives app_id from basename rather than injected Feishu project-key, so collision-proof scope cannot be wired without patching upstream; residual P2. `npm audit` reports 16 transitive vulnerabilities (15 moderate, 1 critical); no automatic destructive upgrade applied.
