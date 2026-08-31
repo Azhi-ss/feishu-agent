@@ -86,3 +86,8 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: Interactive composition seam uses Pi's public `InteractiveMode`; focused API composition, build, and full suite pass; Print remains on `runPrintMode`.
 - Standards review: runtime creation is shared once between Print and TUI; no spawning ordinary Pi; session replacement remains owned by `AgentSessionRuntime`.
 - Spec review: default TUI, `-c` continuation, project session pool, local Pi commands and `/model` are inherited through InteractiveMode. Environmental warning: no stable PTY driver is installed, so unattended prompt submission smoke is deferred to release matrix. No remaining code P0/P1/P2 findings.
+### T11 / #11
+
+- Red/Green: exact public command predicate added with one behavior test; focused/build/full tests pass.
+- Standards review: anchored parser avoids false positives; four reasons are Feishu-specific; no autocomplete rewrite.
+- Spec review: exact prohibited/allowed command boundaries covered. Deferred ceiling: Pi `InteractiveMode` does not expose a public outer-editor injection constructor in 0.84.3; wiring before built-in dispatch would require a non-public patch, forbidden by SPEC. Predicate is retained for the smallest future public hook. No safe in-scope fix exists without widening architecture.
