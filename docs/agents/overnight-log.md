@@ -56,3 +56,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: fake `lark-cli` proved versioned atomic publish, same-version reuse, and forced refresh; focused/build/full checks passed.
 - Standards review: Node filesystem/process primitives plus Pi skill parser; no network or token handling; partial directories never published.
 - Spec review: full version identity, success marker reuse, force sync, validation, fallback/no-cache warnings implemented. Deferred ceiling: exact real `lark-cli skills list` JSON schema may require adaptation when the CLI is available; command seam is fake-covered. No in-scope P0/P1/P2 findings.
+### T06 / #6
+
+- Red: package-storage CLI behavior test and adapter were introduced against a clean baseline; initial focused run passed after the minimum adapter implementation.
+- Green: Pi `DefaultPackageManager` installed/persisted a local fixture globally and project-locally; real project `.pi` remained absent; focused/build/full tests passed.
+- Standards review: Pi package manager/settings reused; one controlled symlink maps compat `.pi` to real project `.feishu-agent`; unsupported mapping fails before package mutation.
+- Spec review: global/project storage, list/remove/update dispatch, single state, and Pi separation path covered. P2 fixed during review: CLI dispatch now uses same adapter. No remaining P0/P1/P2 findings.

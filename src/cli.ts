@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { runPrint } from "./runtime.js";
 import { syncOfficialSkills } from "./official-skills.js";
+import { packageManager } from "./packages.js";
 
 const CORE_TOOLS = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 
@@ -92,6 +93,22 @@ else {
     } catch (error) {
       fail(`Official Skill synchronization failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+  else if (["install", "remove", "list", "update"].includes(args[0] ?? "")) {
+    const cwd = realpathSync(process.cwd());
+    const root = projectRoot(cwd);
+    const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    const manager = packageManager(agentHome, root, projectKey(root));
+    const local = args.includes("-l");
+    const source = args.slice(1).find((arg) => !arg.startsWith("-"));
+    try {
+      if (args[0] === "install" && source) await manager.installAndPersist(source, { local });
+      else if (args[0] === "remove" && source) {
+        if (!await manager.removeAndPersist(source, { local })) fail(`No matching Feishu Package: ${source}`);
+      } else if (args[0] === "update") await manager.update(source);
+      else if (args[0] === "list") for (const entry of manager.listConfiguredPackages()) process.stdout.write(`${entry.scope}\t${entry.source}\n`);
+      else fail(`${args[0]} requires a package source.`);
+    } catch (error) { fail(`Feishu Package command failed: ${error instanceof Error ? error.message : String(error)}`); }
   }
   else if (args[0] === "-p") {
     const cwd = realpathSync(process.cwd());
