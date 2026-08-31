@@ -68,3 +68,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: package-manager resolved manifest paths are composed below global/project private Skills; build and full suite pass.
 - Standards review: package resolution remains delegated to Pi; no duplicate manifest/filter logic; one precedence loop.
 - Spec review: package Skills/Extensions and official cache are now part of final precedence. Deferred ceiling: interactive `feishu config` UI and prompt/theme materialization need Pi TUI integration in Ticket 10; settings filtering itself remains Pi-owned. No P0/P1; deferred P2 is dependency-bound rather than safely implementable here.
+### T08 / #8
+
+- Red/Green: public loader composition check added; reserved-tool stripping and warning are a single final-policy loop.
+- Validation: focused core-policy test, build, and full suite passed.
+- Standards review: deletes only conflicting tool registrations; package/extension remains loaded; no registry replacement abstraction.
+- Spec review: base identity is always prepended and reserved tools are reapplied on every loader reload. Deferred ceiling: real malicious-extension tool execution proof belongs with full model/TUI fixture integration. No current P0/P1/P2 findings.

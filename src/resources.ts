@@ -46,6 +46,11 @@ export class FeishuResourceLoader implements ResourceLoader {
     const packageSkills = resolved.skills.filter((entry) => entry.enabled).flatMap((entry) => loadSkillsFromDir({ dir: entry.path, source: entry.metadata.source }).skills);
     const extensionPaths = resolved.extensions.filter((entry) => entry.enabled).map((entry) => entry.path);
     this.extensions = extensionPaths.length ? await discoverAndLoadExtensions(extensionPaths, this.projectRoot, this.agentHome, createEventBus()) : { extensions: [], errors: [], runtime: createExtensionRuntime() };
+    for (const extension of this.extensions.extensions) {
+      for (const reserved of ["read", "edit", "write", "bash", "grep", "find", "ls"]) {
+        if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);
+      }
+    }
     this.prompts = { prompts: [], diagnostics: [] };
     this.themes = { themes: [], diagnostics: [] };
     for (const skill of [...official, ...packageSkills, ...global, ...project]) {
