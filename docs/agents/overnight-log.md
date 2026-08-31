@@ -50,3 +50,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: focused resource-loader test, build, and full suite passed.
 - Standards review: one explicit ResourceLoader with four allowed private prompt/skill paths; Pi skill parser reused; deterministic project-over-global precedence.
 - Spec review: normative Feishu identity/domain vocabulary, append-only project context, foreign resource exclusion, referral boundary, isolation warning, and shadow diagnostics covered. No remaining P0/P1/P2 findings.
+### T05 / #5
+
+- Red: build exited 1 because the new public sync behavior referenced a missing module.
+- Green: fake `lark-cli` proved versioned atomic publish, same-version reuse, and forced refresh; focused/build/full checks passed.
+- Standards review: Node filesystem/process primitives plus Pi skill parser; no network or token handling; partial directories never published.
+- Spec review: full version identity, success marker reuse, force sync, validation, fallback/no-cache warnings implemented. Deferred ceiling: exact real `lark-cli skills list` JSON schema may require adaptation when the CLI is available; command seam is fake-covered. No in-scope P0/P1/P2 findings.

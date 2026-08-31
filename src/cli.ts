@@ -7,6 +7,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { runPrint } from "./runtime.js";
+import { syncOfficialSkills } from "./official-skills.js";
 
 const CORE_TOOLS = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 
@@ -83,6 +84,15 @@ if (args.includes("--help") || args.includes("-h")) process.stdout.write(HELP);
 else {
   validateArgs(args);
   if (process.env.FEISHU_AGENT_INSPECT === "1") inspect();
+  else if (args[0] === "skills" && args[1] === "sync") {
+    const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    try {
+      const result = syncOfficialSkills(join(agentHome, "official-skills"), true);
+      process.stdout.write(`Synchronized official Skills for ${result.version}.\n`);
+    } catch (error) {
+      fail(`Official Skill synchronization failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   else if (args[0] === "-p") {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
