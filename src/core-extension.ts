@@ -34,17 +34,23 @@ export function installOuterEditorGuard(ctx: ExtensionContext): void {
   });
 }
 
-export function corePolicyExtension(currentRequest?: string, selectSession = false): ExtensionFactory {
+export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, memoryDiagnostic?: () => string | undefined): ExtensionFactory {
   let approval: LarkApproval | undefined = approvalFromExactRequest(currentRequest);
   return (pi: ExtensionAPI) => {
-    pi.on("session_start", (_event, ctx) => installOuterEditorGuard(ctx));
-    if (selectSession) pi.registerCommand("feishu-resume", {
+    pi.on("session_start", (_event, ctx) => {
+      installOuterEditorGuard(ctx);
+      if (ctx.mode === "tui") {
+        const warning = memoryDiagnostic?.();
+        if (warning) ctx.ui.notify(warning, "warning");
+      }
+    });
+    if (switchSelectedSession) pi.registerCommand("feishu-resume", {
       description: "Open the current Feishu Project session selector",
       handler: async (_args, ctx) => {
         await ctx.ui.custom((tui, _theme, keybindings, done) => new SessionSelectorComponent(
           (onProgress) => SessionManager.listAll(ctx.sessionManager.getSessionDir(), onProgress),
           (onProgress) => SessionManager.listAll(ctx.sessionManager.getSessionDir(), onProgress),
-          async (path) => { done(undefined); await ctx.switchSession(path); },
+          async (path) => { done(undefined); await switchSelectedSession(path); },
           () => done(undefined),
           () => ctx.shutdown(),
           () => tui.requestRender(),

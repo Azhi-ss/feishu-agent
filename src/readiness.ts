@@ -10,6 +10,7 @@ export interface ReadinessOptions {
   createMemoryClient?: (apiKey: string) => { ping(): Promise<void> };
   memoryTimeoutMs?: number;
   resetModel?: boolean;
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
 export async function checkReadiness(home: string, agentHome: string, preferred?: string, options: ReadinessOptions = {}) {
@@ -31,17 +32,24 @@ export async function checkReadiness(home: string, agentHome: string, preferred?
   const apiKey = process.env.MEM0_API_KEY;
   if (!apiKey) throw new Error("MEM0_API_KEY is missing.");
   try {
-    const client = options.createMemoryClient?.(apiKey) ?? new MemoryClient({ apiKey });
+    const client = options.createMemoryClient?.(apiKey) ?? new MemoryClient({ apiKey, ...(process.env.MEM0_API_HOST ? { host: process.env.MEM0_API_HOST } : {}) });
     await Promise.race([
       client.ping(),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Mem0 validation timed out")), options.memoryTimeoutMs ?? 3000)),
     ]);
   } catch (error) { throw new Error(`Mem0 validation failed: ${redactSecrets(error instanceof Error ? error.message : String(error))}`); }
-  execFileSync("lark-cli", ["doctor"], { encoding: "utf8", env: process.env });
+  try {
+    execFileSync("lark-cli", ["doctor"], { encoding: "utf8", env: process.env });
+  } catch (error) {
+    const failure = error as { stdout?: string | Buffer; stderr?: string | Buffer; status?: number };
+    const detail = [failure.stdout, failure.stderr].map((value) => value?.toString().trim()).filter(Boolean).join("\n");
+    throw new Error(`Lark doctor failed${failure.status === undefined ? "" : ` (exit ${failure.status})`}${detail ? `: ${detail}` : "."}`);
+  }
   if (options.resetModel || !settings.defaultProvider || !settings.defaultModel) {
     settings.defaultProvider = selected.provider;
     settings.defaultModel = selected.id;
+    if (options.thinkingLevel) settings.defaultThinkingLevel = options.thinkingLevel;
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
   }
-  return { model: `${settings.defaultProvider}/${settings.defaultModel}`, doctor: "passed", memory: "available" };
+  return { model: `${settings.defaultProvider}/${settings.defaultModel}`, thinking: settings.defaultThinkingLevel, doctor: "passed", memory: "available" };
 }

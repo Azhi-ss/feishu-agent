@@ -15,10 +15,10 @@ The npm binary is `feishu` after package linking/installation.
 ## Initialize
 
 ```bash
-MEM0_API_KEY=... feishu init --identity stable-name --model provider/model
+MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
 ```
 
-Initialization creates private state under `~/.feishu-agent/`, requires an explicit Feishu model when more than one authenticated model is available, validates Mem0 connectivity without printing the key, installs the unmodified Mem0 package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor`. Re-running fills missing state and does not overwrite identity, model, or customized `SYSTEM.md`. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
+Initialization creates private state under `~/.feishu-agent/`, requires an explicit Feishu model when more than one authenticated model is available, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs the unmodified Mem0 package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, or customized `SYSTEM.md`. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
 
 ## Run
 
@@ -44,15 +44,15 @@ feishu config
 feishu skills sync
 ```
 
-Global packages live below `~/.feishu-agent/`; project packages live in `<git-root>/.feishu-agent/`. Manifest Extensions, Skills, Prompts, and Themes load with Pi package filtering semantics; `feishu config` edits only Feishu settings through an isolated compatibility CWD. Official and private Feishu Skills never scan ordinary Pi, `.pi`, `.agents`, Codex, or Claude skill roots.
+Global packages live below `~/.feishu-agent/`; project packages live in `<git-root>/.feishu-agent/`. Manifest Extensions, Skills, Prompts, and Themes load with Pi package filtering semantics; omitted types load all, `[]` loads none, glob exclusions narrow, and exact `+path`/`-path` entries force inclusion/exclusion. `feishu config` starts in Feishu global settings and `feishu config -l` starts in project Feishu settings; the isolated child process prevents Pi's config UI exit behavior from terminating an embedding host. Official and private Feishu Skills never scan ordinary Pi, `.pi`, `.agents`, Codex, or Claude skill roots.
 
 ## Lark Identity and High-risk Approval
 
-Feishu Agent reuses existing `lark-cli` state without copying tokens. Personal-resource operations use explicit `--as user`; Bot identity is only used when requested or required. A `lark-cli ... --yes` command is allowed only when the current request explicitly names that exact command, and that approval is consumed once. Ambiguous, widened, or repeated destructive work is blocked; Print mode terminates instead of prompting. This runtime guard is not an OS security boundary.
+Feishu Agent reuses existing `lark-cli` state without copying tokens. Personal-resource operations use explicit `--as user`; Bot identity is only used when requested or required. A natural request that unambiguously states the destructive action, exact target, user/bot identity, and impact scope grants one matching `lark-cli ... --yes` operation. Ambiguous, chained, widened, changed, or repeated destructive work is blocked; Print mode terminates instead of prompting. This runtime guard is not an OS security boundary.
 
 ## Long-term Memory
 
-Mem0 automatically captures user messages and Assistant text under the collision-proof Feishu Project key. Raw tool output is not auto-captured; Global memory requires an explicit action. The configured `feishu:<identity>` overrides external `MEM0_USER_ID`, `MEM0_API_KEY` remains environment-only, and telemetry is disabled. Startup performs a bounded health check; failure emits a secret-redacted warning and leaves memory recall, capture, and Dream disabled for that session.
+Mem0 automatically captures user messages and Assistant text under the collision-proof Feishu Project key. Raw tool output is not auto-captured; Global memory requires an explicit action. The configured `feishu:<identity>` overrides external `MEM0_USER_ID`, `MEM0_API_KEY` remains environment-only, and telemetry is disabled. Startup performs a bounded health check; recall, capture, or Dream failure emits both terminal and Interactive warnings and disables later memory actions for that degraded session. A later healthy invocation recovers without changing unrelated Feishu settings.
 
 ## Isolation and limitations
 

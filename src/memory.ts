@@ -2,11 +2,18 @@ import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryClient } from "mem0ai";
 import {
+  DREAM_PROTOCOL,
+  acquireDreamLock,
+  checkCheapGates,
+  checkMemoryGate,
   extractConversation,
   formatMemoryList,
+  incrementSessionCount,
   MEMORY_POLICY,
+  recordDreamCompletion,
   registerCommands,
   registerMemoryTool,
+  releaseDreamLock,
   resolveSearchFilters,
   type Mem0Config,
   type ScopeContext,
@@ -61,12 +68,15 @@ function safeClient(client: MemoryClientLike): MemoryClientLike {
 export interface MemoryRuntime {
   warning?: string;
   extension?: ExtensionFactory;
+  diagnostic?: () => string | undefined;
 }
+
+const createDefaultClient = (apiKey: string) => new MemoryClient({ apiKey, ...(process.env.MEM0_API_HOST ? { host: process.env.MEM0_API_HOST } : {}) });
 
 export async function memoryRuntime(
   agentHome: string,
   projectKey: string,
-  createClient: (apiKey: string) => MemoryClientLike = (apiKey) => new MemoryClient({ apiKey }),
+  createClient: (apiKey: string) => MemoryClientLike = createDefaultClient,
   timeoutMs = 2000,
 ): Promise<MemoryRuntime> {
   const apiKey = process.env.MEM0_API_KEY;
@@ -100,13 +110,18 @@ export async function memoryRuntime(
     defaultScope: "project",
     contextInjection: true,
     searchThreshold: 0.3,
-    dream: { enabled: false, auto: false, minHours: 24, minSessions: 5, minMemories: 20 },
+    dream: { enabled: config.dream.enabled, auto: config.dream.auto, minHours: 24, minSessions: 5, minMemories: 20 },
   };
+  const dreamStateDir = join(agentHome, "memory-state");
   const scope: ScopeContext = { userId: config.userId, appId: projectKey, runId: "unknown" };
   let degraded = false;
-  const disable = (feature: "recall" | "capture", error: unknown) => {
+  let warning: string | undefined;
+  let dreamTriggered = false;
+  let dreamChecked = false;
+  const disable = (feature: "recall" | "capture" | "dream", error: unknown) => {
     degraded = true;
-    console.error(memoryWarning(feature, error));
+    warning = memoryWarning(feature, error);
+    process.stderr.write(`${warning}\n`);
   };
   const guardedClient = new Proxy(client, {
     get(target, property) {
@@ -124,6 +139,7 @@ export async function memoryRuntime(
     pi.on("session_start", (_event, ctx) => {
       const file = ctx.sessionManager?.getSessionFile?.();
       scope.runId = file ?? "unknown";
+      if (pluginConfig.dream.enabled) incrementSessionCount(dreamStateDir, scope.runId);
     });
     pi.on("before_agent_start", async (event) => {
       if (degraded) return { systemPrompt: event.systemPrompt };
@@ -132,15 +148,40 @@ export async function memoryRuntime(
         const result = await guardedClient.search((event.prompt ?? "").trim(), { filters: resolveSearchFilters("project", scope) });
         if (result.results?.length) extra += `\n\n<mem0-relevant-memories>\n${formatMemoryList(result.results)}\n</mem0-relevant-memories>`;
       } catch (error) { disable("recall", error); return { systemPrompt: event.systemPrompt }; }
+      if (pluginConfig.dream.enabled && pluginConfig.dream.auto && !dreamTriggered && !dreamChecked) {
+        const gates = checkCheapGates(dreamStateDir, pluginConfig.dream);
+        if (gates.proceed) {
+          try {
+            const all = await guardedClient.getAll({ filters: resolveSearchFilters("project", scope) });
+            const count = all.count ?? all.results?.length ?? 0;
+            dreamChecked = true;
+            if (checkMemoryGate(count, pluginConfig.dream).pass && acquireDreamLock(dreamStateDir)) {
+              dreamTriggered = true;
+              extra += `\n\n${DREAM_PROTOCOL}`;
+            }
+          } catch (error) { disable("dream", error); return { systemPrompt: event.systemPrompt }; }
+        }
+      }
       return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${extra}` };
     });
     pi.on("agent_end", async (event) => {
       if (degraded) return;
       const conversation = extractConversation(event.messages ?? []);
-      if (!conversation.length) return;
-      try { await guardedClient.add(conversation, { userId: scope.userId, appId: scope.appId }); }
-      catch (error) { disable("capture", error); }
+      if (conversation.length) {
+        try { await guardedClient.add(conversation, { userId: scope.userId, appId: scope.appId }); }
+        catch (error) { disable("capture", error); }
+      }
+      if (dreamTriggered) {
+        const wroteMemory = (event.messages ?? []).some((message: any) => message.role === "assistant" && Array.isArray(message.content) && message.content.some((block: any) => block.type === "tool_use" && block.name === "mem0_memory" && ["add", "delete", "delete_all"].includes(block.input?.action)));
+        if (wroteMemory) recordDreamCompletion(dreamStateDir);
+        releaseDreamLock(dreamStateDir);
+        dreamTriggered = false;
+      }
+    });
+    pi.on("session_shutdown", () => {
+      if (dreamTriggered) releaseDreamLock(dreamStateDir);
+      dreamTriggered = false;
     });
   };
-  return { extension };
+  return { extension, diagnostic: () => warning };
 }

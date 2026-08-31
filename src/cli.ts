@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { runInteractive, runPrint } from "./runtime.js";
 import { syncOfficialSkills } from "./official-skills.js";
 import { packageManager } from "./packages.js";
+import { dispatchConfig } from "./config.js";
 import { initializeHome } from "./init.js";
 import { checkReadiness } from "./readiness.js";
 import { CORE_TOOLS, projectKeyFor } from "./policy.js";
@@ -49,7 +50,7 @@ function inspect(): void {
 const HELP = `Usage:
   feishu                         Start Interactive Feishu Runtime
   feishu -p <prompt>             Run one Print-mode turn
-  feishu init [--identity ID] [--model provider/model]
+  feishu init [--identity ID] [--model provider/model] [--thinking LEVEL]
                  [--reset-identity] [--reset-model] [--reset-system]
                                   Initialize/reset explicit Feishu choices
   feishu install <source> [-l]   Install a Feishu Package
@@ -96,7 +97,10 @@ else {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
     const result = initializeHome(agentHome, identity, { identity: args.includes("--reset-identity"), system: args.includes("--reset-system") });
     const modelIndex = args.indexOf("--model");
-    const readiness = await checkReadiness(realpathSync(homedir()), agentHome, modelIndex >= 0 ? args[modelIndex + 1] : undefined, { resetModel: args.includes("--reset-model") });
+    const thinkingIndex = args.indexOf("--thinking");
+    const thinking = thinkingIndex >= 0 ? args[thinkingIndex + 1] : undefined;
+    if (thinking && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(thinking)) fail("--thinking must be one of off, minimal, low, medium, high, xhigh.");
+    const readiness = await checkReadiness(realpathSync(homedir()), agentHome, modelIndex >= 0 ? args[modelIndex + 1] : undefined, { resetModel: args.includes("--reset-model"), thinkingLevel: thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined });
     const root = projectRoot(realpathSync(process.cwd()));
     const manager = packageManager(agentHome, root, projectKeyFor(root));
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source.includes("@mem0/pi-agent-plugin"))) {
@@ -118,20 +122,8 @@ else {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    const compatCwd = join(agentHome, ".compat", "projects", projectKeyFor(root));
-    packageManager(agentHome, root, projectKeyFor(root));
-    const previousCwd = process.cwd();
-    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    try {
-      process.chdir(compatCwd);
-      process.env.PI_CODING_AGENT_DIR = agentHome;
-      const { main } = await import("@earendil-works/pi-coding-agent");
-      await main(["config", "--approve"]);
-    } finally {
-      process.chdir(previousCwd);
-      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    }
+    const code = await dispatchConfig({ agentHome, projectRoot: root, projectKey: projectKeyFor(root), args: args.slice(1) });
+    process.exitCode = code;
   }
   else if (["install", "remove", "list", "update"].includes(args[0] ?? "")) {
     const cwd = realpathSync(process.cwd());

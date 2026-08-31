@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 process.env.MEM0_TELEMETRY = "false";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { incrementSessionCount } from "@mem0/pi-agent-plugin";
 import { memoryConfig, memoryRuntime, writeMemoryConfig } from "../src/memory.js";
 import { withCompatibilityHome } from "../src/compatibility-home.js";
 
@@ -23,6 +24,22 @@ test("Mem0 config enforces stable Feishu project capture without secrets", async
   });
   assert.equal(process.env.MEM0_TELEMETRY, "false");
 });
+
+test("healthy Dream uses package semantics and stores its state under Feishu Agent Home", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-dream-")); const agent = join(root, ".feishu-agent");
+  writeMemoryConfig(agent, "alice"); process.env.MEM0_API_KEY = "dream-key";
+  const client = { ping: async () => {}, search: async () => ({ results: [] }), getAll: async () => ({ count: 25, results: [] }), add: async () => ({}), update: async () => ({}), delete: async () => ({}), deleteAll: async () => ({}) };
+  const runtime = await memoryRuntime(agent, "project-key", () => client);
+  const handlers = new Map<string, Function[]>();
+  runtime.extension!({ on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), registerTool: () => {}, registerCommand: () => {} } as never);
+  await handlers.get("session_start")![0]({}, { sessionManager: { getSessionFile: () => join(agent, "sessions", "session.jsonl") } });
+  for (let index = 1; index < 5; index++) incrementSessionCount(join(agent, "memory-state"), `session-${index}`);
+  const result = await handlers.get("before_agent_start")![0]({ prompt: "remember", systemPrompt: "base" });
+  assert.match(result.systemPrompt, /<mem0-dream>/);
+  assert(readdirSync(join(agent, "memory-state")).some((name) => name.includes("dream")));
+  assert.equal(readdirSync(root).some((name) => name === ".pi"), false);
+});
+
 
 test("Mem0 runtime resists external identity, uses collision-proof project key, captures text only, and degrades without secrets", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-memory-runtime-"));

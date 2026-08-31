@@ -35,7 +35,18 @@ export class FeishuResourceLoader implements ResourceLoader {
   private themes: ReturnType<ResourceLoader["getThemes"]> = { themes: [], diagnostics: [] };
   readonly warnings: string[] = [];
 
-  constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project", private readonly currentRequest?: string, private readonly memoryExtension?: import("@earendil-works/pi-coding-agent").ExtensionFactory, private readonly selectSession = false) {}
+  private sessionSwitcher?: (path: string) => Promise<void>;
+  private memoryDiagnostic?: () => string | undefined;
+
+  constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project", private readonly currentRequest?: string, private readonly memoryExtension?: import("@earendil-works/pi-coding-agent").ExtensionFactory) {}
+
+  setSessionSwitcher(sessionSwitcher?: (path: string) => Promise<void>): void {
+    this.sessionSwitcher = sessionSwitcher;
+  }
+
+  setMemoryDiagnostic(memoryDiagnostic?: () => string | undefined): void {
+    this.memoryDiagnostic = memoryDiagnostic;
+  }
 
   async reload(): Promise<void> {
     this.warnings.length = 0;
@@ -72,7 +83,7 @@ export class FeishuResourceLoader implements ResourceLoader {
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       extensionFactories: [
         ...(this.memoryExtension ? [{ name: "feishu-memory", hidden: true, factory: this.memoryExtension }] : []),
-        { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.selectSession) },
+        { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic) },
       ],
     });
     await core.reload();

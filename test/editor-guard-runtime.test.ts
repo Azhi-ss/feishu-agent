@@ -20,8 +20,8 @@ test("outer editor guard intercepts Pi-wired submit after custom editor creation
 
 test("core tool_call hook enforces exact one-shot lark approval and Print termination", async () => {
   const handlers = new Map<string, Function>();
-  const command = "lark-cli doc delete --id doc-1 --as user --yes";
-  corePolicyExtension(`run ${command}`)({
+  const command = "lark-cli doc delete --id doc-1 --as user --scope one-document --yes";
+  corePolicyExtension("delete doc-1 as user for one-document")({
     on: (name: string, handler: Function) => handlers.set(name, handler),
     registerCommand: () => {},
   } as never);
@@ -32,7 +32,7 @@ test("core tool_call hook enforces exact one-shot lark approval and Print termin
 });
 test("resume startup extension registers a host-owned current-project selector command", () => {
   const commands: string[] = [];
-  corePolicyExtension(undefined, true)({
+  corePolicyExtension(undefined, async () => {})({
     on: () => {},
     registerCommand: (name: string) => commands.push(name),
   } as never);
