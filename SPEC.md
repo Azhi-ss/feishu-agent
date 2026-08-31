@@ -385,5 +385,4 @@ Grilling 结束时唯一尚未显式回答的问题是“恢复会话时当前�
 
 ### Delivery status
 
-- 当前工作目录不是 Git 仓库，也没有可识别的项目 Issue Tracker/Remote，因此本规范保存为本地 `SPEC.md`，无法按 `/to-spec` 流程发布 Issue 或附加 `ready-for-agent` Label。
-- 一旦项目绑定 GitHub Repository，可将本规范正文直接发布为 Issue，并只添加 `ready-for-agent` 标签。
+- The repository is hosted at `https://github.com/Azhi-ss/feishu-agent`; implementation tickets and verification history are recorded in `docs/agents/overnight-log.md`.

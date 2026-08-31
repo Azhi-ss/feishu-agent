@@ -137,3 +137,10 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: `feishu init` now thinly orchestrates Home, readiness, exact Mem0 package install, and official Skill sync; focused/build/full tests pass.
 - Standards review: no duplicated package/Skill/readiness logic; existing configured Mem0 entry avoids duplicates; telemetry is forced before imports.
 - Spec review: successful summary contains Home, identity, model, package, Skill version, and doctor state. Midway reruns are idempotent through create-if-absent settings, package-entry check, and cache reuse. Environmental ceiling: full subprocess init would invoke npm package installation; component seams are fake/local tested without publishing or real credentials. No P0/P1/P2 findings.
+### T20 / #20
+
+- Red: release-guide behavior test caught ambiguous sandbox wording; corrected to the exact Resource Isolation boundary statement.
+- Green: README covers build/init, Interactive/Print, packages, Skills, sessions, profile, memory, High-risk Approval, resets/idempotency, and out-of-scope boundaries; stale SPEC delivery status corrected.
+- Validation: focused release guide, full `npm test` (24 tests), final `npm run build`, and `git diff --check` pass.
+- Standards review: documentation/release test only; no new runtime scope.
+- Spec review: final observable matrix is represented by temporary-HOME/fake-model/fake-Lark/package/memory behavior tests accumulated across tickets. Residual ceilings are explicitly logged under their source tickets. No final P0/P1 findings; in-scope P2 fixes complete.
