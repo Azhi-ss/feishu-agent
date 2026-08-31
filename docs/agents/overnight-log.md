@@ -32,3 +32,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: `npm run build`, focused CLI test, and full `npm test` passed.
 - Standards review: minimal Node stdlib implementation; binary/test paths agree; no broad discovery or runtime scope added.
 - Spec review: project/CWD separation, isolated home/session partition, allowed prompt contexts, and exact core tool set covered. No P0/P1/P2 findings.
+### T02 / #2
+
+- Red: `node --test dist/test/cli-surface.test.js` exited 1 for missing help, mode validation, and telemetry/environment inspection.
+- Green: focused CLI-surface test, build, and full `npm test` passed.
+- Standards review: top-level parsing only; no runtime/subcommand implementation; telemetry forced before SDK/package imports.
+- Spec review: exact documented surface, unsupported mode rejection, real HOME/environment preservation, and sandbox warning covered. No P0/P1/P2 findings.
