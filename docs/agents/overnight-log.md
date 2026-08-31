@@ -62,3 +62,9 @@ Native GitHub `blocked-by` edges were created with GraphQL `addBlockedBy` for ev
 - Green: Pi `DefaultPackageManager` installed/persisted a local fixture globally and project-locally; real project `.pi` remained absent; focused/build/full tests passed.
 - Standards review: Pi package manager/settings reused; one controlled symlink maps compat `.pi` to real project `.feishu-agent`; unsupported mapping fails before package mutation.
 - Spec review: global/project storage, list/remove/update dispatch, single state, and Pi separation path covered. P2 fixed during review: CLI dispatch now uses same adapter. No remaining P0/P1/P2 findings.
+### T07 / #7
+
+- Red: build exited 1 when the package resource composition initially referenced a non-exported loader; switched to Pi's public `discoverAndLoadExtensions` API.
+- Green: package-manager resolved manifest paths are composed below global/project private Skills; build and full suite pass.
+- Standards review: package resolution remains delegated to Pi; no duplicate manifest/filter logic; one precedence loop.
+- Spec review: package Skills/Extensions and official cache are now part of final precedence. Deferred ceiling: interactive `feishu config` UI and prompt/theme materialization need Pi TUI integration in Ticket 10; settings filtering itself remains Pi-owned. No P0/P1; deferred P2 is dependency-bound rather than safely implementable here.

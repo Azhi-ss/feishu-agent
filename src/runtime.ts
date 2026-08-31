@@ -13,7 +13,7 @@ import { FeishuResourceLoader } from "./resources.js";
 
 const TOOLS = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 
-export async function runPrint(prompt: string, cwd: string, projectRoot: string, agentHome: string, sessionDir: string): Promise<number> {
+export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string, sessionDir: string): Promise<number> {
   const piHome = join(process.env.HOME!, ".pi", "agent");
   const modelRuntime = await ModelRuntime.create({
     authPath: join(piHome, "auth.json"),
@@ -21,7 +21,7 @@ export async function runPrint(prompt: string, cwd: string, projectRoot: string,
     allowModelNetwork: false,
   });
   const settingsManager = SettingsManager.create(cwd, agentHome, { projectTrusted: true });
-  const resourceLoader = new FeishuResourceLoader(agentHome, projectRoot);
+  const resourceLoader = new FeishuResourceLoader(agentHome, projectRoot, projectKey);
   await resourceLoader.reload();
   for (const warning of resourceLoader.warnings) process.stderr.write(`Startup Warning: ${warning}\n`);
   const available = await modelRuntime.getAvailable();
