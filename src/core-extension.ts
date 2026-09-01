@@ -34,7 +34,7 @@ export function installOuterEditorGuard(ctx: ExtensionContext): void {
   });
 }
 
-export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, memoryDiagnostic?: () => string | undefined): ExtensionFactory {
+export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, memoryDiagnostic?: () => string | undefined, resourceLoader?: { getSystemPrompt(): string | undefined }): ExtensionFactory {
   let approval: LarkApproval | undefined = approvalFromExactRequest(currentRequest);
   return (pi: ExtensionAPI) => {
     pi.on("session_start", (_event, ctx) => {
@@ -63,6 +63,10 @@ export function corePolicyExtension(currentRequest?: string, switchSelectedSessi
       const reason = prohibitedCommand(event.text);
       if (reason) return { action: "handled" as const };
       approval = approvalFromExactRequest(event.text);
+    });
+    if (resourceLoader) pi.on("before_agent_start", (event) => {
+      const base = resourceLoader.getSystemPrompt() ?? event.systemPrompt ?? "";
+      return { systemPrompt: event.systemPrompt?.startsWith(base) ? event.systemPrompt : `${base}\n\n${event.systemPrompt ?? ""}` };
     });
     pi.on("tool_call", (event, ctx) => {
       if (event.toolName !== "bash") return;

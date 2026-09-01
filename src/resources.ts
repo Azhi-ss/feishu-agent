@@ -86,7 +86,7 @@ export class FeishuResourceLoader implements ResourceLoader {
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       extensionFactories: [
         ...(this.memoryExtension ? [{ name: "feishu-memory", hidden: true, factory: this.memoryExtension }] : []),
-        { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic) },
+        { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic, this) },
       ],
     });
     await core.reload();

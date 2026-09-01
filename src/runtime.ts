@@ -42,7 +42,9 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
 
   const createSession: CreateAgentSessionRuntimeFactory = async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
     const services = { cwd: runtimeCwd, agentDir: agentHome, modelRuntime, settingsManager, resourceLoader, diagnostics: [] };
-    return { ...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model, tools: [...CORE_TOOLS] })), services, diagnostics: [] };
+    const created = await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model });
+    created.session.setActiveToolsByName([...new Set([...CORE_TOOLS, ...created.session.getActiveToolNames()])]);
+    return { ...created, services, diagnostics: [] };
   };
   const selected = await sessionManagerFor(agentHome, projectRoot, cwd, resume);
   const notice = cwdMismatchNotice(selected.originalCwd, cwd);

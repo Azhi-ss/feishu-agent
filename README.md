@@ -55,6 +55,16 @@ Feishu Agent reuses existing `lark-cli` state without copying tokens. Personal-r
 
 The direct `mem0ai` dependency is pinned to 3.0.8, the first compatible 3.x release using `uuid` 11.1.1; `npm audit --omit=dev` is clean for the installed production tree. Mem0 automatically captures user messages and Assistant text under the collision-proof Feishu Project key. Raw tool output is not auto-captured; Global memory requires an explicit action. The configured `feishu:<identity>` overrides external `MEM0_USER_ID`, `MEM0_API_KEY` remains environment-only, and telemetry is disabled. Startup performs a bounded health check; recall, capture, or Dream failure emits both terminal and Interactive warnings and disables later memory actions for that degraded session. A later healthy invocation recovers without changing unrelated Feishu settings.
 
+## Offline release matrix
+
+The release suite compiles the real CLI and exercises it only with temporary homes/projects, PTYs, and loopback fake model, Mem0, Lark, and npm services—never real network endpoints or user credentials. It verifies:
+
+- a fresh HOME can run `feishu init`, an immediate Print turn, a mounted Interactive turn, a fake personal Lark command with explicit `--as user`, project-local sessions, and eligible user/Assistant memory capture;
+- hostile ordinary Pi home/project `.pi` and `.agents` resources stay unloaded, conflicting package core tools are rejected with warnings, and a replacement prompt or custom editor cannot replace the base identity or outer command guard;
+- two projects share only the configured global `feishu:<identity>` while keeping sessions, private Skills, package settings, loaded package Skills, and collision-proof Mem0 app IDs independent;
+- degraded Mem0 and official Skill fallback emit visible warnings while core file, Bash, Lark, Print, and Interactive work continues;
+- recursive artifact and diagnostic scans reject Mem0 secrets and copied Lark tokens, while raw tool output remains local to sessions and is excluded from automatic Mem0 capture.
+
 ## Isolation and limitations
 
 Resource Isolation prevents automatic loading from other agents; it does not restrict filesystem, subprocess, extension, or network permissions. Installed Feishu Package extensions execute with current-user permissions. Feishu Agent does not copy Lark/model tokens, support session sharing/import, or accept unrelated general software-development work; use ordinary `pi` for that.
