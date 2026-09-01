@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,8 +11,22 @@ const cli = join(repoRoot, "dist/src/cli.js");
 const home = mkdtempSync(join(tmpdir(), "feishu-surface-"));
 mkdirSync(join(home, ".feishu-agent"), { recursive: true });
 
-function run(args: string[], env: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", env: { ...process.env, HOME: home, ...env } });
+function run(args: string[], env: Record<string, string> = {}, overrideHome = home) {
+  return spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", env: { ...process.env, HOME: overrideHome, ...env } });
+}
+
+function snapshot(root: string): Map<string, Buffer> {
+  const result = new Map<string, Buffer>();
+  const walk = (directory: string, prefix = "") => {
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      const relative = join(prefix, name);
+      if (statSync(path).isDirectory()) walk(path, relative);
+      else result.set(relative, readFileSync(path));
+    }
+  };
+  walk(root);
+  return result;
 }
 
 test("help exposes only the Feishu Agent surface and security boundary", () => {
@@ -44,6 +58,37 @@ test("exact command parsing rejects every malformed command surface before inspe
     const result = run(args, { FEISHU_AGENT_INSPECT: "1" });
     assert.notEqual(result.status, 0, args.join(" "));
     assert.equal(result.stdout, "", args.join(" "));
+  }
+});
+
+test("init validates every value-bearing option, including thinking enum, before filesystem mutation", () => {
+  const freshHome = mkdtempSync(join(tmpdir(), "feishu-invalid-thinking-fresh-"));
+  const fresh = run(["init", "--identity", "alice", "--model", "fake/model", "--thinking", "bogus"], {}, freshHome);
+  assert.notEqual(fresh.status, 0);
+  assert.match(fresh.stderr, /--thinking must be one of off, minimal, low, medium, high, xhigh/);
+  assert.equal(statSync(join(freshHome, ".feishu-agent"), { throwIfNoEntry: false }), undefined);
+
+  const existingHome = mkdtempSync(join(tmpdir(), "feishu-invalid-thinking-existing-"));
+  const agentHome = join(existingHome, ".feishu-agent");
+  mkdirSync(join(agentHome, "nested"), { recursive: true });
+  writeFileSync(join(agentHome, "SYSTEM.md"), "You are Feishu Agent. custom\n");
+  writeFileSync(join(agentHome, "settings.json"), '{"defaultProvider":"fake","defaultModel":"model"}\n');
+  writeFileSync(join(agentHome, "nested", "state.bin"), Buffer.from([0, 1, 2, 255]));
+  const before = snapshot(agentHome);
+  const existing = run(["init", "--identity", "alice", "--model", "fake/model", "--thinking", "bogus"], {}, existingHome);
+  assert.notEqual(existing.status, 0);
+  assert.match(existing.stderr, /--thinking must be one of off, minimal, low, medium, high, xhigh/);
+  assert.deepEqual(snapshot(agentHome), before);
+
+  for (const args of [
+    ["init", "--identity", " "],
+    ["init", "--model", "not-a-provider-model"],
+    ["init", "--thinking", "--reset-model"],
+    ["--lark-profile", "--help"],
+  ]) {
+    const optionHome = mkdtempSync(join(tmpdir(), "feishu-invalid-value-"));
+    assert.notEqual(run(args, {}, optionHome).status, 0, args.join(" "));
+    assert.equal(statSync(join(optionHome, ".feishu-agent"), { throwIfNoEntry: false }), undefined, args.join(" "));
   }
 });
 

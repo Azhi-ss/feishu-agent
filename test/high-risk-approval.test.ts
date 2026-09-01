@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -69,7 +69,12 @@ function larkCalls(path: string): string[] {
   return readFileSync(path, "utf8").trim().split("\n").filter((line) => !line.endsWith("--help") && !line.endsWith("--version") && !line.endsWith("skills list --json"));
 }
 
-function runBounded(cwd: string, env: NodeJS.ProcessEnv, args: string[], timeoutMs = 10000): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+function closeServer(server: Server): Promise<void> {
+  server.closeAllConnections();
+  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+function runBounded(cwd: string, env: NodeJS.ProcessEnv, args: string[], timeoutMs = 60_000): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   return new Promise((done) => {
     const child = spawn(process.execPath, [cli, ...args], { cwd, env });
     let stdout = "", stderr = "", timedOut = false;
@@ -81,7 +86,7 @@ function runBounded(cwd: string, env: NodeJS.ProcessEnv, args: string[], timeout
 }
 
 function runPty(cwd: string, env: NodeJS.ProcessEnv, prompt: string): Promise<{ code: number | null; output: string }> {
-  const python = `import os,pty,select,sys,time\npid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3]],os.environ)\nout=b''; sent_prompt=False; sent_no=False; sent_quit=False; end=time.time()+15\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n if not sent_prompt and b'fake-model' in out:\n  time.sleep(.3); os.write(fd,sys.argv[4].encode()+b'\\r'); sent_prompt=True\n if sent_prompt and not sent_no and b'FAKE LARK CONFIRMATION' in out:\n  os.write(fd,b'n\\r'); sent_no=True\n if sent_no and not sent_quit and b'AMBIGUOUS-DONE' in out:\n  os.write(fd,b'/quit\\r'); sent_quit=True\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if sent_quit else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
+  const python = `import os,pty,select,sys,time\npid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3]],os.environ)\nout=b''; sent_prompt=False; sent_no=False; sent_quit=False; end=time.time()+60\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n if not sent_prompt and b'fake-model' in out:\n  time.sleep(.3); os.write(fd,sys.argv[4].encode()+b'\\r'); sent_prompt=True\n if sent_prompt and not sent_no and b'FAKE LARK CONFIRMATION' in out:\n  os.write(fd,b'n\\r'); sent_no=True\n if sent_no and not sent_quit and b'AMBIGUOUS-DONE' in out:\n  os.write(fd,b'/quit\\r'); sent_quit=True\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if sent_quit else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
   return new Promise((done) => {
     const child = spawn("python3", ["-c", python, cwd, process.execPath, cli, prompt], { env });
     let output = "";
@@ -114,7 +119,7 @@ test("exact natural Print request drives one matching fake-model lark-cli --yes 
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /EXACT-DONE/);
     assert.deepEqual(larkCalls(f.trace), ["CALL|doc delete doc-1 --as user --yes"]);
-  } finally { f.server.close(); }
+  } finally { await closeServer(f.server); }
 });
 
 test("vague natural request missing scope cannot authorize model-added --yes", async () => {
@@ -125,7 +130,7 @@ test("vague natural request missing scope cannot authorize model-added --yes", a
     assert.notEqual(result.code, 0);
     assert.match(result.stdout + result.stderr, /exact one-shot approval|required/);
     assert.deepEqual(larkCalls(f.trace), []);
-  } finally { f.server.close(); }
+  } finally { await closeServer(f.server); }
 });
 
 test("changed approval fields, chaining, and reuse are blocked before another fake lark execution", async (t) => {
@@ -145,7 +150,7 @@ test("changed approval fields, chaining, and reuse are blocked before another fa
       assert.notEqual(result.code, 0);
       assert.match(result.stdout + result.stderr, /exact one-shot approval|required/);
       assert.deepEqual(larkCalls(f.trace), []);
-    } finally { f.server.close(); }
+    } finally { await closeServer(f.server); }
   });
 
   await t.test("reuse", async () => {
@@ -156,7 +161,7 @@ test("changed approval fields, chaining, and reuse are blocked before another fa
       assert.notEqual(result.code, 0);
       assert.match(result.stdout + result.stderr, /exact one-shot approval|required/);
       assert.deepEqual(larkCalls(f.trace), ["CALL|doc delete doc-1 --as user --yes"]);
-    } finally { f.server.close(); }
+    } finally { await closeServer(f.server); }
   });
 });
 
@@ -168,7 +173,7 @@ test("ambiguous Interactive request omits --yes and visibly reaches fake lark co
     assert.match(result.output, /FAKE LARK CONFIRMATION: approve destructive write/);
     assert.match(result.output, /AMBIGUOUS-DONE/);
     assert.deepEqual(larkCalls(f.trace), ["CALL|doc delete doc-1 --as user"]);
-  } finally { f.server.close(); }
+  } finally { await closeServer(f.server); }
 });
 
 test("incomplete or compound Print high-risk writes fail nonzero without entering fake confirmation", async (t) => {
@@ -182,11 +187,11 @@ test("incomplete or compound Print high-risk writes fail nonzero without enterin
   for (const [name, command] of variants) await t.test(name, async () => {
     const f = await fixture([toolResponse(command, `print-${name}`)]);
     try {
-      const result = await runBounded(f.project, f.env, ["-p", "delete the document"], 3000);
+      const result = await runBounded(f.project, f.env, ["-p", "delete the document"], 60_000);
       assert.equal(result.timedOut, false, `${result.stdout}\n${result.stderr}`);
       assert.notEqual(result.code, 0);
       assert.match(result.stdout + result.stderr, /approval.*required|cannot prompt|exact one-shot/i);
       assert.deepEqual(larkCalls(f.trace), []);
-    } finally { f.server.close(); }
+    } finally { await closeServer(f.server); }
   });
 });

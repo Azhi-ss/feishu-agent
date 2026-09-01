@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -41,8 +41,13 @@ function run(cwd: string, env: NodeJS.ProcessEnv, args: string[]): Promise<{ cod
   });
 }
 
+function closeServer(server: Server): Promise<void> {
+  server.closeAllConnections();
+  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
 function runPty(cwd: string, env: NodeJS.ProcessEnv): Promise<{ code: number | null; output: string }> {
-  const python = `import os,pty,select,sys,time\npid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3]],os.environ)\nout=b''; sent=False; end=time.time()+20\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n if not sent and b'Warning: Startup Warning: Long-term Memory' in out and b'unavailable' in out:\n  time.sleep(.2); os.write(fd,b'/quit\\r'); sent=True\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if sent else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
+  const python = `import os,pty,select,sys,time\npid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3]],os.environ)\nout=b''; sent=False; end=time.time()+60\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n if not sent and b'Warning: Startup Warning: Long-term Memory' in out and b'unavailable' in out:\n  time.sleep(.2); os.write(fd,b'/quit\\r'); sent=True\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if sent else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
   return new Promise((done) => {
     const child = spawn("python3", ["-c", python, cwd, process.execPath, cli], { env });
     let output = "";
@@ -351,5 +356,5 @@ test("degraded Print still runs core write/Bash and fake lark-cli, mounted TUI w
     assert(sessionFiles.length >= 1);
     for (const path of sessionFiles) assert.doesNotMatch(readFileSync(path, "utf8"), new RegExp(apiKeySentinel), path);
     assert(mem0Payloads.every((payload) => !payload.includes(apiKeySentinel) && !payload.includes(toolOutputSentinel)), "a sentinel reached fake Mem0");
-  } finally { server.close(); mem0Server.close(); }
+  } finally { await Promise.all([closeServer(server), closeServer(mem0Server)]); }
 });

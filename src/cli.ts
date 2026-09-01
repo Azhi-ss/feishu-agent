@@ -50,6 +50,8 @@ function inspect(): void {
 }
 
 const MEM0_PACKAGE = "npm:@mem0/pi-agent-plugin@0.1.5";
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+type ThinkingLevel = typeof THINKING_LEVELS[number];
 
 const HELP = `Usage:
   feishu                         Start Interactive Feishu Runtime
@@ -79,7 +81,7 @@ function fail(message: string): never {
 
 function invalidOptionValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1];
-  if (!value || value.startsWith("-")) fail(`${flag} requires a value.`);
+  if (!value || value.startsWith("-") || !value.trim()) fail(`${flag} requires a value.`);
   return value;
 }
 
@@ -108,7 +110,12 @@ function normalizeAndValidateArgs(input: string[]): string[] {
         const flag = args[index];
         if (seen.has(flag)) fail(`${flag} may be specified only once.`);
         seen.add(flag);
-        if (valueFlags.has(flag)) { invalidOptionValue(args, index, flag); index++; }
+        if (valueFlags.has(flag)) {
+          const value = invalidOptionValue(args, index, flag);
+          if (flag === "--thinking" && !THINKING_LEVELS.includes(value as ThinkingLevel)) fail(`--thinking must be one of ${THINKING_LEVELS.join(", ")}.`);
+          if (flag === "--model" && !/^[^/\s]+\/[^/\s]+$/.test(value)) fail("--model must be provider/model.");
+          index++;
+        }
         else if (!resetFlags.has(flag)) fail(`Unknown feishu init option: ${flag}`);
       }
       return args;
@@ -189,9 +196,8 @@ else {
     );
     const result = initializeHome(agentHome, choices.identity, { identity: args.includes("--reset-identity"), system: args.includes("--reset-system") });
     const thinkingIndex = args.indexOf("--thinking");
-    const thinking = thinkingIndex >= 0 ? args[thinkingIndex + 1] : undefined;
-    if (thinking && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(thinking)) fail("--thinking must be one of off, minimal, low, medium, high, xhigh.");
-    const readiness = await checkReadiness(home, agentHome, choices.model, { resetModel: args.includes("--reset-model"), thinkingLevel: thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined })
+    const thinking = thinkingIndex >= 0 ? args[thinkingIndex + 1] as ThinkingLevel : undefined;
+    const readiness = await checkReadiness(home, agentHome, choices.model, { resetModel: args.includes("--reset-model"), thinkingLevel: thinking })
       .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
     const root = projectRoot(realpathSync(process.cwd()));
     const manager = packageManager(agentHome, root, projectKeyFor(root));
