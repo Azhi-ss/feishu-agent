@@ -47,6 +47,8 @@ function inspect(): void {
   }));
 }
 
+const MEM0_PACKAGE = "npm:@mem0/pi-agent-plugin@0.1.5";
+
 const HELP = `Usage:
   feishu                         Start Interactive Feishu Runtime
   feishu -p <prompt>             Run one Print-mode turn
@@ -106,11 +108,15 @@ else {
       .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
     const root = projectRoot(realpathSync(process.cwd()));
     const manager = packageManager(agentHome, root, projectKeyFor(root));
-    if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source.includes("@mem0/pi-agent-plugin"))) {
-      await manager.installAndPersist("npm:@mem0/pi-agent-plugin@0.1.5");
+    if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source === MEM0_PACKAGE && entry.installedPath)) {
+      await manager.installAndPersist(MEM0_PACKAGE);
     }
     const skills = syncOfficialSkills(join(agentHome, "official-skills"));
-    process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\nModel: ${readiness.model}\nMem0 Package: ready\nOfficial Skills: ${skills.version}\nLark doctor: ${readiness.doctor}\n`);
+    if (skills.warning) {
+      if (!existsSync(join(skills.cacheDir, ".success"))) fail(skills.warning);
+      process.stderr.write(`Startup Warning: ${skills.warning}\n`);
+    }
+    process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\nModel: ${readiness.model}\nMem0 Package: ready\nOfficial Skills: ${skills.version}\nLark doctor: ${readiness.doctor}\nMemory: ${readiness.memory}\n`);
   }
   else if (args[0] === "skills" && args[1] === "sync") {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");

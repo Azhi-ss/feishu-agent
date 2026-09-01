@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +31,9 @@ function publicFixture(models: string[] = ["one", "two"]) {
   writeFileSync(join(pi, "settings.json"), '{"defaultProvider":"pi","defaultModel":"pi-model"}\n');
   writeFileSync(join(lark, "config.json"), '{"defaultProfile":"personal"}\n');
   writeFileSync(join(lark, "token.json"), '{"token":"lark-secret"}\n');
+  const mem0Parent = join(agent, "npm", "node_modules", "@mem0");
+  mkdirSync(mem0Parent, { recursive: true });
+  symlinkSync(join(repoRoot, "node_modules", "@mem0", "pi-agent-plugin"), join(mem0Parent, "pi-agent-plugin"));
   writeFileSync(join(agent, "settings.json"), JSON.stringify({ packages: ["npm:@mem0/pi-agent-plugin@0.1.5"] }) + "\n");
   return { root, home, project, bin, pi, agent, lark };
 }
