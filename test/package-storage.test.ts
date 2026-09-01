@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, linkSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,6 +88,16 @@ test("settings lock recovers a dead stale owner", () => {
   new FeishuSettingsStorage(f.agentHome, f.project).withLock("global", () => JSON.stringify({ acquired: true }));
   assert.deepEqual(JSON.parse(readFileSync(f.settings, "utf8")), { acquired: true });
   assert(!existsSync(f.lock));
+});
+
+test("settings lock recovers a dead stale owner after an abandoned reaper claim", () => {
+  const f = lockFixture();
+  writeFileSync(f.lock, JSON.stringify({ pid: 2_147_483_647, createdAt: Date.now() - 86_400_000 }));
+  linkSync(f.lock, `${f.lock}.reap`);
+  new FeishuSettingsStorage(f.agentHome, f.project).withLock("global", () => JSON.stringify({ acquired: true }));
+  assert.deepEqual(JSON.parse(readFileSync(f.settings, "utf8")), { acquired: true });
+  assert(!existsSync(f.lock));
+  assert(existsSync(`${f.lock}.reap`));
 });
 
 test("package manager stores global and project package settings only in Feishu roots", async () => {

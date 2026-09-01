@@ -50,12 +50,10 @@ function staleLockCanBeReaped(lock: string): boolean {
 }
 
 function reapStaleLock(lock: string): boolean {
-  const claim = `${lock}.reap`;
+  const claim = `${lock}.reap.${process.pid}.${randomUUID()}`;
   try { linkSync(lock, claim); }
   catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return true;
-    if (code === "EEXIST") return false;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
     throw error;
   }
   try {

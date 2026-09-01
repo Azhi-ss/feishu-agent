@@ -97,7 +97,9 @@ test("public init reports no models, missing and rejected Mem0, and doctor failu
   assert.match(readFileSync(join(noModels.agent, "mem0-config.json"), "utf8"), /feishu:alice/);
 
   const f = publicFixture(["one"]); fakeLark(f.bin);
-  const env = { ...process.env, HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" };
+  delete env.MEM0_API_KEY;
+  delete env.MEM0_API_HOST;
   const missing = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/one"]);
   assert.notEqual(missing.code, 0); assert.match(missing.stderr, /MEM0_API_KEY is missing/);
   assert.match(readFileSync(join(f.agent, "mem0-config.json"), "utf8"), /feishu:alice/);
