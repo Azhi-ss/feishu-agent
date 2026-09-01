@@ -27,3 +27,17 @@ test("init creates an idempotent private Home without overwriting choices", () =
   assert.doesNotMatch(readFileSync(join(agent, "mem0-config.json"), "utf8"), /apiKey/);
   assert.throws(() => initializeHome(join(agent, "bad"), ""), /explicit stable/);
 });
+
+test("init installs the default feishu-skill-maker without overwriting user edits", () => {
+  const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-skill-")), ".feishu-agent");
+  const first = initializeHome(agent, "alice");
+  const skillPath = join(agent, "skills", "feishu-skill-maker", "SKILL.md");
+  assert(first.created.includes(skillPath));
+  const body = readFileSync(skillPath, "utf8");
+  assert.match(body, /^---\nname: feishu-skill-maker\n/m);
+  assert.match(body, /项目私有 > 全局私有 > 安装包 > 官方缓存/);
+  const edited = "---\nname: feishu-skill-maker\ndescription: 我的自定义规范\n---\n\n# Custom\n";
+  writeFileSync(skillPath, edited);
+  initializeHome(agent, "alice");
+  assert.equal(readFileSync(skillPath, "utf8"), edited);
+});

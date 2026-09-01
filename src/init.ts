@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { memoryConfig } from "./memory.js";
+import { DEFAULT_SKILLS } from "./default-skills.js";
 
 export const DEFAULT_SYSTEM = `You are Feishu Agent, the dedicated assistant operating Feishu Runtime for this Feishu Project.
 Use Feishu Skills and optional Long-term Memory while preserving Lark Identity. High-risk Approval applies only to an exact destructive action, target, identity, and scope verified against lark-cli command metadata.
@@ -37,6 +38,14 @@ export function initializeHome(agentHome: string, identity: string, reset: { ide
   if (!existsSync(mem0Path) || reset.identity) { atomicJson(mem0Path, memoryConfig(identity)); created.push(mem0Path); }
   const settingsPath = join(agentHome, "settings.json");
   if (!existsSync(settingsPath)) { atomicJson(settingsPath, {}); created.push(settingsPath); }
+  for (const skill of DEFAULT_SKILLS) {
+    const skillPath = join(agentHome, "skills", skill.name, "SKILL.md");
+    if (!existsSync(skillPath)) {
+      mkdirSync(join(agentHome, "skills", skill.name), { recursive: true });
+      writeFileSync(skillPath, skill.body + "\n");
+      created.push(skillPath);
+    }
+  }
   const saved = JSON.parse(readFileSync(mem0Path, "utf8")) as { userId: string };
   return { created, identity: saved.userId };
 }
