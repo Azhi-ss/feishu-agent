@@ -163,7 +163,11 @@ test("fresh HOME one-command init is immediately Print-ready, idempotent, isolat
     assert.match(memorySearch.body, /"user_id":"feishu:alice"/);
     assert.match(memorySearch.body, /"app_id":"project-/);
 
-    const customSystem = "CUSTOM FEISHU IDENTITY\n";
+    const bareRerun = await run(f.project, f.env, ["init"]);
+    assert.equal(bareRerun.code, 0, bareRerun.stderr);
+    assertCompleteSummary(bareRerun.stdout, f.agentHome, "alice", "fake-model");
+
+    const customSystem = "You are Feishu Agent. CUSTOM FEISHU IDENTITY\n";
     writeFileSync(join(f.agentHome, "SYSTEM.md"), customSystem);
     writeFileSync(join(f.agentHome, "custom.txt"), "keep me\n");
     const rerun = await run(f.project, f.env, ["init", "--identity", "bob", "--model", "fake/other-model", "--thinking", "high"]);

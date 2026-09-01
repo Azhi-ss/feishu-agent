@@ -177,7 +177,7 @@ test("hostile Pi resources cannot replace core policy, package tools execute, an
   });
   const modelHost = await listen(modelServer);
   modelFiles(home, modelHost);
-  writeFileSync(join(home, ".feishu-agent", "SYSTEM.md"), "CUSTOM-FEISHU-SYSTEM\n");
+  writeFileSync(join(home, ".feishu-agent", "SYSTEM.md"), "You are Feishu Agent. CUSTOM-FEISHU-SYSTEM\n");
   const piImport = import.meta.resolve("@earendil-works/pi-coding-agent");
   const reloadedExtension = `import { appendFileSync } from "node:fs";
 export default pi => {

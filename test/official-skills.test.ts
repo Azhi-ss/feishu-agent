@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -12,6 +12,27 @@ function fake(root: string) {
   writeFileSync(join(bin, "lark-cli"), `#!/bin/sh\necho "$@" >> "${log}"\ncase "$*" in\n  "--version") echo "lark-cli 1.2.3";;\n  "skills list --json") echo '["docs"]';;\n  "skills read docs") echo '---\nname: docs\ndescription: official\n---\nbody';;\n  *) exit 2;;\nesac\n`, { mode: 0o755 });
   return { log, env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` } };
 }
+
+test("fallback selects the most recently published successful cache, not version text", () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-official-fallback-"));
+  const cache = join(root, "cache");
+  mkdirSync(cache, { recursive: true });
+  const publish = (version: string, mtime: Date) => {
+    const dir = join(cache, Buffer.from(version).toString("base64url"));
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    writeFileSync(join(dir, "docs", "SKILL.md"), `---\nname: docs\ndescription: ${version}\n---\nbody\n`);
+    writeFileSync(join(dir, ".success"), version);
+    utimesSync(join(dir, ".success"), mtime, mtime);
+  };
+  publish("lark-cli 1.10", new Date("2026-01-01T00:00:00Z"));
+  publish("lark-cli 1.9", new Date("2026-02-01T00:00:00Z"));
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\n[ "$1" = --version ] && { echo "lark-cli 2.0"; exit 0; }\nexit 7\n', { mode: 0o755 });
+  const result = syncOfficialSkills(cache, false, { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` });
+  assert.match(result.warning!, /using lark-cli 1\.9/);
+  assert.equal(result.skills[0]?.description, "lark-cli 1.9");
+});
 
 test("official skill sync publishes atomically and reuses version cache", () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-official-"));

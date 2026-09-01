@@ -31,6 +31,22 @@ test("unsupported modes and malformed commands fail without starting runtime", (
   }
 });
 
+test("exact command parsing rejects every malformed command surface before inspection or mutation", () => {
+  const invalid = [
+    ["-p", "ping", "extra"], ["-p", "ping", "--model", "fake/x"], ["-c", "extra"], ["-r", "--foo"],
+    ["list", "extra"], ["install"], ["install", "pkg", "extra"], ["install", "--foo", "pkg"], ["remove", "pkg", "--local"],
+    ["update", "a", "b"], ["update", "--extensions", "extra"], ["skills"], ["skills", "sync", "extra"],
+    ["config", "set", "pkg", "skills"], ["config", "set", "--model", "skills", "on"], ["config", "--foo"],
+    ["init", "--identity", "--model", "fake/x"], ["init", "--model"], ["init", "--thinking", "--reset-model"],
+    ["--lark-profile", "--help", "list"], ["--foo"],
+  ];
+  for (const args of invalid) {
+    const result = run(args, { FEISHU_AGENT_INSPECT: "1" });
+    assert.notEqual(result.status, 0, args.join(" "));
+    assert.equal(result.stdout, "", args.join(" "));
+  }
+});
+
 test("inspection forces telemetry off while preserving caller environment", () => {
   const result = run(["-p", "ignored"], { FEISHU_AGENT_INSPECT: "1", MEM0_TELEMETRY: "true", FEISHU_TEST_MARKER: "kept" });
   assert.equal(result.status, 0);

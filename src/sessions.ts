@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { projectKeyFor } from "./policy.js";
 export { projectKeyFor } from "./policy.js";
 
@@ -13,10 +13,6 @@ export function sessionDirectory(agentHome: string, projectRoot: string): string
   const dir = join(agentHome, "sessions", projectKeyFor(projectRoot));
   mkdirSync(dir, { recursive: true });
   return dir;
-}
-
-export async function listProjectSessions(agentHome: string, projectRoot: string, launchCwd: string): Promise<SessionInfo[]> {
-  return SessionManager.listAll(sessionDirectory(agentHome, projectRoot));
 }
 
 export async function sessionManagerFor(agentHome: string, projectRoot: string, launchCwd: string, resume: boolean): Promise<SessionSelection> {

@@ -1,10 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  createEventBus,
   createExtensionRuntime,
   DefaultResourceLoader,
-  discoverAndLoadExtensions,
   loadSkillsFromDir,
   type ResourceLoader,
   type Skill,
@@ -15,12 +13,7 @@ import { withCompatibilityHome } from "./compatibility-home.js";
 import { CORE_TOOLS } from "./policy.js";
 import { settingsManagerFor } from "./settings.js";
 import { corePolicyExtension } from "./core-extension.js";
-
-const BASE_IDENTITY = `You are Feishu Agent, the dedicated assistant operating Feishu Runtime for this Feishu Project.
-Use Feishu Skills and optional Long-term Memory while preserving Lark Identity. An exact destructive request may be a High-risk Approval only for that exact operation.
-You may inspect project material and create support files directly serving a Feishu deliverable or lark-cli workflow. Refer unrelated general software development to ordinary pi.
-Resource Isolation is not filesystem isolation or an OS sandbox; tools retain the current user's permissions.
-Use existing lark-cli state without copying tokens. Prefer lark-cli shortcuts; inspect --help or schema for unfamiliar commands. Personal-resource operations must explicitly use --as user. Use --as bot only when the user requests Bot identity or the API requires it.`;
+import { DEFAULT_SYSTEM } from "./init.js";
 
 function read(path: string): string | undefined {
   return existsSync(path) ? readFileSync(path, "utf8") : undefined;
@@ -29,7 +22,7 @@ function read(path: string): string | undefined {
 export class FeishuResourceLoader implements ResourceLoader {
   private skills: Skill[] = [];
   private agentsFiles: Array<{ path: string; content: string }> = [];
-  private prompt = BASE_IDENTITY;
+  private prompt = DEFAULT_SYSTEM;
   private extensions = { extensions: [], errors: [], runtime: createExtensionRuntime() } as ReturnType<ResourceLoader["getExtensions"]>;
   private prompts: ReturnType<ResourceLoader["getPrompts"]> = { prompts: [], diagnostics: [] };
   private themes: ReturnType<ResourceLoader["getThemes"]> = { themes: [], diagnostics: [] };
@@ -37,6 +30,8 @@ export class FeishuResourceLoader implements ResourceLoader {
 
   private sessionSwitcher?: (path: string) => Promise<void>;
   private memoryDiagnostic?: () => string | undefined;
+  private extensionLoader?: DefaultResourceLoader;
+  private extensionPathsKey = "";
 
   constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project", private readonly currentRequest?: string, private readonly memoryExtension?: import("@earendil-works/pi-coding-agent").ExtensionFactory) {}
 
@@ -56,7 +51,7 @@ export class FeishuResourceLoader implements ResourceLoader {
       const content = read(path);
       return content === undefined ? [] : [{ path, content }];
     });
-    this.prompt = [BASE_IDENTITY, read(system), ...this.agentsFiles.map((entry) => entry.content)].filter(Boolean).join("\n\n");
+    this.prompt = [read(system) ?? DEFAULT_SYSTEM, ...this.agentsFiles.map((entry) => entry.content)].filter(Boolean).join("\n\n");
 
     const global = loadSkillsFromDir({ dir: join(this.agentHome, "skills"), source: "feishu-global-private" }).skills;
     const project = loadSkillsFromDir({ dir: join(this.projectRoot, ".feishu-agent", "skills"), source: "feishu-project-private" }).skills;
@@ -76,23 +71,23 @@ export class FeishuResourceLoader implements ResourceLoader {
     });
     const extensionPaths = resolved.extensions.filter((entry) => entry.enabled).map((entry) => entry.path)
       .filter((path) => !path.includes("@mem0/pi-agent-plugin"));
-    this.extensions = extensionPaths.length
-      ? await withCompatibilityHome(process.env.HOME!, this.agentHome, () => discoverAndLoadExtensions(extensionPaths, this.projectRoot, this.agentHome, createEventBus()))
-      : { extensions: [], errors: [], runtime: createExtensionRuntime() };
-    const core = new DefaultResourceLoader({
-      cwd: this.projectRoot,
-      agentDir: this.agentHome,
-      settingsManager: settingsManagerFor(this.agentHome, this.projectRoot),
-      noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-      extensionFactories: [
-        ...(this.memoryExtension ? [{ name: "feishu-memory", hidden: true, factory: this.memoryExtension }] : []),
-        { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic, this) },
-      ],
-    });
-    await core.reload();
-    const coreExtensions = core.getExtensions();
-    this.extensions.extensions.push(...coreExtensions.extensions);
-    this.extensions.errors.push(...coreExtensions.errors);
+    const extensionPathsKey = JSON.stringify(extensionPaths);
+    if (!this.extensionLoader || this.extensionPathsKey !== extensionPathsKey) {
+      this.extensionPathsKey = extensionPathsKey;
+      this.extensionLoader = new DefaultResourceLoader({
+        cwd: this.projectRoot,
+        agentDir: this.agentHome,
+        settingsManager: settingsManagerFor(this.agentHome, this.projectRoot),
+        noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+        additionalExtensionPaths: extensionPaths,
+        extensionFactories: [
+          ...(this.memoryExtension ? [{ name: "feishu-memory", hidden: true, factory: this.memoryExtension }] : []),
+          { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic, this) },
+        ],
+      });
+    }
+    await withCompatibilityHome(process.env.HOME!, this.agentHome, () => this.extensionLoader!.reload());
+    this.extensions = this.extensionLoader.getExtensions();
     for (const extension of this.extensions.extensions) {
       if (extension.path === "<inline:feishu-core-policy>") continue;
       for (const reserved of CORE_TOOLS) if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);

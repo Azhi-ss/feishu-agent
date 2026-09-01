@@ -26,7 +26,13 @@ test("outer editor guard intercepts Pi-wired submit after custom editor creation
 
 test("core tool_call hook enforces exact one-shot lark approval and Print termination", async () => {
   const handlers = new Map<string, Function>();
-  const command = "lark-cli doc delete --id doc-1 --as user --scope one-document --yes";
+  const command = "lark-cli doc delete doc-1 --as user --yes";
+  const root = mkdtempSync(join(tmpdir(), "feishu-tool-hook-"));
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\n[ "$*" = "doc delete --help" ] && printf "Risk: high-risk-write\\nAction: delete\\nTarget: positional:0\\nIdentity: --as\\nScope: one-document\\n"\n', { mode: 0o755 });
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${bin}:${oldPath}`;
   corePolicyExtension("delete doc-1 as user for one-document")({
     on: (name: string, handler: Function) => handlers.set(name, handler),
     registerCommand: () => {},
@@ -35,6 +41,7 @@ test("core tool_call hook enforces exact one-shot lark approval and Print termin
   assert.equal(await hook({ toolName: "bash", input: { command } }, { mode: "print", ui: { notify: () => {} } }), undefined);
   const blocked = await hook({ toolName: "bash", input: { command } }, { mode: "print", ui: { notify: () => {} } });
   assert.deepEqual({ block: blocked.block, terminate: blocked.terminate }, { block: true, terminate: true });
+  process.env.PATH = oldPath;
 });
 test("resume startup extension registers a host-owned current-project selector command", () => {
   const commands: string[] = [];

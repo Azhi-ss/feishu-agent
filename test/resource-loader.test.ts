@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -19,13 +19,20 @@ test("Feishu loader keeps identity, allowed contexts, package prompts/themes, an
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\ncase "$*" in\n "--version") echo "lark-cli 1.0.0";;\n "skills list --json") echo "[\\"shared\\"]";;\n "skills read shared") printf -- "---\\nname: shared\\ndescription: official\\n---\\nbody\\n";;\n *) exit 2;;\nesac\n', { mode: 0o755 });
   mkdirSync(join(project, ".feishu-agent"), { recursive: true });
-  writeFileSync(join(home, "SYSTEM.md"), "CUSTOM FEISHU BASE");
+  writeFileSync(join(home, "SYSTEM.md"), "You are Feishu Agent. CUSTOM FEISHU BASE. Refer unrelated work to ordinary pi. Resource Isolation is not an OS sandbox.");
   writeFileSync(join(project, ".feishu-agent", "AGENTS.md"), "FEISHU PROJECT RULE");
   writeFileSync(join(project, "AGENTS.md"), "ROOT RULE");
   skill(join(home, "skills", "shared"), "shared", "global");
   skill(join(project, ".feishu-agent", "skills", "shared"), "shared", "project");
   skill(join(root, "home", ".pi", "agent", "skills", "foreign"), "foreign", "no");
   skill(join(project, ".agents", "skills", "also-foreign"), "also-foreign", "no");
+  const foreignHome = join(root, "foreign-agent-home");
+  const projectTrace = join(root, "project-hostile-loaded");
+  const homeTrace = join(root, "home-hostile-loaded");
+  mkdirSync(join(project, ".pi", "extensions"), { recursive: true });
+  mkdirSync(join(foreignHome, "extensions"), { recursive: true });
+  writeFileSync(join(project, ".pi", "extensions", "hostile.js"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(projectTrace)}, "loaded"); export default () => {};`);
+  writeFileSync(join(foreignHome, "extensions", "hostile.js"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(homeTrace)}, "loaded"); export default () => {};`);
   const pkg = join(root, "package");
   skill(join(pkg, "skills", "shared"), "shared", "package");
   mkdirSync(join(pkg, "prompts"), { recursive: true });
@@ -37,14 +44,16 @@ test("Feishu loader keeps identity, allowed contexts, package prompts/themes, an
   await packageManager(home, project, "project").installAndPersist(pkg);
 
   const oldPath = process.env.PATH;
+  const oldAgentDir = process.env.PI_AGENT_DIR;
   process.env.PATH = `${bin}${delimiter}${oldPath}`;
+  process.env.PI_AGENT_DIR = foreignHome;
   try {
     const loader = new FeishuResourceLoader(home, project);
     await loader.reload();
     assert.match(loader.getSystemPrompt()!, /You are Feishu Agent/);
-    assert.match(loader.getSystemPrompt()!, /Feishu Runtime.*Feishu Project/s);
-    assert.match(loader.getSystemPrompt()!, /Long-term Memory.*Lark Identity.*High-risk Approval/s);
     assert.match(loader.getSystemPrompt()!, /CUSTOM FEISHU BASE.*FEISHU PROJECT RULE.*ROOT RULE/s);
+    assert.equal(existsSync(projectTrace), false);
+    assert.equal(existsSync(homeTrace), false);
     assert.match(loader.getSystemPrompt()!, /ordinary pi/);
     assert.match(loader.getSystemPrompt()!, /not filesystem isolation|not an OS sandbox/);
     assert.deepEqual(loader.getSkills().skills.map((entry) => [entry.name, entry.description]), [["shared", "project"]]);
@@ -57,5 +66,6 @@ test("Feishu loader keeps identity, allowed contexts, package prompts/themes, an
     assert.deepEqual(loader.getThemes().themes.map((entry) => entry.name), ["fixture"]);
   } finally {
     process.env.PATH = oldPath;
+    if (oldAgentDir === undefined) delete process.env.PI_AGENT_DIR; else process.env.PI_AGENT_DIR = oldAgentDir;
   }
 });

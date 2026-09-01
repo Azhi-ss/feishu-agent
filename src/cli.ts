@@ -5,11 +5,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { runInteractive, runPrint } from "./runtime.js";
 import { syncOfficialSkills } from "./official-skills.js";
 import { packageManager } from "./packages.js";
 import { dispatchConfig, setPackageResourceEnabled, type PackageResourceType } from "./config.js";
-import { initializeHome } from "./init.js";
+import { existingIdentity, initializeHome } from "./init.js";
 import { checkReadiness } from "./readiness.js";
 import { CORE_TOOLS, projectKeyFor } from "./policy.js";
 
@@ -75,36 +77,121 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function validateArgs(args: string[]): void {
-  if (args.includes("--mode")) fail("JSON and RPC modes are not supported by Feishu Agent.");
-  if (args.some((arg) => ["--json", "--rpc"].includes(arg))) fail("That mode is not supported by Feishu Agent.");
-  if (args[0] === "-p" && !args[1]) fail("Print mode requires a prompt.");
-  const allowed = new Set(["-p", "init", "install", "remove", "list", "update", "config", "skills", "-c", "-r", "--lark-profile"]);
-  if (args[0] && !args[0].startsWith("-") && !allowed.has(args[0])) fail(`Unknown command: ${args[0]}`);
+function invalidOptionValue(args: string[], index: number, flag: string): string {
+  const value = args[index + 1];
+  if (!value || value.startsWith("-")) fail(`${flag} requires a value.`);
+  return value;
 }
 
-const args = process.argv.slice(2);
-const profileIndex = args.indexOf("--lark-profile");
-if (profileIndex >= 0) {
-  if (!args[profileIndex + 1]) fail("--lark-profile requires a profile name.");
-  process.env.LARK_PROFILE = args[profileIndex + 1];
-  args.splice(profileIndex, 2);
+function normalizeAndValidateArgs(input: string[]): string[] {
+  const args = [...input];
+  const profiles = args.reduce<number[]>((found, arg, index) => arg === "--lark-profile" ? [...found, index] : found, []);
+  if (profiles.length > 1) fail("--lark-profile may be specified only once.");
+  if (profiles.length) {
+    const index = profiles[0];
+    process.env.LARK_PROFILE = invalidOptionValue(args, index, "--lark-profile");
+    args.splice(index, 2);
+  }
+  if (args.includes("--mode") || args.some((arg) => ["--json", "--rpc"].includes(arg))) fail("That mode is not supported by Feishu Agent.");
+  if (args.length === 0) return args;
+  if (args.length === 1 && ["--help", "-h", "-c", "-r", "list"].includes(args[0])) return args;
+
+  switch (args[0]) {
+    case "-p":
+      if (args.length !== 2 || !args[1] || args[1].startsWith("-")) fail("Print mode requires a prompt and accepts no extra arguments.");
+      return args;
+    case "init": {
+      const valueFlags = new Set(["--identity", "--model", "--thinking"]);
+      const resetFlags = new Set(["--reset-identity", "--reset-model", "--reset-system"]);
+      const seen = new Set<string>();
+      for (let index = 1; index < args.length; index++) {
+        const flag = args[index];
+        if (seen.has(flag)) fail(`${flag} may be specified only once.`);
+        seen.add(flag);
+        if (valueFlags.has(flag)) { invalidOptionValue(args, index, flag); index++; }
+        else if (!resetFlags.has(flag)) fail(`Unknown feishu init option: ${flag}`);
+      }
+      return args;
+    }
+    case "install":
+    case "remove": {
+      const rest = args.slice(1);
+      if (rest.filter((arg) => arg === "-l").length > 1 || rest.some((arg) => arg.startsWith("-") && arg !== "-l") || rest.filter((arg) => arg !== "-l").length !== 1) fail(`Usage: feishu ${args[0]} <source> [-l]`);
+      return args;
+    }
+    case "update":
+      if (args.length > 2 || (args[1]?.startsWith("-") && args[1] !== "--extensions")) fail("Usage: feishu update [source|--extensions]");
+      return args;
+    case "config": {
+      const rest = args.slice(1);
+      if (rest.length === 0 || (rest.length === 1 && rest[0] === "-l")) return args;
+      const local = rest[0] === "-l";
+      const set = rest.slice(local ? 1 : 0);
+      if (set.length !== 4 || set[0] !== "set" || set.slice(1).some((value) => !value || value.startsWith("-"))) fail("Usage: feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>");
+      if (!["extensions", "skills", "prompts", "themes"].includes(set[2]) || !["on", "off"].includes(set[3])) fail("Usage: feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>");
+      return args;
+    }
+    case "skills":
+      if (args.length !== 2 || args[1] !== "sync") fail("Usage: feishu skills sync");
+      return args;
+    default:
+      if (args[0].startsWith("-")) fail(`Unsupported option: ${args[0]}`);
+      fail(`Unknown command: ${args[0]}`);
+  }
 }
+
+async function promptInitChoices(home: string, agentHome: string, identity: string | undefined, model: string | undefined, resetIdentity: boolean, resetModel: boolean): Promise<{ identity: string; model?: string }> {
+  const savedIdentity = existingIdentity(agentHome);
+  const settings = existsSync(join(agentHome, "settings.json")) ? JSON.parse(readFileSync(join(agentHome, "settings.json"), "utf8") || "{}") as { defaultProvider?: string; defaultModel?: string } : {};
+  const savedModel = settings.defaultProvider && settings.defaultModel ? `${settings.defaultProvider}/${settings.defaultModel}` : undefined;
+  if (!resetIdentity && savedIdentity) identity = savedIdentity;
+  if (!resetModel && savedModel) model = savedModel;
+  if (identity && model) return { identity, model };
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    if (!identity) fail("Fresh unattended feishu init requires --identity <stable-id> or FEISHU_MEMORY_IDENTITY.");
+    if (!model) fail("Select an authenticated model explicitly with --model provider/model; no persistent state was created.");
+    return { identity, model };
+  }
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    if (!identity) identity = (await prompt.question("Stable Memory Identity: ")).trim();
+    if (!identity) fail("Init requires a non-empty stable Memory Identity.");
+    if (!model) {
+      const piHome = join(home, ".pi", "agent");
+      const runtime = await ModelRuntime.create({ authPath: join(piHome, "auth.json"), modelsPath: join(piHome, "models.json"), allowModelNetwork: false });
+      const models = (await runtime.getAvailable()).map((entry) => `${entry.provider}/${entry.id}`);
+      if (!models.length) fail("No authenticated model is available; manage credentials through ordinary Pi.");
+      process.stdout.write(models.map((name, index) => `  ${index + 1}) ${name}`).join("\n") + "\n");
+      const selected = Number((await prompt.question("Authenticated model number: ")).trim());
+      if (!Number.isInteger(selected) || selected < 1 || selected > models.length) fail("Select a valid authenticated model number.");
+      model = models[selected - 1];
+    }
+    return { identity, model };
+  } finally { prompt.close(); }
+}
+
+const args = normalizeAndValidateArgs(process.argv.slice(2));
 if (args.includes("--help") || args.includes("-h")) process.stdout.write(HELP);
 else {
-  validateArgs(args);
   if (process.env.FEISHU_AGENT_INSPECT === "1") inspect();
   else if (args[0] === "init") {
+    const home = realpathSync(homedir());
+    const agentHome = join(home, ".feishu-agent");
     const identityIndex = args.indexOf("--identity");
-    const identity = identityIndex >= 0 ? args[identityIndex + 1] : process.env.FEISHU_MEMORY_IDENTITY;
-    if (!identity) fail("feishu init requires --identity <stable-id> (or FEISHU_MEMORY_IDENTITY for unattended initialization).");
-    const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    const result = initializeHome(agentHome, identity, { identity: args.includes("--reset-identity"), system: args.includes("--reset-system") });
     const modelIndex = args.indexOf("--model");
+    const choices = await promptInitChoices(
+      home,
+      agentHome,
+      identityIndex >= 0 ? args[identityIndex + 1] : process.env.FEISHU_MEMORY_IDENTITY,
+      modelIndex >= 0 ? args[modelIndex + 1] : undefined,
+      args.includes("--reset-identity"),
+      args.includes("--reset-model"),
+    );
+    const result = initializeHome(agentHome, choices.identity, { identity: args.includes("--reset-identity"), system: args.includes("--reset-system") });
     const thinkingIndex = args.indexOf("--thinking");
     const thinking = thinkingIndex >= 0 ? args[thinkingIndex + 1] : undefined;
     if (thinking && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(thinking)) fail("--thinking must be one of off, minimal, low, medium, high, xhigh.");
-    const readiness = await checkReadiness(realpathSync(homedir()), agentHome, modelIndex >= 0 ? args[modelIndex + 1] : undefined, { resetModel: args.includes("--reset-model"), thinkingLevel: thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined })
+    const readiness = await checkReadiness(home, agentHome, choices.model, { resetModel: args.includes("--reset-model"), thinkingLevel: thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined })
       .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
     const root = projectRoot(realpathSync(process.cwd()));
     const manager = packageManager(agentHome, root, projectKeyFor(root));

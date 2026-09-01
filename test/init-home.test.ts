@@ -5,11 +5,17 @@ import { join } from "node:path";
 import test from "node:test";
 import { initializeHome } from "../src/init.js";
 
+test("fresh init requires identity but bare rerun reuses existing identity", () => {
+  const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-existing-")), ".feishu-agent");
+  initializeHome(agent, "alice");
+  assert.equal(initializeHome(agent, "ignored").identity, "feishu:alice");
+});
+
 test("init creates an idempotent private Home without overwriting choices", () => {
   const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-")), ".feishu-agent");
   const first = initializeHome(agent, "alice");
   assert.equal(first.identity, "feishu:alice");
-  const custom = "CUSTOM SYSTEM\n"; writeFileSync(join(agent, "SYSTEM.md"), custom);
+  const custom = "You are Feishu Agent. CUSTOM SYSTEM\n"; writeFileSync(join(agent, "SYSTEM.md"), custom);
   const settings = '{"defaultProvider":"fake","defaultModel":"one"}\n'; writeFileSync(join(agent, "settings.json"), settings);
   const second = initializeHome(agent, "bob");
   assert.equal(second.identity, "feishu:alice");

@@ -23,7 +23,7 @@ function fixture(baseUrl: string) {
   writeFileSync(join(pi, "models.json"), JSON.stringify({ providers: { fake: { baseUrl, api: "openai-completions", models: [{ id: "fake-model", name: "Fake", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 1024 }] } } }));
   writeFileSync(join(pi, "settings.json"), JSON.stringify({ defaultProvider: "pi-provider", defaultModel: "pi-model" }));
   writeFileSync(join(feishu, "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model" }));
-  return { home, cwd, pi };
+  return { home, cwd, pi, feishu };
 }
 
 function runAsync(cwd: string, home: string, args: string[]) {
@@ -78,6 +78,17 @@ test("print mode sends a literal /resume prompt instead of invoking the Interact
     assert.deepEqual(prompt, [{ type: "text", text: "/resume" }]);
     assert.doesNotMatch(result.stderr, /Extension error|ui\.custom/);
   } finally { server.close(); }
+});
+
+test("print mode fails before prompting when a configured Feishu default is stale", () => {
+  const f = fixture("http://127.0.0.1:1/v1");
+  const piBefore = ["auth.json", "models.json", "settings.json"].map((name) => readFileSync(join(f.pi, name)));
+  writeFileSync(join(f.feishu, "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "removed-model" }));
+  const result = spawnSync(process.execPath, [cli, "-p", "ping"], { cwd: f.cwd, encoding: "utf8", env: { ...process.env, HOME: f.home, PI_OFFLINE: "1" } });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /configured Feishu default fake\/removed-model is unavailable/i);
+  assert.match(result.stderr, /feishu init --reset-model/i);
+  assert.deepEqual(["auth.json", "models.json", "settings.json"].map((name) => readFileSync(join(f.pi, name))), piBefore);
 });
 
 test("print mode fails before prompting when no authenticated model exists", () => {

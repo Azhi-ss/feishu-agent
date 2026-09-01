@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 
@@ -31,8 +31,8 @@ export function syncOfficialSkills(cacheRoot: string, force = false, env = proce
     if (force) throw error;
     const fallback = readdirSync(cacheRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && existsSync(join(cacheRoot, entry.name, ".success")))
-      .map((entry) => join(cacheRoot, entry.name))
-      .sort((a, b) => readFileSync(join(b, ".success"), "utf8").localeCompare(readFileSync(join(a, ".success"), "utf8")))[0];
+      .map((entry) => ({ dir: join(cacheRoot, entry.name), name: entry.name, mtime: statSync(join(cacheRoot, entry.name, ".success")).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name))[0]?.dir;
     if (fallback) return { version, cacheDir: fallback, skills: loadSkillsFromDir({ dir: fallback, source: "lark-cli-official" }).skills, warning: `Official Skills for ${version} unavailable; using ${readFileSync(join(fallback, ".success"), "utf8")}.` };
     return { version, cacheDir, skills: [], warning: `Official Skills for ${version} are unavailable.` };
   }

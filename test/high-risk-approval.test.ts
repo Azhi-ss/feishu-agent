@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { approvalFromExactRequest, authorizeLarkCommand } from "../src/high-risk.js";
+import { approvalFromExactRequest, authorizeLarkCommand, extractLarkOperation } from "../src/high-risk.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
-const exactCommand = "lark-cli doc delete --id doc-1 --as user --scope one-document --yes";
-const ambiguousCommand = "lark-cli doc delete --id doc-1 --as user --scope one-document";
+const exactCommand = "lark-cli doc delete doc-1 --as user --yes";
+const ambiguousCommand = "lark-cli doc delete doc-1 --as user";
+const metadata = () => ({ risk: "high-risk-write", action: "delete", target: "positional:0", identity: "--as", scope: "one-document" });
 
 function toolResponse(command: string, id: string): string {
   const args = JSON.stringify({ command });
@@ -44,11 +45,12 @@ async function fixture(responses: string[]) {
   writeFileSync(join(home, ".feishu-agent", "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model", quietStartup: true, collapseChangelog: true }));
   writeFileSync(join(home, ".feishu-agent", "SYSTEM.md"), "You are Feishu Agent.\n");
   writeFileSync(join(bin, "lark-cli"), `#!/bin/sh
+printf 'CALL|%s\n' "$*" >> "$LARK_TRACE"
 case "$*" in
+ "doc delete --help") printf 'Risk: high-risk-write\nAction: delete\nTarget: positional:0\nIdentity: --as\nScope: one-document\n'; exit 0;;
  "--version") echo "lark-cli 1.0.0"; exit 0;;
  "skills list --json") echo "[]"; exit 0;;
 esac
-printf 'CALL|%s\\n' "$*" >> "$LARK_TRACE"
 case " $* " in *" --yes "*) echo "FAKE LARK DELETED"; exit 0;; esac
 printf 'FAKE LARK CONFIRMATION: approve destructive write? [y/N] ' >&2
 read answer
@@ -60,6 +62,11 @@ exit 3
     root, home, project, trace, server,
     env: { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, LARK_TRACE: trace, PI_OFFLINE: "1", TERM: "xterm-256color", COLUMNS: "100", LINES: "30" },
   };
+}
+
+function larkCalls(path: string): string[] {
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8").trim().split("\n").filter((line) => !line.endsWith("--help") && !line.endsWith("--version") && !line.endsWith("skills list --json"));
 }
 
 function runBounded(cwd: string, env: NodeJS.ProcessEnv, args: string[], timeoutMs = 10000): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
@@ -84,28 +91,19 @@ function runPty(cwd: string, env: NodeJS.ProcessEnv, prompt: string): Promise<{ 
   });
 }
 
-test("lark-cli --yes approval is derived from an exact natural request and consumed once", () => {
+test("lark-cli --yes approval is derived from exact English/Chinese requests and consumed once", () => {
   const approval = approvalFromExactRequest("delete doc-1 as user for one-document");
   assert.deepEqual(approval, { action: "delete", target: "doc-1", identity: "user", scope: "one-document", consumed: false });
-  authorizeLarkCommand(exactCommand, approval);
-  assert.throws(() => authorizeLarkCommand(exactCommand, approval), /exact one-shot approval/);
-  assert.throws(() => authorizeLarkCommand("lark-cli doc delete --id doc-2 --as user --scope one-document --yes", approvalFromExactRequest("delete doc-1 as user for one-document")), /required/);
-  assert.throws(() => authorizeLarkCommand("lark-cli doc remove --id doc-1 --as user --scope one-document --yes", approvalFromExactRequest("delete doc-1 as user for one-document")), /required/);
-  assert.throws(() => authorizeLarkCommand("lark-cli doc delete --id doc-1 --as bot --scope one-document --yes", approvalFromExactRequest("delete doc-1 as user for one-document")), /required/);
-  assert.throws(() => authorizeLarkCommand("lark-cli doc delete --id doc-1 --as user --scope all-documents --yes", approvalFromExactRequest("delete doc-1 as user for one-document")), /required/);
-  assert.throws(() => authorizeLarkCommand("lark-cli doc delete --id doc-1 --target doc-2 --as user --scope one-document --yes", approvalFromExactRequest("delete doc-1 as user for one-document")), /required/);
-  assert.throws(() => authorizeLarkCommand("lark-cli doc delete --id doc-1 --as user --scope one-document --scope all-documents --yes", approvalFromExactRequest("delete doc-1 as user for one-document")), /required/);
-  assert.throws(() => authorizeLarkCommand(`${exactCommand} && lark-cli doc delete --id doc-2 --as user --scope one-document --yes`, approvalFromExactRequest("delete doc-1 as user for one-document")), /required/);
-  assert.throws(() => authorizeLarkCommand("env X=1 lark-cli doc delete --id doc-2 --as user --scope one-document --yes", approvalFromExactRequest("delete doc-1 as user for one-document")), /required/);
-  assert.throws(() => authorizeLarkCommand(exactCommand), /Print mode cannot prompt/);
-  assert.throws(() => authorizeLarkCommand(ambiguousCommand, undefined, true), /High-risk Approval required/);
-  assert.throws(() => authorizeLarkCommand("lark-cli doc delete --id doc-1", undefined, true), /High-risk Approval required/);
-  assert.throws(() => authorizeLarkCommand("lark-cli doc delete --as user --scope one-document", undefined, true), /High-risk Approval required/);
-  assert.throws(() => authorizeLarkCommand(`${ambiguousCommand} | cat`, undefined, true), /exact one-shot approval/);
+  authorizeLarkCommand(exactCommand, approval, false, metadata);
+  assert.throws(() => authorizeLarkCommand(exactCommand, approval, false, metadata), /exact one-shot approval/);
+  assert.throws(() => authorizeLarkCommand("lark-cli doc delete doc-2 --as user --yes", approvalFromExactRequest("delete doc-1 as user for one-document"), false, metadata), /required/);
+  assert.throws(() => authorizeLarkCommand("lark-cli doc delete doc-1 --as bot --yes", approvalFromExactRequest("delete doc-1 as user for one-document"), false, metadata), /required/);
+  assert.throws(() => authorizeLarkCommand(`${exactCommand} && lark-cli doc delete doc-2 --as user --yes`, approvalFromExactRequest("delete doc-1 as user for one-document"), false, metadata), /required/);
+  assert.throws(() => authorizeLarkCommand(exactCommand, undefined, false, metadata), /Print mode cannot prompt/);
+  assert.throws(() => authorizeLarkCommand(ambiguousCommand, undefined, true, metadata), /High-risk Approval required/);
+  assert.deepEqual(approvalFromExactRequest("请以用户身份在one-document范围内删除doc-1"), { action: "delete", target: "doc-1", identity: "user", scope: "one-document", consumed: false });
+  assert.deepEqual(extractLarkOperation("lark-cli im messages delete --message-id om_1 --as user --yes"), { action: "delete", target: "om_1", identity: "user", scope: "im.messages.delete" });
   assert.equal(approvalFromExactRequest("delete the document"), undefined);
-  assert.equal(approvalFromExactRequest("delete as user for one-document"), undefined);
-  assert.equal(approvalFromExactRequest("delete doc-1 for one-document"), undefined);
-  assert.equal(approvalFromExactRequest("delete doc-1 as user"), undefined);
 });
 
 test("exact natural Print request drives one matching fake-model lark-cli --yes execution", async () => {
@@ -115,7 +113,7 @@ test("exact natural Print request drives one matching fake-model lark-cli --yes 
     assert.equal(result.timedOut, false);
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /EXACT-DONE/);
-    assert.deepEqual(readFileSync(f.trace, "utf8").trim().split("\n"), ["CALL|doc delete --id doc-1 --as user --scope one-document --yes"]);
+    assert.deepEqual(larkCalls(f.trace), ["CALL|doc delete doc-1 --as user --yes"]);
   } finally { f.server.close(); }
 });
 
@@ -126,20 +124,18 @@ test("vague natural request missing scope cannot authorize model-added --yes", a
     assert.equal(result.timedOut, false);
     assert.notEqual(result.code, 0);
     assert.match(result.stdout + result.stderr, /exact one-shot approval|required/);
-    assert.throws(() => readFileSync(f.trace, "utf8"));
+    assert.deepEqual(larkCalls(f.trace), []);
   } finally { f.server.close(); }
 });
 
 test("changed approval fields, chaining, and reuse are blocked before another fake lark execution", async (t) => {
   const variants = [
-    ["action", "lark-cli doc remove --id doc-1 --as user --scope one-document --yes"],
-    ["target", "lark-cli doc delete --id doc-2 --as user --scope one-document --yes"],
-    ["identity", "lark-cli doc delete --id doc-1 --as bot --scope one-document --yes"],
-    ["scope", "lark-cli doc delete --id doc-1 --as user --scope all-documents --yes"],
-    ["second target", "lark-cli doc delete --id doc-1 --target doc-2 --as user --scope one-document --yes"],
-    ["second scope", "lark-cli doc delete --id doc-1 --as user --scope one-document --scope all-documents --yes"],
-    ["env wrapper", "env X=1 lark-cli doc delete --id doc-2 --as user --scope one-document --yes"],
-    ["chaining", `${exactCommand} && lark-cli doc delete --id doc-2 --as user --scope one-document --yes`],
+    ["target", "lark-cli doc delete doc-2 --as user --yes"],
+    ["identity", "lark-cli doc delete doc-1 --as bot --yes"],
+    ["second target", "lark-cli doc delete doc-1 doc-2 --as user --yes"],
+    ["second scope", "lark-cli doc delete doc-1 --as user --as bot --yes"],
+    ["env wrapper", "env X=1 lark-cli doc delete doc-2 --as user --yes"],
+    ["chaining", `${exactCommand} && lark-cli doc delete doc-2 --as user --yes`],
   ] as const;
   for (const [name, command] of variants) await t.test(name, async () => {
     const f = await fixture([toolResponse(command, `changed-${name}`)]);
@@ -148,7 +144,7 @@ test("changed approval fields, chaining, and reuse are blocked before another fa
       assert.equal(result.timedOut, false);
       assert.notEqual(result.code, 0);
       assert.match(result.stdout + result.stderr, /exact one-shot approval|required/);
-      assert.throws(() => readFileSync(f.trace, "utf8"));
+      assert.deepEqual(larkCalls(f.trace), []);
     } finally { f.server.close(); }
   });
 
@@ -159,7 +155,7 @@ test("changed approval fields, chaining, and reuse are blocked before another fa
       assert.equal(result.timedOut, false);
       assert.notEqual(result.code, 0);
       assert.match(result.stdout + result.stderr, /exact one-shot approval|required/);
-      assert.deepEqual(readFileSync(f.trace, "utf8").trim().split("\n"), ["CALL|doc delete --id doc-1 --as user --scope one-document --yes"]);
+      assert.deepEqual(larkCalls(f.trace), ["CALL|doc delete doc-1 --as user --yes"]);
     } finally { f.server.close(); }
   });
 });
@@ -171,15 +167,15 @@ test("ambiguous Interactive request omits --yes and visibly reaches fake lark co
     assert.equal(result.code, 0, result.output);
     assert.match(result.output, /FAKE LARK CONFIRMATION: approve destructive write/);
     assert.match(result.output, /AMBIGUOUS-DONE/);
-    assert.deepEqual(readFileSync(f.trace, "utf8").trim().split("\n"), ["CALL|doc delete --id doc-1 --as user --scope one-document"]);
+    assert.deepEqual(larkCalls(f.trace), ["CALL|doc delete doc-1 --as user"]);
   } finally { f.server.close(); }
 });
 
 test("incomplete or compound Print high-risk writes fail nonzero without entering fake confirmation", async (t) => {
   const variants = [
     ["complete", ambiguousCommand],
-    ["missing identity", "lark-cli doc delete --id doc-1 --scope one-document"],
-    ["missing target", "lark-cli doc delete --as user --scope one-document"],
+    ["missing identity", "lark-cli doc delete doc-1"],
+    ["missing target", "lark-cli doc delete --as user"],
     ["env wrapper", `env X=1 ${ambiguousCommand}`],
     ["compound", `${ambiguousCommand} | cat`],
   ] as const;
@@ -190,7 +186,7 @@ test("incomplete or compound Print high-risk writes fail nonzero without enterin
       assert.equal(result.timedOut, false, `${result.stdout}\n${result.stderr}`);
       assert.notEqual(result.code, 0);
       assert.match(result.stdout + result.stderr, /approval.*required|cannot prompt|exact one-shot/i);
-      assert.throws(() => readFileSync(f.trace, "utf8"));
+      assert.deepEqual(larkCalls(f.trace), []);
     } finally { f.server.close(); }
   });
 });

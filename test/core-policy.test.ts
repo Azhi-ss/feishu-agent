@@ -12,7 +12,7 @@ test("loader always preserves the seven reserved core tool names", async () => {
   const project = join(root, "project");
   mkdirSync(home, { recursive: true });
   mkdirSync(project, { recursive: true });
-  writeFileSync(join(home, "SYSTEM.md"), "custom identity cannot replace core");
+  writeFileSync(join(home, "SYSTEM.md"), "You are Feishu Agent. custom identity cannot replace core");
   const loader = new FeishuResourceLoader(home, project, "key");
   await loader.reload();
   assert.match(loader.getSystemPrompt()!, /^You are Feishu Agent/);

@@ -37,8 +37,16 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
   await resourceLoader.reload();
   for (const warning of resourceLoader.warnings) process.stderr.write(`Startup Warning: ${warning}\n`);
   const available = await modelRuntime.getAvailable();
-  const model = available.find((entry) => entry.provider === settingsManager.getDefaultProvider() && entry.id === settingsManager.getDefaultModel()) ?? available[0];
-  if (!model) throw new Error("No authenticated model is available. Manage model credentials with ordinary Pi, then run `feishu init`.");
+  const configuredProvider = settingsManager.getDefaultProvider();
+  const configuredModel = settingsManager.getDefaultModel();
+  const hasConfiguredDefault = Boolean(configuredProvider && configuredModel);
+  const model = hasConfiguredDefault
+    ? available.find((entry) => entry.provider === configuredProvider && entry.id === configuredModel)
+    : available[0];
+  if (!model) {
+    if (hasConfiguredDefault) throw new Error(`Configured Feishu default ${configuredProvider}/${configuredModel} is unavailable. Run \`feishu init --reset-model --model provider/model\` to select an authenticated model.`);
+    throw new Error("No authenticated model is available. Manage model credentials with ordinary Pi, then run `feishu init`.");
+  }
 
   const createSession: CreateAgentSessionRuntimeFactory = async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
     const services = { cwd: runtimeCwd, agentDir: agentHome, modelRuntime, settingsManager, resourceLoader, diagnostics: [] };
