@@ -68,10 +68,18 @@ function safeClient(client: MemoryClientLike): MemoryClientLike {
 export interface MemoryRuntime {
   warning?: string;
   extension?: ExtensionFactory;
-  diagnostic?: () => string | undefined;
+  diagnostic: () => string | undefined;
 }
 
-const createDefaultClient = (apiKey: string) => new MemoryClient({ apiKey, ...(process.env.MEM0_API_HOST ? { host: process.env.MEM0_API_HOST } : {}) });
+interface DefaultMemoryClientConstructor {
+  new(options: { apiKey: string; host?: string }): MemoryClientLike;
+}
+
+// Mem0 starts an untracked async initializer in its constructor. Override it so startup has only the awaited health ping below.
+const DefaultMemoryClient = class extends (MemoryClient as unknown as DefaultMemoryClientConstructor) {
+  _initializeClient(): void {}
+};
+const createDefaultClient = (apiKey: string) => new DefaultMemoryClient({ apiKey, ...(process.env.MEM0_API_HOST ? { host: process.env.MEM0_API_HOST } : {}) });
 
 export async function memoryRuntime(
   agentHome: string,
@@ -80,11 +88,16 @@ export async function memoryRuntime(
   timeoutMs = 2000,
 ): Promise<MemoryRuntime> {
   const apiKey = process.env.MEM0_API_KEY;
-  if (!apiKey) return { warning: memoryWarning("load", new Error("MEM0_API_KEY is missing")) };
+  let warning: string | undefined;
+  const unavailable = (feature: "load" | "health", error: unknown): MemoryRuntime => {
+    warning = memoryWarning(feature, error);
+    return { warning, diagnostic: () => warning };
+  };
+  if (!apiKey) return unavailable("load", new Error("MEM0_API_KEY is missing"));
   let config: MemoryConfig;
   try { config = JSON.parse(readFileSync(join(agentHome, "mem0-config.json"), "utf8")); }
-  catch (error) { return { warning: memoryWarning("load", error) }; }
-  if (!config.userId?.startsWith("feishu:")) return { warning: memoryWarning("load", new Error("stable feishu:<identity> is not configured")) };
+  catch (error) { return unavailable("load", error); }
+  if (!config.userId?.startsWith("feishu:")) return unavailable("load", new Error("stable feishu:<identity> is not configured"));
 
   const externalUserId = process.env.MEM0_USER_ID;
   let client: MemoryClientLike;
@@ -97,11 +110,13 @@ export async function memoryRuntime(
         else process.env.MEM0_USER_ID = externalUserId;
       }
     });
+  } catch (error) { return unavailable("load", error); }
+  try {
     await Promise.race([
       client.ping(),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`health check timed out after ${timeoutMs}ms`)), timeoutMs)),
     ]);
-  } catch (error) { return { warning: memoryWarning("health", error) }; }
+  } catch (error) { return unavailable("health", error); }
 
   const pluginConfig: Mem0Config = {
     apiKey: "",
@@ -115,39 +130,92 @@ export async function memoryRuntime(
   const dreamStateDir = join(agentHome, "memory-state");
   const scope: ScopeContext = { userId: config.userId, appId: projectKey, runId: "unknown" };
   let degraded = false;
-  let warning: string | undefined;
   let dreamTriggered = false;
+  let dreamWriteSucceeded = false;
   let dreamChecked = false;
-  const disable = (feature: "recall" | "capture" | "dream", error: unknown) => {
+  let notifyWarning: ((message: string) => void) | undefined;
+  const disable = (feature: "load" | "recall" | "capture" | "dream", error: unknown) => {
+    if (degraded) return;
     degraded = true;
     warning = memoryWarning(feature, error);
     process.stderr.write(`${warning}\n`);
+    notifyWarning?.(warning);
+  };
+  const failDream = (error: unknown) => {
+    if (dreamTriggered) releaseDreamLock(dreamStateDir);
+    dreamTriggered = false;
+    dreamWriteSucceeded = false;
+    disable("dream", error);
+  };
+  const skipped = (property: PropertyKey) => {
+    if (property === "search") return { results: [] };
+    if (property === "getAll") return { results: [], count: 0 };
+    if (property === "add") return [];
+    return {};
   };
   const guardedClient = new Proxy(client, {
     get(target, property) {
       const value = Reflect.get(target, property, target);
       if (typeof value !== "function") return value;
-      return async (...args: unknown[]) => {
-        if (degraded) throw new Error("Long-term Memory is disabled for this degraded session.");
-        return value.apply(target, args);
-      };
+      return async (...args: unknown[]) => degraded ? skipped(property) : value.apply(target, args);
     },
   });
   const extension = (pi: ExtensionAPI) => {
-    registerMemoryTool(pi, guardedClient as never, pluginConfig, () => scope);
-    const commandsApi = new Proxy(pi, {
-      get(target, property) {
-        if (property === "registerCommand") return (name: string, command: unknown) => {
-          if (name !== "mem0-dream") pi.registerCommand(name, command as never);
-        };
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
+    pi.on("session_start", (_event, ctx) => {
+      notifyWarning = (message) => ctx.ui.notify(message, "warning");
+      if (warning) notifyWarning(warning);
+      const file = ctx.sessionManager?.getSessionFile?.();
+      scope.runId = file ?? "unknown";
+      if (!degraded && pluginConfig.dream.enabled) incrementSessionCount(dreamStateDir, scope.runId);
     });
-    registerCommands(commandsApi, guardedClient as never, pluginConfig, () => scope);
+    try {
+      const toolsApi = new Proxy(pi, {
+        get(target, property) {
+          if (property === "registerTool") return (tool: any) => pi.registerTool({
+            ...tool,
+            execute: async (...args: unknown[]) => {
+              if (degraded) return { content: [{ type: "text", text: warning ?? "Long-term Memory is unavailable for this session." }], details: {} };
+              try {
+                const result = await tool.execute(...args);
+                if (dreamTriggered && ["add", "delete", "delete_all"].includes((args[1] as { action?: string } | undefined)?.action ?? "")) dreamWriteSucceeded = true;
+                return result;
+              } catch (error) {
+                if (!dreamTriggered) throw error;
+                failDream(error);
+                return { content: [{ type: "text", text: warning! }], details: {} };
+              }
+            },
+          });
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      registerMemoryTool(toolsApi, guardedClient as never, pluginConfig, () => scope);
+      const commandsApi = new Proxy(pi, {
+        get(target, property) {
+          if (property === "registerCommand") return (name: string, command: any) => {
+            if (name !== "mem0-dream") pi.registerCommand(name, {
+              ...command,
+              handler: (...args: unknown[]) => {
+                if (!degraded) return command.handler(...args);
+                const ctx = args[1] as { ui?: { notify?: (message: string, level: "warning") => void } } | undefined;
+                if (warning) ctx?.ui?.notify?.(warning, "warning");
+              },
+            });
+          };
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      registerCommands(commandsApi, guardedClient as never, pluginConfig, () => scope);
+    } catch (error) { disable("load", error); }
     pi.registerCommand("mem0-dream", {
       description: "Consolidate memories — merge duplicates, prune stale entries, resolve contradictions",
       handler: async (_args, ctx) => {
+        if (degraded) {
+          if (warning) ctx.ui.notify(warning, "warning");
+          return;
+        }
         if (!acquireDreamLock(dreamStateDir)) {
           ctx.ui.notify("A dream consolidation is already in progress.", "warning");
           return;
@@ -156,17 +224,8 @@ export async function memoryRuntime(
         try {
           pi.sendMessage({ customType: "mem0-dream", content: DREAM_PROTOCOL, display: false }, { triggerTurn: true });
           pi.sendMessage({ customType: "mem0-dream", content: "**Dreaming** — reviewing your memories to merge duplicates, resolve contradictions, and prune stale entries. I'll report what changed.", display: true });
-        } catch (error) {
-          dreamTriggered = false;
-          releaseDreamLock(dreamStateDir);
-          throw error;
-        }
+        } catch (error) { failDream(error); }
       },
-    });
-    pi.on("session_start", (_event, ctx) => {
-      const file = ctx.sessionManager?.getSessionFile?.();
-      scope.runId = file ?? "unknown";
-      if (pluginConfig.dream.enabled) incrementSessionCount(dreamStateDir, scope.runId);
     });
     pi.on("before_agent_start", async (event) => {
       if (degraded) return { systemPrompt: event.systemPrompt };
@@ -199,15 +258,16 @@ export async function memoryRuntime(
         catch (error) { disable("capture", error); }
       }
       if (dreamTriggered) {
-        const wroteMemory = (event.messages ?? []).some((message: any) => message.role === "assistant" && Array.isArray(message.content) && message.content.some((block: any) => block.type === "tool_use" && block.name === "mem0_memory" && ["add", "delete", "delete_all"].includes(block.input?.action)));
-        if (wroteMemory) recordDreamCompletion(dreamStateDir);
+        if (dreamWriteSucceeded) recordDreamCompletion(dreamStateDir);
         releaseDreamLock(dreamStateDir);
         dreamTriggered = false;
+        dreamWriteSucceeded = false;
       }
     });
     pi.on("session_shutdown", () => {
       if (dreamTriggered) releaseDreamLock(dreamStateDir);
       dreamTriggered = false;
+      dreamWriteSucceeded = false;
     });
   };
   return { extension, diagnostic: () => warning };

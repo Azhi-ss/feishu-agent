@@ -96,11 +96,12 @@ test("Feishu memory composition owns manual Dream state under Feishu Agent Home"
     const commandNames = [];
     const commands = new Map();
     const handlers = new Map();
+    const tools = new Map();
     const messages = [];
     runtime.extension({
       on: (name, handler) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
       registerCommand: (name, command) => { commandNames.push(name); commands.set(name, command); },
-      registerTool: () => {},
+      registerTool: (tool) => tools.set(tool.name, tool),
       sendMessage: (message) => messages.push(message),
     });
     assert.equal(commandNames.length, new Set(commandNames).size);
@@ -112,6 +113,7 @@ test("Feishu memory composition owns manual Dream state under Feishu Agent Home"
     assert(existsSync(join(stateDir, "mem0-dream.lock")));
     assert.equal(existsSync(join(root, ".pi", "agent", "mem0-dream.lock")), false);
     await handlers.get("before_agent_start")[0]({ prompt: "continue", systemPrompt: "base" });
+    await tools.get("mem0_memory").execute("dream-delete", { action: "delete", memory_id: "old" }, undefined, undefined, {});
     await handlers.get("agent_end")[0]({ messages: [{ role: "assistant", content: [{ type: "tool_use", name: "mem0_memory", input: { action: "delete" } }] }] });
     assert.equal(existsSync(join(stateDir, "mem0-dream.lock")), false);
     assert(existsSync(join(stateDir, "mem0-dream-state.json")));
