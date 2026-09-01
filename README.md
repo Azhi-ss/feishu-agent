@@ -18,7 +18,7 @@ The npm binary is `feishu` after package linking/installation.
 MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
 ```
 
-Initialization creates private state under `~/.feishu-agent/`, requires an explicit Feishu model when more than one authenticated model is available, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs the unmodified Mem0 package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, or customized `SYSTEM.md`. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
+Initialization creates private state under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs the unmodified Mem0 package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, or customized `SYSTEM.md`. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
 
 ## Run
 

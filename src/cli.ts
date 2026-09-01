@@ -102,7 +102,8 @@ else {
     const thinkingIndex = args.indexOf("--thinking");
     const thinking = thinkingIndex >= 0 ? args[thinkingIndex + 1] : undefined;
     if (thinking && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(thinking)) fail("--thinking must be one of off, minimal, low, medium, high, xhigh.");
-    const readiness = await checkReadiness(realpathSync(homedir()), agentHome, modelIndex >= 0 ? args[modelIndex + 1] : undefined, { resetModel: args.includes("--reset-model"), thinkingLevel: thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined });
+    const readiness = await checkReadiness(realpathSync(homedir()), agentHome, modelIndex >= 0 ? args[modelIndex + 1] : undefined, { resetModel: args.includes("--reset-model"), thinkingLevel: thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined })
+      .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
     const root = projectRoot(realpathSync(process.cwd()));
     const manager = packageManager(agentHome, root, projectKeyFor(root));
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source.includes("@mem0/pi-agent-plugin"))) {
