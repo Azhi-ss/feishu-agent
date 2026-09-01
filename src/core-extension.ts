@@ -66,7 +66,7 @@ export function corePolicyExtension(currentRequest?: string, switchSelectedSessi
     });
     pi.on("tool_call", (event, ctx) => {
       if (event.toolName !== "bash") return;
-      try { authorizeLarkCommand(String(event.input.command ?? ""), approval); }
+      try { authorizeLarkCommand(String(event.input.command ?? ""), approval, ctx.mode === "print"); }
       catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         if (ctx.mode === "tui") ctx.ui.notify(reason, "error");
