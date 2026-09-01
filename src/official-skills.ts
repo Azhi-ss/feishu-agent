@@ -7,6 +7,19 @@ function safeVersion(version: string): string {
   return Buffer.from(version).toString("base64url");
 }
 
+function skillNames(payload: unknown): string[] {
+  if (Array.isArray(payload)) return payload.map(String);
+  if (payload && typeof payload === "object" && Array.isArray((payload as { skills?: unknown }).skills)) {
+    const names: string[] = [];
+    for (const skill of (payload as { skills: unknown[] }).skills) {
+      if (typeof skill === "string") names.push(skill);
+      else if (skill && typeof skill === "object" && typeof (skill as { name?: unknown }).name === "string") names.push((skill as { name: string }).name);
+    }
+    return names;
+  }
+  throw new Error("Official Skill export format not recognized.");
+}
+
 export function syncOfficialSkills(cacheRoot: string, force = false, env = process.env) {
   const version = execFileSync("lark-cli", ["--version"], { encoding: "utf8", env }).trim();
   const cacheDir = join(cacheRoot, safeVersion(version));
@@ -16,7 +29,7 @@ export function syncOfficialSkills(cacheRoot: string, force = false, env = proce
   mkdirSync(cacheRoot, { recursive: true });
   const temporary = mkdtempSync(join(cacheRoot, ".sync-"));
   try {
-    const names = JSON.parse(execFileSync("lark-cli", ["skills", "list", "--json"], { encoding: "utf8", env })) as string[];
+    const names = skillNames(JSON.parse(execFileSync("lark-cli", ["skills", "list", "--json"], { encoding: "utf8", env })) as unknown);
     for (const name of names) {
       const directory = join(temporary, basename(name));
       mkdirSync(directory, { recursive: true });

@@ -49,3 +49,23 @@ test("official skill sync publishes atomically and reuses version cache", () => 
   syncOfficialSkills(cache, true, f.env);
   assert.match(readFileSync(f.log, "utf8"), /skills list --json[\s\S]*skills list --json/);
 });
+
+test("official skill sync accepts the real object-shaped skills list", () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-official-object-"));
+  const cache = join(root, "cache");
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "lark-cli"), `#!/bin/sh
+case "$*" in
+  "--version") echo "lark-cli 1.0.92";;
+  "skills list --json") echo '{"ok":true,"skills":[{"name":"lark-approval","description":"审批"},{"name":"lark-im","description":"消息"}]}'
+;;
+  "skills read lark-approval") echo '---\nname: lark-approval\ndescription: approval\n---\nbody';;
+  "skills read lark-im") echo '---\nname: lark-im\ndescription: im\n---\nbody';;
+  *) exit 2;;
+esac
+`, { mode: 0o755 });
+  const result = syncOfficialSkills(cache, false, { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` });
+  assert.equal(result.skills.length, 2);
+  assert.deepEqual(result.skills.map((skill) => skill.name).sort(), ["lark-approval", "lark-im"]);
+});
