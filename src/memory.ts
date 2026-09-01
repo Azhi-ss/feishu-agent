@@ -135,7 +135,34 @@ export async function memoryRuntime(
   });
   const extension = (pi: ExtensionAPI) => {
     registerMemoryTool(pi, guardedClient as never, pluginConfig, () => scope);
-    registerCommands(pi, guardedClient as never, pluginConfig, () => scope);
+    const commandsApi = new Proxy(pi, {
+      get(target, property) {
+        if (property === "registerCommand") return (name: string, command: unknown) => {
+          if (name !== "mem0-dream") pi.registerCommand(name, command as never);
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    registerCommands(commandsApi, guardedClient as never, pluginConfig, () => scope);
+    pi.registerCommand("mem0-dream", {
+      description: "Consolidate memories — merge duplicates, prune stale entries, resolve contradictions",
+      handler: async (_args, ctx) => {
+        if (!acquireDreamLock(dreamStateDir)) {
+          ctx.ui.notify("A dream consolidation is already in progress.", "warning");
+          return;
+        }
+        dreamTriggered = true;
+        try {
+          pi.sendMessage({ customType: "mem0-dream", content: DREAM_PROTOCOL, display: false }, { triggerTurn: true });
+          pi.sendMessage({ customType: "mem0-dream", content: "**Dreaming** — reviewing your memories to merge duplicates, resolve contradictions, and prune stale entries. I'll report what changed.", display: true });
+        } catch (error) {
+          dreamTriggered = false;
+          releaseDreamLock(dreamStateDir);
+          throw error;
+        }
+      },
+    });
     pi.on("session_start", (_event, ctx) => {
       const file = ctx.sessionManager?.getSessionFile?.();
       scope.runId = file ?? "unknown";
