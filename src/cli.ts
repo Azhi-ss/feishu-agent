@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 process.env.MEM0_TELEMETRY = "false";
+process.env.PI_CODING_AGENT_DIR ??= join(homedir(), ".feishu-agent");
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -46,6 +47,7 @@ function inspect(): void {
     home: process.env.HOME,
     environmentMarker: process.env.FEISHU_TEST_MARKER,
     larkProfile: process.env.LARK_PROFILE,
+    piCodingAgentDir: process.env.PI_CODING_AGENT_DIR,
   }));
 }
 

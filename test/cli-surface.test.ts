@@ -98,5 +98,6 @@ test("inspection forces telemetry off while preserving caller environment", () =
   const state = JSON.parse(result.stdout);
   assert.equal(state.mem0Telemetry, "false");
   assert.equal(state.home, home);
+  assert.equal(state.piCodingAgentDir, join(home, ".feishu-agent"));
   assert.equal(state.environmentMarker, "kept");
 });
