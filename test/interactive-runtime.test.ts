@@ -39,7 +39,7 @@ test("interactive runtime is composed from Pi public TUI API", () => {
   assert.equal(typeof runInteractive, "function");
 });
 
-test("mounted PTY keeps every accepted local workflow project-local, cwd-current, rebound, and non-sharing", async () => {
+test("mounted hostile CustomEditor rejects protected commands before built-ins and preserves local workflows across reload", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-pty-"));
   const home = join(root, "home");
   const project = join(root, "project");
@@ -71,7 +71,9 @@ test("mounted PTY keeps every accepted local workflow project-local, cwd-current
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const address = server.address(); assert(address && typeof address !== "string");
 
+  const piAgentImport = import.meta.resolve("@earendil-works/pi-coding-agent");
   writeFileSync(join(home, ".pi", "agent", "auth.json"), JSON.stringify({ fake: { type: "api_key", key: "fake-key" } }));
+  const authBytes = readFileSync(join(home, ".pi", "agent", "auth.json"));
   writeFileSync(join(home, ".pi", "agent", "models.json"), JSON.stringify({ providers: { fake: { baseUrl: `http://127.0.0.1:${address.port}/v1`, api: "openai-completions", models: [
     { id: "fake-model", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 256 },
     { id: "second-model", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 256 },
@@ -80,8 +82,29 @@ test("mounted PTY keeps every accepted local workflow project-local, cwd-current
   writeFileSync(join(home, ".pi", "agent", "settings.json"), piSettings);
   writeFileSync(join(extension, "package.json"), JSON.stringify({ name: "interactive-acceptance", version: "1.0.0", pi: { extensions: ["index.js"] } }));
   writeFileSync(join(extension, "index.js"), `import { appendFileSync } from "node:fs";
+import { CustomEditor } from ${JSON.stringify(piAgentImport)};
 export default pi => {
-  pi.on("session_start", (_event, ctx) => appendFileSync(process.env.FEISHU_ACCEPTANCE_TRACE, "START|" + ctx.cwd + "|" + ctx.sessionManager.getSessionFile() + "\\n"));
+  pi.on("session_start", (_event, ctx) => {
+    appendFileSync(process.env.FEISHU_ACCEPTANCE_TRACE, "START|" + ctx.cwd + "|" + ctx.sessionManager.getSessionFile() + "\\n");
+    class HostileEditor extends CustomEditor {
+      handleInput(data) {
+        if (data === "\\u0019") {
+          appendFileSync(process.env.FEISHU_ACCEPTANCE_TRACE, "EDITOR|ctrl-y\\n");
+          this.setText("HOSTILE-EDITOR-ALIVE");
+          return;
+        }
+        super.handleInput(data);
+      }
+    }
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => new HostileEditor(tui, theme, keybindings));
+  });
+  pi.on("input", (event, ctx) => {
+    if (event.text === "HOSTILE-EDITOR-ALIVE" || event.text === "Explain why /share is disabled") {
+      appendFileSync(process.env.FEISHU_ACCEPTANCE_TRACE, "INPUT|" + event.text + "\\n");
+      ctx.ui.notify("THIRD-PARTY-INPUT|" + event.text, "info");
+      return { action: "handled" };
+    }
+  });
   pi.registerCommand("probe", { description: "record the mounted session", handler: async (_args, ctx) => { const line = "PROBE|" + ctx.cwd + "|" + ctx.sessionManager.getSessionFile(); appendFileSync(process.env.FEISHU_ACCEPTANCE_TRACE, line + "\\n"); ctx.ui.notify(line, "info"); } });
   pi.on("session_before_compact", event => ({ compaction: { summary: "COMPACT-SUMMARY", firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore } }));
 };\n`);
@@ -98,11 +121,22 @@ export default pi => {
 
   try {
     const result = await runPty(launchCwd, [], env, [
-      { wait: "fake-model", send: "seed-command-marker\r" },
+      { wait: "fake-model", send: "/share\r" }, // Prohibited names may remain in Pi autocomplete; submission is the enforced boundary.
+      { wait: "Feishu Agent does not share sessions.", send: `\u0015/import ${foreignSession}\r` },
+      { wait: "Feishu Agent does not import external sessions.", send: "\u0015/login fake\r" },
+      { wait: "Manage model credentials with ordinary Pi.", send: "\u0015/logout\r" },
+      { wait: "Manage model credentials with ordinary Pi.", send: "\u0015Explain why /share is disabled\r" },
+      { wait: "THIRD-PARTY-INPUT|Explain why /share is disabled", send: "\u0019" },
+      { wait: "HOSTILE-EDITOR-ALIVE", send: "\r" },
+      { wait: "THIRD-PARTY-INPUT|HOSTILE-EDITOR-ALIVE", send: "seed-command-marker\r" },
       { wait: "PTY-PONG", send: "/model fake/second-model\r" },
       { wait: "Model: second-model", send: "second-model-prompt\r" },
       { wait: "PTY-PONG", send: `/export ${exportPath}\r` },
-      { wait: "Session exported to:", send: "/tree\r" },
+      { wait: "Session exported to:", send: "/reload\r" },
+      { wait: "Reloaded keybindings, extensions, skills, prompts, themes, and context files", send: "/share\r" },
+      { wait: "Feishu Agent does not share sessions.", send: "\u0015\u0019" },
+      { wait: "HOSTILE-EDITOR-ALIVE", send: "\r" },
+      { wait: "THIRD-PARTY-INPUT|HOSTILE-EDITOR-ALIVE", send: "/tree\r" },
       { wait: "second-model-prompt", send: "\r" },
       { wait: "Already at this point", send: "/fork\r" },
       { wait: "Fork from Message", send: "\r" },
@@ -121,7 +155,7 @@ export default pi => {
       { wait: `PROBE|${launchCwd}`, send: "/quit\r" },
     ]);
     assert.equal(result.code, 0, result.output);
-    for (const evidence of ["PTY-PONG", "Model: second-model", "Session exported to:", "Already at this point", "Forked to new session", "Cloned to new session", "New session started", "Compacted from", "PROJECT-RESUME-MARKER-ANSWER"]) assert.match(result.output, new RegExp(evidence));
+    for (const evidence of ["Feishu Agent does not share sessions.", "Feishu Agent does not import external sessions.", "Manage model credentials with ordinary Pi.", "THIRD-PARTY-INPUT|Explain why /share is disabled", "THIRD-PARTY-INPUT|HOSTILE-EDITOR-ALIVE", "Reloaded keybindings, extensions, skills, prompts, themes, and context files", "PTY-PONG", "Model: second-model", "Session exported to:", "Already at this point", "Forked to new session", "Cloned to new session", "New session started", "Compacted from", "PROJECT-RESUME-MARKER-ANSWER"]) assert.match(result.output, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.doesNotMatch(result.output, /FOREIGN-PROJECT-MARKER/);
 
     const resumeResult = await runPty(launchCwd, ["-r"], env, [
@@ -141,10 +175,14 @@ export default pi => {
   assert.deepEqual(new Set(requests.map((entry) => entry.url)), new Set(["/v1/chat/completions"]));
   assert(requests.some((entry) => entry.model === "fake-model"));
   assert(requests.some((entry) => entry.model === "second-model"));
+  assert.equal(Buffer.compare(readFileSync(join(home, ".pi", "agent", "auth.json")), authBytes), 0);
   assert.equal(readFileSync(join(home, ".pi", "agent", "settings.json"), "utf8"), piSettings);
   assert.equal(JSON.parse(readFileSync(join(home, ".feishu-agent", "settings.json"), "utf8")).defaultModel, "fake-model");
 
   const traceLines = readFileSync(trace, "utf8").trim().split("\n");
+  assert.equal(traceLines.filter((line) => line === "EDITOR|ctrl-y").length, 2, traceLines.join("\n"));
+  assert.equal(traceLines.filter((line) => line === "INPUT|HOSTILE-EDITOR-ALIVE").length, 2, traceLines.join("\n"));
+  assert(traceLines.includes("INPUT|Explain why /share is disabled"), traceLines.join("\n"));
   const probes = traceLines.filter((line) => line.startsWith("PROBE|"));
   assert(probes.length >= 5, traceLines.join("\n"));
   assert(probes.every((line) => line.startsWith(`PROBE|${launchCwd}|${sessionDir}/`)), traceLines.join("\n"));
