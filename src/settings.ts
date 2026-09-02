@@ -78,6 +78,13 @@ export class FeishuSettingsStorage implements SettingsStorage {
   }
 
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
+    if (scope === "project" && this.projectPath === this.globalPath) {
+      // ponytail: project root == Feishu Agent Home means the project file IS the global file;
+      // aliasing it duplicates every global package into project scope with wrong install roots.
+      const next = fn(undefined);
+      if (next !== undefined) throw new Error("Project Feishu settings alias the global settings because this project root is the Feishu Agent Home. Use global settings (drop -l) instead.");
+      return;
+    }
     const path = scope === "global" ? this.globalPath : this.projectPath;
     mkdirSync(dirname(path), { recursive: true });
     const lock = `${path}.lock`;

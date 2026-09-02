@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   createExtensionRuntime,
   DefaultResourceLoader,
@@ -53,8 +53,11 @@ export class FeishuResourceLoader implements ResourceLoader {
     });
     this.prompt = [read(system) ?? DEFAULT_SYSTEM, ...this.agentsFiles.map((entry) => entry.content)].filter(Boolean).join("\n\n");
 
-    const global = loadSkillsFromDir({ dir: join(this.agentHome, "skills"), source: "feishu-global-private" }).skills;
-    const project = loadSkillsFromDir({ dir: join(this.projectRoot, ".feishu-agent", "skills"), source: "feishu-project-private" }).skills;
+    const globalSkillsDir = join(this.agentHome, "skills");
+    const projectSkillsDir = join(this.projectRoot, ".feishu-agent", "skills");
+    const global = loadSkillsFromDir({ dir: globalSkillsDir, source: "feishu-global-private" }).skills;
+    // ponytail: when project root is the Feishu Agent Home, project skills ARE global skills; load once.
+    const project = resolve(projectSkillsDir) === resolve(globalSkillsDir) ? [] : loadSkillsFromDir({ dir: projectSkillsDir, source: "feishu-project-private" }).skills;
     const selected = new Map<string, Skill>();
     let official: Skill[] = [];
     try {
