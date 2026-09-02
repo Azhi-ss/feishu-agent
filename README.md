@@ -33,6 +33,8 @@ feishu --lark-profile finance -p "task"
 
 Normal Interactive exit rewrites Pi's generic resume line to `To resume this Feishu session: feishu --session <id>`; copy that command to resume the exact session. Use `feishu -c` for the latest session or `feishu -r` to choose one. If `feishu` is not on PATH, set `FEISHU_RESUME_COMMAND` to the full executable path. Do not resume Feishu sessions through ordinary `pi --session-dir ... --session ...`, because that bypasses the Feishu Runtime boundary.
 
+The Feishu Runtime disables Pi's built-in startup network checks, so you will never see Pi's `pi update` version notice or `pi update --extensions` package-update notice: upgrading Pi or extensions stays a deliberate, out-of-band action.
+
 Only Interactive and text Print modes are supported. JSON and RPC are intentionally absent.
 
 ## Packages and Skills

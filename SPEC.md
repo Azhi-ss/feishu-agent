@@ -151,6 +151,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 ### 6. Skill synchronization and precedence
 
 - 启动读取 `lark-cli --version`（本地命令，无网络请求），缓存目录以完整 CLI 版本命名。
+- Interactive、Print 运行时在入口设置 `PI_OFFLINE=1`（仅该进程），关闭 Pi 内核的启动期网络检查：既不再出现上游 `pi update` 新版本提示，也不出现 `pi update --extensions` 包更新提示——这两个提示对 Feishu 都是错误入口（pi-coding-agent 版本由 feishu 自己的 package.json 钉死，`pi update --extensions` 操作的是 `~/.pi/agent` 的另一套包）。init/install/update 管理命令不设置该变量，npm 安装不受影响；真实模型、Mem0、lark 调用也不受影响。
 - 当前版本缓存完整且带成功标记时直接复用。
 - 版本变化时，通过 `lark-cli skills list/read` 导出官方 Skills 到临时目录，完成校验后原子移动到版本缓存目录。
 - 同步失败时使用最近一次成功版本并产生 Startup Warning；不存在任何成功缓存时仍可启动，但必须明确报告官方 Skills 不可用。
@@ -291,6 +292,7 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容。
 
 3. **Official Skill cache**
    - 首次版本同步、缓存复用、版本变化、原子发布、同步失败回退和无缓存告警。
+   - Runtime 入口强制跳过 Pi 内置启动期网络检查（上游 `pi update` 版本提示与 `pi update --extensions` 包更新提示），管理命令不受影响。
    - `feishu skills sync` 强制刷新。
 
 4. **Package commands**

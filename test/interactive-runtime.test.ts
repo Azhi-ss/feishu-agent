@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { InteractiveMode, SessionManager } from "@earendil-works/pi-coding-agent";
 import { projectKeyFor } from "../src/policy.js";
-import { runInteractive, rewritePiResumeNotice } from "../src/runtime.js";
+import { disablePiStartupNetworkChecks, runInteractive, rewritePiResumeNotice } from "../src/runtime.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -33,6 +33,15 @@ function appendSession(sessionDir: string, cwd: string, marker: string): string 
   manager.appendMessage({ role: "assistant", content: [{ type: "text", text: `${marker}-ANSWER` }], timestamp: Date.now(), stopReason: "stop", usage, provider: "fake", model: "fake-model" } as never);
   return manager.getSessionFile()!;
 }
+
+test("Pi startup network checks are disabled at Runtime entry only when unset", () => {
+  const offline = {} as NodeJS.ProcessEnv;
+  disablePiStartupNetworkChecks(offline);
+  assert.equal(offline.PI_OFFLINE, "1");
+  const explicit = { PI_OFFLINE: "0" } as NodeJS.ProcessEnv;
+  disablePiStartupNetworkChecks(explicit);
+  assert.equal(explicit.PI_OFFLINE, "0");
+});
 
 test("Feishu rewrites Pi's generic resume instruction", () => {
   assert.equal(rewritePiResumeNotice("To resume this session: pi --session-dir /home/user/.feishu-agent/sessions/project --session abc\n"), "To resume this Feishu session: feishu --session abc\n");

@@ -35,11 +35,26 @@ function installResumeNoticeRewrite(): () => void {
   return () => { if (stdout.write === wrapped) stdout.write = original; };
 }
 
+/**
+ * Disable the Pi SDK's built-in startup network checks: the "new pi version
+ * available — run pi update" notice and the "extension updates available — run
+ * pi update --extensions" notice. Both are wrong entry points for Feishu (the
+ * pinned pi-coding-agent version belongs to feishu's own package.json, and
+ * `pi update --extensions` operates on ~/.pi/agent, a different package set).
+ * Set only at Runtime entry, never for feishu init/install/update management
+ * commands so npm installs still work. Does not block real model/Mem0/lark
+ * traffic.
+ */
+export function disablePiStartupNetworkChecks(env: NodeJS.ProcessEnv = process.env): void {
+  env.PI_OFFLINE ??= "1";
+}
+
 export async function runtimeHostSwitchOverride(runtime: Pick<AgentSessionRuntime, "switchSession">, path: string, launchCwd: string): Promise<void> {
   await runtime.switchSession(path, { cwdOverride: launchCwd });
 }
 
 async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, currentRequest?: string, interactive = false, sessionId?: string) {
+  disablePiStartupNetworkChecks();
   const piHome = join(process.env.HOME!, ".pi", "agent");
   const modelRuntime = await ModelRuntime.create({ authPath: join(piHome, "auth.json"), modelsPath: join(piHome, "models.json"), allowModelNetwork: false });
   const settingsManager = settingsManagerFor(agentHome, projectRoot);
