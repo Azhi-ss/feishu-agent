@@ -53,10 +53,10 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 33. 作为用户，我希望全局私有 Skills 存放在 `~/.feishu-agent/skills/`，从而可以创建跨项目复用的飞书工作流。
 34. 作为项目维护者，我希望项目私有 Skills 存放在 `<project>/.feishu-agent/skills/`，从而项目可以定义自己的飞书流程。
 35. 作为用户，我希望 Feishu Agent 不扫描 `~/.agents/skills`、`~/.pi/agent/skills`、项目 `.agents/skills` 和 `.pi/skills`，从而避免其他 Agent 资源泄漏进来。
-36. 作为用户，我希望官方 `lark-cli` Skills 按 CLI 版本惰性同步，从而 Skill 文档和当前 CLI 能力一致。
-37. 作为用户，我希望 CLI 版本未变化时复用缓存，从而启动无需重复导出所有 Skills。
-38. 作为用户，我希望同步失败时回退最近一次成功缓存并显示告警，从而网络或 CLI 局部故障不阻塞启动。
-39. 作为用户，我希望执行 `feishu skills sync` 强制刷新官方 Skills，从而可以主动修复缓存。
+36. 作为用户，我希望每次正常启动先检查并自动安装可用的 `lark-cli` 更新，再同步对应版本的官方 Skills，从而 CLI 能力与 Skill 文档保持一致。
+37. 作为用户，我希望 CLI 已是最新版时复用缓存，从而启动无需重复导出所有 Skills。
+38. 作为用户，我希望更新检查、自动更新或同步失败时回退当前 CLI/最近成功缓存并显示告警，从而网络或安装问题不阻塞启动。
+39. 作为离线用户，我希望 `PI_OFFLINE=1` 跳过更新检查，同时仍可执行 `feishu skills sync` 强制刷新本地 CLI 暴露的官方 Skills，从而离线运行和缓存修复都可控。
 40. 作为用户，我希望同名 Skill 使用“项目私有 > 全局私有 > 安装包 > 官方缓存”的确定优先级，从而覆盖行为可预测。
 41. 作为用户，我希望启动时列出所有被遮蔽的 Skill 来源，从而覆盖不能静默发生。
 42. 作为用户，我希望全局 `~/.feishu-agent/SYSTEM.md` 定义不可替换的 Feishu Agent 身份，从而项目和插件不能改变助手的根本职责。
@@ -82,7 +82,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 62. 作为用户，我希望运行时工作目录保持 `feishu` 的启动目录，从而相对路径符合当前终端位置。
 63. 作为用户，我希望项目身份和运行时工作目录分离，从而 Monorepo 可共享项目资源但保留子目录操作上下文。
 64. 作为用户，我希望会话集中存放在 `~/.feishu-agent/sessions/<project-key>/`，从而不会把飞书对话误提交进仓库。
-65. 作为用户，我希望 `feishu -c` 只继续当前 Feishu Project 最近的会话，从而不会串到其他项目。
+65. 作为用户，我希望 `feishu --session <id>` 精确恢复当前 Feishu Project 中该会话，`feishu -c` 只继续最近的会话，从而不会串到其他项目；退出提示不得引导用户绕过专用 Runtime 直接运行 `pi --session-dir ... --session ...`。
 66. 作为用户，我希望 `/resume` 只浏览当前项目会话，从而会话选择范围明确。
 67. 作为用户，我希望普通 Pi 的 `/resume` 看不到 Feishu Agent 会话，从而会话空间隔离。
 68. 作为用户，我希望 `feishu` 提供完整 Interactive TUI，从而可以进行持续的飞书工作。
@@ -150,11 +150,14 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 ### 6. Skill synchronization and precedence
 
-- 启动读取 `lark-cli --version`，缓存目录以完整 CLI 版本命名。
+- Interactive、Print 与 `feishu init` 的正常启动先执行 `lark-cli update --json`；若 CLI 报告 `updated`，后续同步必须读取更新后的二进制版本。
+- `already_up_to_date` 静默继续；`manual_required`、网络失败、安装失败或无法解析的响应以 `Startup Warning` 告警并继续使用已安装版本，不得阻塞 Feishu Runtime。
+- `PI_OFFLINE=1` 跳过启动更新检查；显式管理命令（例如 `feishu skills sync`）不受此开关改写。
+- 随后读取 `lark-cli --version`，缓存目录以完整 CLI 版本命名。
 - 当前版本缓存完整且带成功标记时直接复用。
 - 版本变化时，通过 `lark-cli skills list/read` 导出官方 Skills 到临时目录，完成校验后原子移动到版本缓存目录。
 - 同步失败时使用最近一次成功版本并产生 Startup Warning；不存在任何成功缓存时仍可启动，但必须明确报告官方 Skills 不可用。
-- `feishu skills sync` 忽略已有缓存并强制同步。
+- `feishu skills sync` 忽略已有缓存并强制同步；即使 CLI 版本未变化也可主动修复缓存。
 - 同名 Skill 按“项目私有 > 全局私有 > 安装包 > 官方缓存”解析。
 - 每次启动输出冲突诊断，列出最终来源与所有被遮蔽路径。
 
@@ -221,7 +224,9 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 - Sessions 集中存放在 `~/.feishu-agent/sessions/<project-key>/`。
 - `project-key` 必须由规范化 Project Root 稳定生成，避免同名路径冲突；建议使用可读 Slug 加短哈希。
+- `feishu --session <id>` 只在当前 Project 分区内按完整或唯一前缀 ID 查找并恢复会话；不存在时明确失败，不搜索其他 Project。
 - `feishu -c` 和 `/resume` 默认只查看当前 Project 分区。
+- 正常退出持久化 Interactive 会话时，外层 Feishu Runtime 将 Pi 的通用 `To resume this session: pi --session-dir ... --session ...` 提示改写为 `To resume this Feishu session: feishu --session <id>`；如果 `feishu` 不在 PATH，则使用 `FEISHU_RESUME_COMMAND` 指定的可执行文件；不得建议用户直接用普通 Pi 打开 Feishu Session。
 - Interactive 模式保留 `/new`、`/resume`、`/tree`、`/fork`、`/clone`、`/compact`、`/export`。
 - Feishu Command Policy Editor 在提交前拒绝 `/share`、`/import`、`/login`、`/logout` 及其参数形式，并显示明确原因。
 - Pi 自动补全仍可能展示禁用命令；首版接受此限制。
@@ -259,6 +264,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu skills sync`
 - `feishu -c`
 - `feishu -r`
+- `feishu --session <id>`
 - `feishu --lark-profile <profile>`
 
 CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容。
@@ -285,7 +291,9 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容。
    - 同名 Skill 按既定优先级选择并输出遮蔽诊断。
    - 基础 `SYSTEM.md` 不能被项目或 Extension 替换。
 
-3. **Official Skill cache**
+3. **Official Skill cache and startup update**
+   - 正常启动先执行 `lark-cli update --json`；可自动安装的版本必须在 Skill 导出前生效。
+   - 已是最新版、更新成功、手工安装提示、更新失败与 `PI_OFFLINE=1` 跳过路径均有行为测试。
    - 首次版本同步、缓存复用、版本变化、原子发布、同步失败回退和无缓存告警。
    - `feishu skills sync` 强制刷新。
 
@@ -338,6 +346,7 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容。
 11. **Sessions**
     - 当前 Project 会话隔离于其他 Project 和普通 Pi。
     - 从不同子目录恢复时采用当前启动 CWD，并显示原会话 CWD 提示。
+    - 持久化 Interactive 会话的 Feishu 退出提示为 `feishu --session <id>`，精确恢复只查当前 Project 分区，不把普通 Pi 命令作为恢复入口；`feishu` 不在 PATH 时显示 `FEISHU_RESUME_COMMAND`。
     - 会话文件不出现在项目目录。
 
 12. **Initialization**

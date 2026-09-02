@@ -20,6 +20,35 @@ function skillNames(payload: unknown): string[] {
   throw new Error("Official Skill export format not recognized.");
 }
 
+function updateFailure(error: unknown): string {
+  return error instanceof Error ? error.message.split("\n", 1)[0] : String(error);
+}
+
+type LarkCliUpdatePayload = {
+  ok?: boolean;
+  action?: string;
+  message?: string;
+  url?: string;
+};
+
+export function updateLarkCliAtStartup(env = process.env): string | undefined {
+  if (env.PI_OFFLINE === "1") return undefined;
+  try {
+    const result = JSON.parse(execFileSync("lark-cli", ["update", "--json"], {
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 180_000,
+    })) as LarkCliUpdatePayload;
+    if (result.ok !== true) return "lark-cli update check returned an unsuccessful response; continuing with the installed version.";
+    if (result.action === "updated" || result.action === "already_up_to_date") return undefined;
+    if (result.action === "manual_required") return `${result.message ?? "Automatic lark-cli update is unavailable."}${result.url ? ` Update manually: ${result.url}` : ""}`;
+    return `lark-cli update check returned unexpected action ${JSON.stringify(result.action)}; continuing with the installed version.`;
+  } catch (error) {
+    return `lark-cli update check failed; continuing with the installed version: ${updateFailure(error)}`;
+  }
+}
+
 export function syncOfficialSkills(cacheRoot: string, force = false, env = process.env) {
   const version = execFileSync("lark-cli", ["--version"], { encoding: "utf8", env }).trim();
   const cacheDir = join(cacheRoot, safeVersion(version));

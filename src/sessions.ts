@@ -15,8 +15,13 @@ export function sessionDirectory(agentHome: string, projectRoot: string): string
   return dir;
 }
 
-export async function sessionManagerFor(agentHome: string, projectRoot: string, launchCwd: string, resume: boolean): Promise<SessionSelection> {
+export async function sessionManagerFor(agentHome: string, projectRoot: string, launchCwd: string, resume: boolean, sessionId?: string): Promise<SessionSelection> {
   const sessionDir = sessionDirectory(agentHome, projectRoot);
+  if (sessionId) {
+    const selected = (await SessionManager.listAll(sessionDir)).find((session) => session.id === sessionId || session.id.startsWith(sessionId));
+    if (!selected) throw new Error(`No Feishu session found matching '${sessionId}' in this project.`);
+    return { manager: SessionManager.open(selected.path, dirname(selected.path), launchCwd), originalCwd: selected.cwd || undefined };
+  }
   if (!resume) return { manager: SessionManager.create(launchCwd, sessionDir) };
   const recent = (await SessionManager.listAll(sessionDir)).sort((a, b) => b.modified.getTime() - a.modified.getTime() || b.created.getTime() - a.created.getTime())[0];
   if (!recent) return { manager: SessionManager.create(launchCwd, sessionDir) };

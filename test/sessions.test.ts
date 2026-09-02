@@ -21,6 +21,25 @@ test("session keys partition projects while launch cwd remains current", async (
   assert.match(manager.getSessionDir(), /^.*\.feishu-agent\/sessions\//);
 });
 
+test("exact session resume stays inside the current project partition", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-sessions-exact-"));
+  const home = join(root, "home", ".feishu-agent");
+  const project = join(root, "repo");
+  const launch = join(project, "current");
+  const foreign = join(root, "foreign");
+  mkdirSync(launch, { recursive: true }); mkdirSync(foreign, { recursive: true });
+  const selected = (await sessionManagerFor(home, project, launch, false)).manager;
+  selected.appendMessage({ role: "user", content: "selected" } as never);
+  selected.appendMessage({ role: "assistant", content: [{ type: "text", text: "selected answer" }], timestamp: Date.now(), stopReason: "stop", usage: {} } as never);
+  const foreignManager = (await sessionManagerFor(home, foreign, foreign, false)).manager;
+  foreignManager.appendMessage({ role: "user", content: "foreign" } as never);
+  foreignManager.appendMessage({ role: "assistant", content: [{ type: "text", text: "foreign answer" }], timestamp: Date.now(), stopReason: "stop", usage: {} } as never);
+
+  const resumed = await sessionManagerFor(home, project, launch, false, selected.getSessionId().slice(0, 12));
+  assert.equal(resumed.manager.getSessionFile(), selected.getSessionFile());
+  assert.equal(resumed.manager.getCwd(), launch);
+  await assert.rejects(sessionManagerFor(home, project, launch, false, foreignManager.getSessionId()), /No Feishu session found/);
+});
 test("continue selects newest project session across subdirectories and overrides cwd", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-sessions-resume-"));
   const home = join(root, "home", ".feishu-agent");

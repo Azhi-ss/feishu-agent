@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { runInteractive, runPrint } from "./runtime.js";
-import { syncOfficialSkills } from "./official-skills.js";
+import { syncOfficialSkills, updateLarkCliAtStartup } from "./official-skills.js";
 import { packageManager } from "./packages.js";
 import { dispatchConfig, setPackageResourceEnabled, type PackageResourceType } from "./config.js";
 import { existingIdentity, initializeHome } from "./init.js";
@@ -69,8 +69,9 @@ const HELP = `Usage:
   feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>
                                   Open or script Feishu Package resource settings
   feishu skills sync
-  feishu -c                      Continue this Feishu Project's latest session
   feishu -r                      Select a session in this Feishu Project
+  feishu -c                      Continue this Feishu Project's latest session
+  feishu --session <id>          Resume an exact session in this Feishu Project
   feishu --lark-profile <name>   Use a profile for this invocation only
 
 Resource Isolation is not an OS sandbox. Installed Feishu Package extensions run with current-user permissions.
@@ -99,6 +100,10 @@ function normalizeAndValidateArgs(input: string[]): string[] {
   if (args.includes("--mode") || args.some((arg) => ["--json", "--rpc"].includes(arg))) fail("That mode is not supported by Feishu Agent.");
   if (args.length === 0) return args;
   if (args.length === 1 && ["--help", "-h", "-c", "-r", "list"].includes(args[0])) return args;
+  if (args[0] === "--session") {
+    if (args.length !== 2 || !args[1] || args[1].startsWith("-")) fail("--session requires a session ID.");
+    return args;
+  }
 
   switch (args[0]) {
     case "-p":
@@ -206,6 +211,8 @@ else {
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source === MEM0_PACKAGE && entry.installedPath)) {
       await manager.installAndPersist(MEM0_PACKAGE);
     }
+    const updateWarning = updateLarkCliAtStartup();
+    if (updateWarning) process.stderr.write(`Startup Warning: ${updateWarning}\n`);
     const skills = syncOfficialSkills(join(agentHome, "official-skills"));
     if (skills.warning) {
       if (!existsSync(join(skills.cacheDir, ".success"))) fail(skills.warning);
@@ -267,11 +274,11 @@ else {
         process.exitCode = 1;
       });
   }
-  else if (args.length === 0 || args[0] === "-c" || args[0] === "-r") {
+  else if (args.length === 0 || args[0] === "-c" || args[0] === "-r" || args[0] === "--session") {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
-    runInteractive(cwd, root, projectKeyFor(root), agentHome, args[0] === "-c", args[0] === "-r")
+    runInteractive(cwd, root, projectKeyFor(root), agentHome, args[0] === "-c", args[0] === "-r", args[0] === "--session" ? args[1] : undefined)
       .catch((error: unknown) => { process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
   } else {
     process.stderr.write("Feishu Agent runtime is not initialized. Run `feishu init`.\n");

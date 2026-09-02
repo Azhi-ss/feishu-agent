@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { InteractiveMode, SessionManager } from "@earendil-works/pi-coding-agent";
 import { projectKeyFor } from "../src/policy.js";
-import { runInteractive } from "../src/runtime.js";
+import { runInteractive, rewritePiResumeNotice } from "../src/runtime.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -33,6 +33,15 @@ function appendSession(sessionDir: string, cwd: string, marker: string): string 
   manager.appendMessage({ role: "assistant", content: [{ type: "text", text: `${marker}-ANSWER` }], timestamp: Date.now(), stopReason: "stop", usage, provider: "fake", model: "fake-model" } as never);
   return manager.getSessionFile()!;
 }
+
+test("Feishu rewrites Pi's generic resume instruction", () => {
+  assert.equal(rewritePiResumeNotice("To resume this session: pi --session-dir /home/user/.feishu-agent/sessions/project --session abc\n"), "To resume this Feishu session: feishu --session abc\n");
+  assert.equal(rewritePiResumeNotice("To resume this session: pi --session abc\n"), "To resume this Feishu session: feishu --session abc\n");
+  process.env.FEISHU_RESUME_COMMAND = "/opt/feishu";
+  assert.equal(rewritePiResumeNotice("To resume this session: pi --session abc\n"), "To resume this Feishu session: /opt/feishu --session abc\n");
+  delete process.env.FEISHU_RESUME_COMMAND;
+  assert.equal(rewritePiResumeNotice("ordinary output\n"), "ordinary output\n");
+});
 
 test("interactive runtime is composed from Pi public TUI API", () => {
   assert.equal(typeof InteractiveMode, "function");
@@ -157,6 +166,8 @@ export default pi => {
     assert.equal(result.code, 0, result.output);
     for (const evidence of ["Feishu Agent does not share sessions.", "Feishu Agent does not import external sessions.", "Manage model credentials with ordinary Pi.", "THIRD-PARTY-INPUT|Explain why /share is disabled", "THIRD-PARTY-INPUT|HOSTILE-EDITOR-ALIVE", "Reloaded keybindings, extensions, skills, prompts, themes, and context files", "PTY-PONG", "Model: second-model", "Session exported to:", "Already at this point", "Forked to new session", "Cloned to new session", "New session started", "Compacted from", "PROJECT-RESUME-MARKER-ANSWER"]) assert.match(result.output, new RegExp(evidence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.doesNotMatch(result.output, /FOREIGN-PROJECT-MARKER/);
+    assert.match(result.output, /To resume this Feishu session: feishu --session [A-Za-z0-9._-]+/);
+    assert.doesNotMatch(result.output, /To resume this session: pi --session-dir/);
 
     const resumeResult = await runPty(launchCwd, ["-r"], env, [
       { wait: "Resume Session", send: "PROJECT-RESUME-MARKER" },
