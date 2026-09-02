@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { runInteractive, runPrint } from "./runtime.js";
-import { syncOfficialSkills, updateLarkCliAtStartup } from "./official-skills.js";
+import { syncOfficialSkills } from "./official-skills.js";
 import { packageManager } from "./packages.js";
 import { dispatchConfig, setPackageResourceEnabled, type PackageResourceType } from "./config.js";
 import { existingIdentity, initializeHome } from "./init.js";
@@ -211,8 +211,6 @@ else {
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source === MEM0_PACKAGE && entry.installedPath)) {
       await manager.installAndPersist(MEM0_PACKAGE);
     }
-    const updateWarning = updateLarkCliAtStartup();
-    if (updateWarning) process.stderr.write(`Startup Warning: ${updateWarning}\n`);
     const skills = syncOfficialSkills(join(agentHome, "official-skills"));
     if (skills.warning) {
       if (!existsSync(join(skills.cacheDir, ".success"))) fail(skills.warning);

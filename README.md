@@ -33,8 +33,6 @@ feishu --lark-profile finance -p "task"
 
 Normal Interactive exit rewrites Pi's generic resume line to `To resume this Feishu session: feishu --session <id>`; copy that command to resume the exact session. Use `feishu -c` for the latest session or `feishu -r` to choose one. If `feishu` is not on PATH, set `FEISHU_RESUME_COMMAND` to the full executable path. Do not resume Feishu sessions through ordinary `pi --session-dir ... --session ...`, because that bypasses the Feishu Runtime boundary.
 
-Normal startup runs `lark-cli update --json`; an automatically installable release is applied before Feishu Runtime loads, and the version-keyed official Skill cache is then synchronized from the resulting binary. Network/update failures and manual-install-only releases emit `Startup Warning` and continue with the installed CLI. `PI_OFFLINE=1` skips the update check.
-
 Only Interactive and text Print modes are supported. JSON and RPC are intentionally absent.
 
 ## Packages and Skills
