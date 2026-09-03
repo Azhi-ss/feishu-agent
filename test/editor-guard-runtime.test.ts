@@ -136,7 +136,8 @@ test("startup banner header renders brand, version, model, and cwd only in TUI",
   const handlers = new Map<string, Function>();
   startupBannerExtension()({ on: (n: string, h: Function) => handlers.set(n, h), registerCommand: () => {} } as never);
   let factory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
-  const theme = { fg: (_color: string, text: string) => text };
+  const usedColors = new Set<string>();
+  const theme = { fg: (color: string, text: string) => { usedColors.add(color); return text; } };
   handlers.get("session_start")!({}, {
     mode: "tui",
     model: { id: "gpt-test" },
@@ -148,6 +149,8 @@ test("startup banner header renders brand, version, model, and cwd only in TUI",
   assert.match(output, /v0\.1\.0/);
   assert.match(output, /gpt-test/);
   assert.match(output, /\/ commands/);
+  assert.ok(output.split("\n").filter((line) => line.includes("█")).length >= 7);
+  assert.deepEqual([...usedColors].sort(), ["accent", "dim", "muted", "success"]);
 
   let printSet = false;
   handlers.get("session_start")!({}, { mode: "print", ui: { setHeader: () => { printSet = true; } } });

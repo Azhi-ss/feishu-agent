@@ -23,24 +23,24 @@ function shortCwd(): string {
   return cwd;
 }
 
-const BIRD = 0x2588; // █
-
-// Feishu hummingbird, traced from the official icon: a blue body in an
-// up-right flying swoosh with a teal/green upper wing band and green tail tip.
-// theme accent = blue, success = green. Grid columns are fixed at BIRD_COLS
-// (plain-visible width) so the text column aligns regardless of ANSI codes.
-const BIRD_COLS = 16;
-const BIRD_GRID: string[] = [
-  "        BBBBBBBB",
-  "    GGBBBBBBGGGG",
-  "GGGBBBBBBBBBBBBB",
-];
+// 16x8 sample of the supplied 45x42 Feishu icon. G = teal upper wing,
+// B = blue body and lower wing/tail. Keep only the two visible brand colors.
+const BIRD_GRID = [
+  "   GGGGGGG      ",
+  "    GGGGGGG     ",
+  "     GGGGGGBBB  ",
+  " BBB   GGGBBBBB ",
+  " BBBBB BBBBBBB  ",
+  " BBBBBBBBBBBB   ",
+  " BBBBBBBBBBB    ",
+  "  BBBBBBBB      ",
+] as const;
 
 function birdLine(row: string, theme: { fg(c: ThemeColor, t: string): string }): string {
   let out = "";
-  for (const cell of [...row]) {
-    if (cell === "B") out += theme.fg("accent", String.fromCodePoint(BIRD));
-    else if (cell === "G") out += theme.fg("success", String.fromCodePoint(BIRD));
+  for (const cell of row) {
+    if (cell === "B") out += theme.fg("accent", "█");
+    else if (cell === "G") out += theme.fg("success", "█");
     else out += " ";
   }
   return out;
@@ -58,17 +58,15 @@ export function startupBannerExtension(): ExtensionFactory {
           const dim = (t: string) => theme.fg("dim", t);
           const model = (ctx as { model?: { id?: string } }).model?.id ?? "";
           const bird = BIRD_GRID.map((row) => birdLine(row, theme));
-          const gap = "   ";
           const text = [
             `${a("Feishu Agent")} ${dim(`v${version}`)}`,
             muted(model ? `${model}  ${dim("·")}  ${shortCwd()}` : shortCwd()),
             dim("/ commands · ? help · /quit exit"),
           ];
+          const textStart = Math.floor((bird.length - text.length) / 2);
           return [
             "",
-            `${bird[0]}${gap}${text[0]}`,
-            `${bird[1]}${gap}${text[1]}`,
-            `${bird[2]}${gap}${text[2]}`,
+            ...bird.map((line, i) => `${line}   ${text[i - textStart] ?? ""}`.trimEnd()),
             "",
           ];
         },
