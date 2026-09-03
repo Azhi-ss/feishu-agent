@@ -1,18 +1,51 @@
 # Feishu Agent（飞书助手）
 
+一个构建在 Pi SDK 与 `lark-cli` 之上的飞书（Feishu/Lark）自动化命令行智能体与 TUI 薄壳——提供长期记忆、技能编排与高风险审批守卫，用于飞书交付和工作流。
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/Azhi-ss/feishu-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Azhi-ss/feishu-agent/actions/workflows/ci.yml)
+[![Node ≥ 22.19](https://img.shields.io/badge/node-%E2%89%A5%2022.19-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+
 [English](README.md) | **简体中文**
 
 Feishu Agent 是构建在 Pi 公共 SDK 与 TUI 之上的可执行薄壳，用于飞书交付和 `lark-cli` 工作流。它不是 Pi 的 fork，也不是通用编码 agent。资源隔离不是操作系统级沙箱。
 
-## 构建
+## 能做什么
+
+Feishu Agent 通过自然语言驱动飞书/Lark 工作，底层是 28 个官方 `lark-cli` 技能（消息、文档、日历、多维表格、审批等）。可以用来：
+
+- **收发与管理消息**——发群聊、回帖子、传文件、处理交互卡片，作为飞书机器人运行（`lark-im`）；无需手写集成代码即可搭一个飞书/Lark 聊天机器人。
+- **自动化文档与文件**——创建和编辑飞书文档 Docx、电子表格、幻灯片和云盘文件（`lark-doc`、`lark-sheets`、`lark-slides`、`lark-drive`）。
+- **跑工作流自动化**——总结会议与妙记、起草站会日报、脚本化多步飞书流程（`lark-workflow-*`、`lark-meeting`、`lark-minutes`）。
+- **管理日历与审批**——查日程、订会议室、处理审批待办（`lark-calendar`、`lark-approval`）。
+- **操作多维表格 Base**——在飞书多维表格里建表、字段、记录、视图和仪表盘（`lark-base`）。
+- **跨会话记忆**——基于 Mem0 的项目级长期记忆；密钥与原始工具输出不进入捕获。
+- **编写自己的技能**——把可复用的飞书流程沉淀为私有技能（`feishu-skill-maker`）。
+- **用包扩展能力**——通过 Pi 兼容扩展接入 MCP 服务、联网检索和子代理。
+
+高风险操作（删除、撤回、`/share`）需要显式一次性审批；模糊或链式的破坏性命令会被拦截。
+
+## 安装
+
+Feishu Agent 以源码方式运行 CLI，**未发布到 npm**。
+
+### 前置依赖
+
+- **Node.js ≥ 22.19**
+- **[`lark-cli`](https://github.com/larksuite/cli)**——飞书/Lark 官方 CLI，npm 包名 **`@larksuite/cli`**。用 `npm i -g @larksuite/cli` 安装，再执行 `lark-cli auth` 登录，确保 `lark-cli doctor` 通过。
+  > 安装的是 `@larksuite/cli`，**不是** npm 上那个字面同名、无关的占位包 `lark-cli`。
+- **[Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 编码助手**——`npm i -g @earendil-works/pi-coding-agent`。Feishu 复用 `~/.pi/agent/` 下 Pi 的模型凭证，且禁用了自身的 `/login`，因此需先用普通 `pi` 完成模型认证（`pi auth` 可检查就绪状态）。
+- **`MEM0_API_KEY`**（来自 [mem0.ai](https://mem0.ai)）——`feishu init` 初始化长期记忆时必需；只从环境变量读取、绝不落盘；运行时若 Mem0 不可用会优雅降级。
+
+### 构建并链接
 
 ```bash
+git clone https://github.com/Azhi-ss/feishu-agent.git
+cd feishu-agent
 npm install
 npm run build
-node dist/src/cli.js --help
+npm link          # 得到 `feishu` 命令（或直接用 node dist/src/cli.js 运行）
 ```
-
-完成包链接/安装后，命令名为 `feishu`。
 
 ## 初始化
 

@@ -1,18 +1,51 @@
 # Feishu Agent
 
+A thin CLI agent and TUI shell over Pi's SDK and `lark-cli` for Feishu (飞书) / Lark automation, skills, and workflows — long-term memory, skill authoring, and high-risk approval guards for Feishu deliverables.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/Azhi-ss/feishu-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Azhi-ss/feishu-agent/actions/workflows/ci.yml)
+[![Node ≥ 22.19](https://img.shields.io/badge/node-%E2%89%A5%2022.19-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+
 **English** | [简体中文](README.zh-CN.md)
 
 Feishu Agent is a thin executable shell over Pi's public SDK and TUI for Feishu deliverables and `lark-cli` workflows. It is not a Pi fork or a general coding agent. Resource Isolation is not an OS sandbox.
 
-## Build
+## What you can do
+
+Feishu Agent drives Feishu/Lark work through natural language, backed by the 28 official `lark-cli` skills (messaging, docs, calendar, Base, approvals, and more). Use it to:
+
+- **Send and manage messages** — post to chats, reply in threads, upload files, and handle interactive cards as a Feishu bot (`lark-im`); build a Feishu/Lark chat bot without writing integration code.
+- **Automate documents and files** — create and edit Feishu Docs (Docx), Sheets, Slides, and cloud-drive files (`lark-doc`, `lark-sheets`, `lark-slides`, `lark-drive`).
+- **Run workflow automations** — summarize meetings and minutes, draft standup reports, and script multi-step Feishu workflows (`lark-workflow-*`, `lark-meeting`, `lark-minutes`).
+- **Manage calendar and approvals** — check schedules, book meeting rooms, and process approval tasks (`lark-calendar`, `lark-approval`).
+- **Operate Bitable / Base** — create tables, fields, records, views, and dashboards in Feishu Base (`lark-base`).
+- **Remember across sessions** — project-scoped long-term memory via Mem0; secrets and raw tool output stay out of capture.
+- **Author your own skills** — encode repeatable Feishu workflows as private skills (`feishu-skill-maker`).
+- **Extend with packages** — add MCP servers, web access, and subagents through Pi-compatible extensions.
+
+High-risk actions (deletes, revocations, `/share`) require explicit one-shot approval; ambiguous or chained destructive commands are blocked.
+
+## Install
+
+Feishu Agent runs as a CLI from source — it is **not published to npm**.
+
+### Prerequisites
+
+- **Node.js ≥ 22.19**
+- **[`lark-cli`](https://github.com/larksuite/cli)** — the official Feishu/Lark CLI, npm package **`@larksuite/cli`**. Install with `npm i -g @larksuite/cli`, then run `lark-cli auth` to log in so `lark-cli doctor` passes.
+  > Install `@larksuite/cli`, **not** the unrelated placeholder package literally named `lark-cli` on npm.
+- **[Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)** coding agent — `npm i -g @earendil-works/pi-coding-agent`. Feishu reuses Pi's model credentials from `~/.pi/agent/` and disables its own `/login`, so authenticate a model with ordinary `pi` first (`pi auth` checks readiness).
+- **`MEM0_API_KEY`** from [mem0.ai](https://mem0.ai) — required by `feishu init` for long-term memory. Read only from the environment, never written to disk; memory degrades gracefully at runtime if Mem0 is later unavailable.
+
+### Build and link
 
 ```bash
+git clone https://github.com/Azhi-ss/feishu-agent.git
+cd feishu-agent
 npm install
 npm run build
-node dist/src/cli.js --help
+npm link          # exposes the `feishu` binary (or run `node dist/src/cli.js` directly)
 ```
-
-The npm binary is `feishu` after package linking/installation.
 
 ## Initialize
 
