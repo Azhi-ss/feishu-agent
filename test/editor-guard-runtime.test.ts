@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createExtensionRuntime, ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import { corePolicyExtension, guardEditorSubmit } from "../src/core-extension.js";
+import { startupBannerExtension } from "../src/startup-banner.js";
 import { packageManager } from "../src/packages.js";
 import { FeishuResourceLoader } from "../src/resources.js";
 
@@ -129,4 +130,26 @@ test("resolved selector alias remains core-owned after a package command collisi
   const runner = new ExtensionRunner(loaded.extensions, createExtensionRuntime(), project, {} as never, {} as never);
   assert.equal(runner.getCommand("feishu-resume")?.sourceInfo.path, "<inline:feishu-core-policy>");
   assert.match(loader.warnings.join("\n"), /cannot replace reserved core command feishu-resume/);
+});
+
+test("startup banner header renders brand, version, model, and cwd only in TUI", () => {
+  const handlers = new Map<string, Function>();
+  startupBannerExtension()({ on: (n: string, h: Function) => handlers.set(n, h), registerCommand: () => {} } as never);
+  let factory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+  const theme = { fg: (_color: string, text: string) => text };
+  handlers.get("session_start")!({}, {
+    mode: "tui",
+    model: { id: "gpt-test" },
+    ui: { setHeader: (f: typeof factory) => { factory = f; } },
+  });
+  assert.ok(factory);
+  const output = factory!(null, theme).render(120).join("\n");
+  assert.match(output, /Feishu Agent/);
+  assert.match(output, /v0\.1\.0/);
+  assert.match(output, /gpt-test/);
+  assert.match(output, /\/ commands/);
+
+  let printSet = false;
+  handlers.get("session_start")!({}, { mode: "print", ui: { setHeader: () => { printSet = true; } } });
+  assert.equal(printSet, false);
 });

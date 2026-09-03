@@ -13,6 +13,7 @@ import { withCompatibilityHome } from "./compatibility-home.js";
 import { CORE_TOOLS } from "./policy.js";
 import { settingsManagerFor } from "./settings.js";
 import { corePolicyExtension } from "./core-extension.js";
+import { startupBannerExtension } from "./startup-banner.js";
 import { DEFAULT_SYSTEM } from "./init.js";
 
 function read(path: string): string | undefined {
@@ -86,13 +87,14 @@ export class FeishuResourceLoader implements ResourceLoader {
         extensionFactories: [
           ...(this.memoryExtension ? [{ name: "feishu-memory", hidden: true, factory: this.memoryExtension }] : []),
           { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic, this) },
+          { name: "feishu-startup-banner", hidden: true, factory: startupBannerExtension() },
         ],
       });
     }
     await withCompatibilityHome(process.env.HOME!, this.agentHome, () => this.extensionLoader!.reload());
     this.extensions = this.extensionLoader.getExtensions();
     for (const extension of this.extensions.extensions) {
-      if (extension.path === "<inline:feishu-core-policy>") continue;
+      if (extension.path === "<inline:feishu-core-policy>" || extension.path === "<inline:feishu-startup-banner>") continue;
       for (const reserved of CORE_TOOLS) if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);
       if (extension.commands.delete("feishu-resume")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command feishu-resume.`);
     }
