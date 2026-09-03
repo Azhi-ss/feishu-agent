@@ -1,2 +1,7 @@
 node_modules/
 dist/
+
+# agent skills installed for dev-time design reference (never loaded by Feishu Runtime, hard boundary #3)
+.agents/
+.claude/
+skills-lock.json

@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { CustomEditor, SessionSelectorComponent } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, SessionSelectorComponent, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { prohibitedCommand } from "./command-policy.js";
 import { authorizeLarkCommand, userApprovesDestructive } from "./high-risk.js";
@@ -34,9 +35,39 @@ export function installOuterEditorGuard(ctx: ExtensionContext): void {
   });
 }
 
+// Persistent footer chips: model id, memory health, lark identity.
+// Lark probe is a local config read (auth status), deferred off the startup path.
+function installStatusLine(pi: ExtensionAPI, memoryDiagnostic?: () => string | undefined): void {
+  let lark: string | undefined;
+  const probeLark = (): string => {
+    try {
+      const status = JSON.parse(execFileSync("lark-cli", ["auth", "status", "--json"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] })) as { defaultAs?: string };
+      return status.defaultAs && status.defaultAs !== "auto" ? status.defaultAs : "user";
+    } catch { return "off"; }
+  };
+  const render = (ctx: ExtensionContext): void => {
+    if (ctx.mode !== "tui") return;
+    const model = (ctx as { model?: { id?: string } }).model?.id ?? "model";
+    const chip = (color: ThemeColor, dot: string, text: string) => ctx.ui.theme.fg(color, `${dot} ${text}`);
+    const parts = [
+      chip("accent", "◆", model),
+      memoryDiagnostic?.() ? chip("warning", "○", "mem off") : chip("success", "●", "mem"),
+    ];
+    if (lark !== undefined) parts.push(chip("muted", "→", `lark:${lark}`));
+    ctx.ui.setStatus("feishu", parts.join(ctx.ui.theme.fg("dim", "  │  ")));
+  };
+  pi.on("session_start", (_event, ctx) => {
+    render(ctx);
+    setImmediate(() => { lark = probeLark(); render(ctx); });
+  });
+  pi.on("model_select", (_event, ctx) => render(ctx));
+  pi.on("turn_start", (_event, ctx) => render(ctx));
+}
+
 export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, memoryDiagnostic?: () => string | undefined, resourceLoader?: { getSystemPrompt(): string | undefined }): ExtensionFactory {
   let approved = userApprovesDestructive(currentRequest);
   return (pi: ExtensionAPI) => {
+    installStatusLine(pi, memoryDiagnostic);
     pi.on("session_start", (_event, ctx) => {
       installOuterEditorGuard(ctx);
       if (ctx.mode === "tui") {

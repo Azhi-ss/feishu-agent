@@ -47,6 +47,62 @@ test("core tool_call hook allows destructive --yes within an approving turn and 
   assert.deepEqual({ block: denied.block, terminate: denied.terminate }, { block: true, terminate: true });
   assert.match(denied.reason, /Blocked lark-cli --yes/);
 });
+test("status line chips: model + healthy memory at session start, refreshed on model change; degraded memory warns", async () => {
+  const handlerLists = new Map<string, Function[]>();
+  const piStub = (name: string, handler: Function) => {
+    const list = handlerLists.get(name) ?? [];
+    list.push(handler);
+    handlerLists.set(name, list);
+  };
+  const calls: string[] = [];
+  const fakeUi = {
+    setStatus: (key: string, value: string) => calls.push(`${key}=${value}`),
+    theme: { fg: (color: string, text: string) => `[${color}]${text}[/${color}]` },
+    notify: () => {},
+    getEditorComponent: () => undefined,
+    setEditorComponent: () => {},
+  };
+  const fakeCtx = { mode: "tui", model: { id: "fake-model" }, ui: fakeUi };
+  corePolicyExtension(undefined, undefined, () => undefined)({
+    on: piStub,
+    registerCommand: () => {},
+  } as never);
+  const root = mkdtempSync(join(tmpdir(), "feishu-status-line-"));
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "lark-cli"), "#!/bin/sh\n[ \"$1 $2\" = \"auth status\" ] && echo '{\"defaultAs\": \"bot\"}' || exit 0\n", { mode: 0o755 });
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${bin}:${oldPath}`;
+  await Promise.all(handlerLists.get("session_start")!.map((h) => h({}, fakeCtx)));
+  await new Promise((resolve) => setImmediate(resolve));
+  process.env.PATH = oldPath;
+  const healthy = calls.at(-1)!;
+  assert.match(healthy, /\[accent\]◆ fake-model/);
+  assert.match(healthy, /\[success\]● mem/);
+  assert.doesNotMatch(healthy, /mem off/);
+  assert.match(healthy, /lark:bot/);
+
+  const changedCalls: string[] = [];
+  const changedCtx = { mode: "tui", model: { id: "other-model" }, ui: { ...fakeUi, setStatus: (_k: string, v: string) => changedCalls.push(v) } };
+  await Promise.all(handlerLists.get("model_select")!.map((h) => h({ model: { id: "other-model" } }, changedCtx)));
+  assert.match(changedCalls.at(-1)!, /other-model/);
+
+  const degradedLists = new Map<string, Function[]>();
+  const degradedCalls: string[] = [];
+  corePolicyExtension(undefined, undefined, () => "Memory degraded")({
+    on: (name: string, handler: Function) => { const list = degradedLists.get(name) ?? []; list.push(handler); degradedLists.set(name, list); },
+    registerCommand: () => {},
+  } as never);
+  await Promise.all(degradedLists.get("session_start")!.map((h) => h({}, { mode: "tui", model: { id: "m" }, ui: { setStatus: (_k: string, v: string) => degradedCalls.push(v), theme: fakeUi.theme, notify: () => {}, getEditorComponent: () => undefined, setEditorComponent: () => {} } })));
+  assert.match(degradedCalls.at(-1)!, /\[warning\]○ mem off/);
+
+  // Print mode never sets footer status.
+  const printCalls: string[] = [];
+  await Promise.all(handlerLists.get("session_start")!.map((h) =>
+    h({}, { mode: "print", model: { id: "m" }, ui: { setStatus: (_k: string, v: string) => printCalls.push(v), theme: fakeUi.theme, notify: () => {}, getEditorComponent: () => undefined, setEditorComponent: () => {} } })));
+  assert.deepEqual(printCalls, []);
+});
+
 test("resume startup extension registers a host-owned current-project selector command", () => {
   const commands: string[] = [];
   corePolicyExtension(undefined, async () => {})({

@@ -48,6 +48,7 @@ printf 'CALL|%s\n' "$*" >> "$LARK_TRACE"
 case "$*" in
  "--version") echo "lark-cli 1.0.0"; exit 0;;
  "skills list --json") echo "[]"; exit 0;;
+ "auth status --json") echo '{"defaultAs":"user"}'; exit 0;;
 esac
 case " $* " in *" --yes "*) echo "FAKE LARK DELETED"; exit 0;; esac
 printf 'FAKE LARK CONFIRMATION: approve destructive write? [y/N] ' >&2
@@ -64,7 +65,7 @@ exit 3
 
 function larkCalls(path: string): string[] {
   if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8").trim().split("\n").filter((line) => !line.endsWith("--version") && !line.endsWith("skills list --json"));
+  return readFileSync(path, "utf8").trim().split("\n").filter((line) => !line.endsWith("--version") && !line.endsWith("skills list --json") && !line.includes("auth status"));
 }
 
 function closeServer(server: Server): Promise<void> {
