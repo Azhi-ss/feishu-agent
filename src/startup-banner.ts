@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory, ThemeColor } from "@earendil-works/pi-coding-agent";
 
 // One-shot startup banner: replaces Pi's built-in header once at launch.
 // The header renders at the top of the transcript and scrolls away with it
@@ -23,13 +23,27 @@ function shortCwd(): string {
   return cwd;
 }
 
-// Compact three-line mark evoking a paper plane / wing in block glyphs.
-function brandMark(): string[] {
-  return [
-    "  ▜▛     ",
-    " ▟███▙   ",
-    "▜██████▌ ",
-  ];
+const BIRD = 0x2588; // █
+
+// Feishu hummingbird, traced from the official icon: a blue body in an
+// up-right flying swoosh with a teal/green upper wing band and green tail tip.
+// theme accent = blue, success = green. Grid columns are fixed at BIRD_COLS
+// (plain-visible width) so the text column aligns regardless of ANSI codes.
+const BIRD_COLS = 16;
+const BIRD_GRID: string[] = [
+  "        BBBBBBBB",
+  "    GGBBBBBBGGGG",
+  "GGGBBBBBBBBBBBBB",
+];
+
+function birdLine(row: string, theme: { fg(c: ThemeColor, t: string): string }): string {
+  let out = "";
+  for (const cell of [...row]) {
+    if (cell === "B") out += theme.fg("accent", String.fromCodePoint(BIRD));
+    else if (cell === "G") out += theme.fg("success", String.fromCodePoint(BIRD));
+    else out += " ";
+  }
+  return out;
 }
 
 export function startupBannerExtension(): ExtensionFactory {
@@ -43,18 +57,20 @@ export function startupBannerExtension(): ExtensionFactory {
           const muted = (t: string) => theme.fg("muted", t);
           const dim = (t: string) => theme.fg("dim", t);
           const model = (ctx as { model?: { id?: string } }).model?.id ?? "";
-          const mark = brandMark().map((line) => a(line));
+          const bird = BIRD_GRID.map((row) => birdLine(row, theme));
+          const gap = "   ";
           const text = [
             `${a("Feishu Agent")} ${dim(`v${version}`)}`,
             muted(model ? `${model}  ${dim("·")}  ${shortCwd()}` : shortCwd()),
             dim("/ commands · ? help · /quit exit"),
           ];
-          const height = Math.max(mark.length, text.length);
-          const lines: string[] = [];
-          for (let i = 0; i < height; i++) {
-            lines.push(`${mark[i] ?? "".padEnd(10, " ")}${text[i] ?? ""}`.trimEnd());
-          }
-          return ["", ...lines, ""];
+          return [
+            "",
+            `${bird[0]}${gap}${text[0]}`,
+            `${bird[1]}${gap}${text[1]}`,
+            `${bird[2]}${gap}${text[2]}`,
+            "",
+          ];
         },
         invalidate() {},
       }));
