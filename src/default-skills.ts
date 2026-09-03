@@ -35,7 +35,7 @@ skills/<name>/
 - \`description\` 用中文写清“做什么 + 什么时候用”，包含触发词（如“创建 skill”“发审批”），这是模型自动加载和 \`/skill:<name>\` 检索的依据。
 - 正文先写触发条件，再写分步操作；每步给出可直接执行的 \`lark-cli\` 命令。优先级：Shortcut（\`+xxx\`）> 已注册 API > \`lark-cli api\` 裸调。
 - 个人资源命令默认带 \`--as user\`；只有用户明确要求或接口强制时用 \`--as bot\`。
-- 高危写操作（\`Risk: high-risk-write\`）必须等用户明确确认后才能带 \`--yes\`，不得自行推断。
+- 高危写操作（删除/移除/撤销/撤回）只有在用户本轮消息明确要求该类动作时才能带 \`--yes\`，不得自行推断；无 \`--yes\` 时交给 lark-cli 自己的确认提示。
 - 不写入、不复制、不打印任何 Token/API Key；认证复用 lark-cli 现有登录态或环境变量名，不落地密钥。
 - 首次创建前用 \`lark-cli schema <service.resource.method>\` 或 \`lark-cli <service> --help\` 核对参数，禁止编造标志。
 - 不确定的命令写 \`--help\` 查询而不是猜。

@@ -107,7 +107,7 @@ export async function runPrint(prompt: string, cwd: string, projectRoot: string,
     const code = await runPrintMode(runtime, { mode: "text", initialMessage: prompt });
     if (code) return code;
     const approvalError = runtime.session.state.messages.flatMap((message) => message.role === "toolResult" && message.isError ? message.content : [])
-      .find((part) => part.type === "text" && /High-risk Approval required|Blocked .*lark-cli/.test(part.text));
+      .find((part) => part.type === "text" && /High-risk lark-cli|Blocked lark-cli/.test(part.text));
     if (approvalError?.type === "text") {
       process.stderr.write(`${approvalError.text}\n`);
       return 1;

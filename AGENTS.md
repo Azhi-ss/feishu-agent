@@ -27,7 +27,7 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 2. **不 Fork Pi、不 patch 第三方包**。`@earendil-works/pi-coding-agent` 与 `@mem0/pi-agent-plugin` 原样使用，版本在 package.json 里钉死。
 3. **资源隔离**。绝不加载 `.pi/`、`.agents/`、Codex、Claude 的资源；Feishu 的设置、包、Skills、会话、Mem0 状态全部在 `~/.feishu-agent/`。普通 Pi 的 `auth.json`/`models.json` 只读复用。
 4. **凭证**。不复制、不打印、不落盘任何 token/API key；`MEM0_API_KEY` 只走环境变量，且不得出现在错误信息、Session 文件或测试输出里。
-5. **高危 lark-cli 写操作**。`--yes` 必须精确匹配用户已明确表达的动作、目标、身份、范围，一次批准只绑一条命令；Print 模式无法交互确认时快速失败（非零退出码），绝不挂起。
+5. **高危 lark-cli 写操作**。Guard 只拦一种情况：`lark-cli` 破坏性命令（delete/remove/revoke/withdraw）带 `--yes` 但用户本轮消息没有明确表达破坏性意图。不解析目标/身份/范围、不做一次性消费；用户在对话中确认后于同一轮或下一轮重跑即可放行。不带 `--yes` 时 TUI 透传给 lark-cli 自身确认；Print 模式无法交互确认时快速失败（非零退出码 + 可操作报错），绝不挂起。
 6. **CLI 参数面保持最小**（SPEC.md §15）。新增命令或旗标先改 SPEC 再写代码。
 
 ## 验收标准

@@ -45,8 +45,8 @@ The existing `lark-cli` configuration, selected profile, and authenticated user 
 _Avoid_: Feishu Agent token copy, separate Lark login, implicit identity switching
 
 **High-risk Approval**:
-Permission to execute one unambiguous `lark-cli` high-risk write. A user's explicit request for the exact destructive action is sufficient approval to include `--yes`; otherwise the CLI confirmation gate must pause execution and request approval.
-_Avoid_: Mandatory duplicate confirmation, blanket approval, inferred destructive intent
+Turn-scoped permission for a destructive `lark-cli` write (delete/remove/revoke/withdraw). When the user's current-turn message explicitly asks for a destructive action, the agent may include `--yes`; otherwise the guard blocks it with guidance, and without `--yes` the CLI's own confirmation gate pauses execution (Print mode fast-fails).
+_Avoid_: Mandatory duplicate confirmation, blanket approval, inferred destructive intent, metadata-probing per-target approval
 
 **Feishu Package**:
 An installable Pi-compatible capability enabled for Feishu Agent rather than for other agents on the machine. `feishu install` installs globally under `~/.feishu-agent/` by default; `feishu install -l` installs under the current project's `.feishu-agent/`. A private compatibility workspace lets Pi's package manager retain its `.pi` assumptions without creating or loading the project's real `.pi/` directory. Installing a package authorizes all resource types declared by its manifest, including extensions, skills, prompts, and themes, subject to later filtering through `feishu config`; it does not authorize replacement of reserved core tools, the base identity, or command restrictions.

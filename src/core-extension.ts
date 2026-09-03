@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil
 import { CustomEditor, SessionSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { prohibitedCommand } from "./command-policy.js";
-import { authorizeLarkCommand, approvalFromExactRequest, type LarkApproval } from "./high-risk.js";
+import { authorizeLarkCommand, userApprovesDestructive } from "./high-risk.js";
 
 interface EditorLike {
   onSubmit?: (text: string) => void;
@@ -35,7 +35,7 @@ export function installOuterEditorGuard(ctx: ExtensionContext): void {
 }
 
 export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, memoryDiagnostic?: () => string | undefined, resourceLoader?: { getSystemPrompt(): string | undefined }): ExtensionFactory {
-  let approval: LarkApproval | undefined = approvalFromExactRequest(currentRequest);
+  let approved = userApprovesDestructive(currentRequest);
   return (pi: ExtensionAPI) => {
     pi.on("session_start", (_event, ctx) => {
       installOuterEditorGuard(ctx);
@@ -62,7 +62,7 @@ export function corePolicyExtension(currentRequest?: string, switchSelectedSessi
     pi.on("input", (event) => {
       const reason = prohibitedCommand(event.text);
       if (reason) return { action: "handled" as const };
-      approval = approvalFromExactRequest(event.text);
+      approved = userApprovesDestructive(event.text);
     });
     if (resourceLoader) pi.on("before_agent_start", (event) => {
       const base = resourceLoader.getSystemPrompt() ?? event.systemPrompt ?? "";
@@ -70,7 +70,7 @@ export function corePolicyExtension(currentRequest?: string, switchSelectedSessi
     });
     pi.on("tool_call", (event, ctx) => {
       if (event.toolName !== "bash") return;
-      try { authorizeLarkCommand(String(event.input.command ?? ""), approval, ctx.mode === "print"); }
+      try { authorizeLarkCommand(String(event.input.command ?? ""), approved, ctx.mode === "print"); }
       catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         if (ctx.mode === "tui") ctx.ui.notify(reason, "error");

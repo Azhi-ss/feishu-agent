@@ -117,7 +117,7 @@ Global packages live below `~/.feishu-agent/`; project packages live in `<git-ro
 
 ## Lark Identity and High-risk Approval
 
-Feishu Agent reuses existing `lark-cli` state without copying tokens. Personal-resource operations use explicit `--as user`; Bot identity is only used when requested or required. A natural request that unambiguously states the destructive action, exact target, user/bot identity, and impact scope grants one matching `lark-cli ... --yes` operation. Ambiguous, chained, widened, changed, or repeated destructive work is blocked; Print mode terminates instead of prompting. This runtime guard is not an OS security boundary.
+Feishu Agent reuses existing `lark-cli` state without copying tokens. Personal-resource operations use explicit `--as user`; Bot identity is only used when requested or required. The high-risk guard is intentionally minimal: a destructive `lark-cli` command (delete/remove/revoke/withdraw) carrying `--yes` is allowed only when the user's current-turn message explicitly asks for a destructive action (e.g. “删除/delete the document”); otherwise the run is blocked with actionable guidance. Without `--yes`, TUI mode passes through to lark-cli's own confirmation prompt, while Print mode fast-fails instead of hanging. Approval is turn-scoped, not one-shot; no target/identity metadata is probed. This runtime guard is not an OS security boundary.
 
 ## Long-term Memory
 

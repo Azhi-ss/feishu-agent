@@ -24,24 +24,28 @@ test("outer editor guard intercepts Pi-wired submit after custom editor creation
   assert.match(feedback[0], /does not share sessions/);
 });
 
-test("core tool_call hook enforces exact one-shot lark approval and Print termination", async () => {
+test("core tool_call hook allows destructive --yes within an approving turn and blocks + terminates otherwise", async () => {
   const handlers = new Map<string, Function>();
   const command = "lark-cli doc delete doc-1 --as user --yes";
-  const root = mkdtempSync(join(tmpdir(), "feishu-tool-hook-"));
-  const bin = join(root, "bin");
-  mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\n[ "$*" = "doc delete --help" ] && printf "Risk: high-risk-write\\nAction: delete\\nTarget: positional:0\\nIdentity: --as\\nScope: one-document\\n"\n', { mode: 0o755 });
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${bin}:${oldPath}`;
-  corePolicyExtension("delete doc-1 as user for one-document")({
+  // Guard no longer shells out to lark-cli for metadata; no fake binary on PATH needed.
+  corePolicyExtension("delete doc-1 please")({
     on: (name: string, handler: Function) => handlers.set(name, handler),
     registerCommand: () => {},
   } as never);
   const hook = handlers.get("tool_call")!;
   assert.equal(await hook({ toolName: "bash", input: { command } }, { mode: "print", ui: { notify: () => {} } }), undefined);
-  const blocked = await hook({ toolName: "bash", input: { command } }, { mode: "print", ui: { notify: () => {} } });
-  assert.deepEqual({ block: blocked.block, terminate: blocked.terminate }, { block: true, terminate: true });
-  process.env.PATH = oldPath;
+  // Turn-scoped: a second matching call is still allowed (no one-shot consumption).
+  assert.equal(await hook({ toolName: "bash", input: { command } }, { mode: "print", ui: { notify: () => {} } }), undefined);
+
+  const otherHandlers = new Map<string, Function>();
+  corePolicyExtension("clean up the documents")({
+    on: (name: string, handler: Function) => otherHandlers.set(name, handler),
+    registerCommand: () => {},
+  } as never);
+  const otherHook = otherHandlers.get("tool_call")!;
+  const denied = await otherHook({ toolName: "bash", input: { command } }, { mode: "print", ui: { notify: () => {} } });
+  assert.deepEqual({ block: denied.block, terminate: denied.terminate }, { block: true, terminate: true });
+  assert.match(denied.reason, /Blocked lark-cli --yes/);
 });
 test("resume startup extension registers a host-owned current-project selector command", () => {
   const commands: string[] = [];

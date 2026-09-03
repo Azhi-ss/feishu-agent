@@ -200,11 +200,11 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 ### 11. High-risk Lark operations
 
-- 若用户当前请求已经明确给出准确的破坏性动作、目标、身份和范围，该请求视为一次 High-risk Approval，Agent 可直接为该命令加入 `--yes`。
-- 若上述任一信息不明确，首次执行不得猜测批准；由 `lark-cli` Confirmation Gate 或 Agent 主动确认暂停流程。
-- 批准只绑定当前准确操作，不得复用于不同目标、扩展范围或后续命令。
+- Guard 只做一件事：Bash Tool Call 中的 `lark-cli` 破坏性命令（delete/remove/revoke/withdraw）带 `--yes` 时，要求用户本轮消息明确表达破坏性意图（中文“删除/移除/撤销/撤回”或对应英文动词）；否则拦截。
+- 不解析命令目标、身份、范围，不查 lark-cli 元数据，不做一次性消费；批准按“当前轮次用户意图”生效。用户确认目标后下一轮重新执行即可。
+- 不带 `--yes` 时：TUI 模式透传给 `lark-cli` 自身的 Confirmation Gate；Print 模式快速失败，返回非零退出码与可操作报错（提示用户明确要求后重跑加 `--yes`），不等待输入。
+- 拦截报错必须给出下一步指引（如何合法完成），不只是拦截原因。
 - System Prompt 与 Feishu 核心 Extension 共同约束此规则；核心 Extension 可审计 Bash Tool Call，但不能声称构成 OS 级安全边界。
-- Print 模式缺少交互时，未预先明确批准的 High-risk Write 必须返回非零退出码与可读错误，不等待输入。
 
 ### 12. Long-term memory
 
@@ -338,8 +338,8 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容。
     - 复用现有 Profile，不复制 Token。
     - Profile Override 不修改用户默认 Profile。
     - System Prompt 要求默认 `--as user`，明确 Bot 场景允许 `--as bot`。
-    - 已明确的准确 High-risk 请求可直接携带 `--yes`；模糊请求必须确认。
-    - Print 模式下未批准的高风险操作快速失败。
+    - 用户本轮消息明确要求破坏性动作时可携带 `--yes`；否则不得自行加 `--yes`。
+    - Print 模式下未批准的高风险操作快速失败并给出重跑指引。
 
 11. **Sessions**
     - 当前 Project 会话隔离于其他 Project 和普通 Pi。
