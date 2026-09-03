@@ -1,5 +1,7 @@
 # Feishu Agent
 
+**English** | [简体中文](README.zh-CN.md)
+
 Feishu Agent is a thin executable shell over Pi's public SDK and TUI for Feishu deliverables and `lark-cli` workflows. It is not a Pi fork or a general coding agent. Resource Isolation is not an OS sandbox.
 
 ## Build
