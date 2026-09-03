@@ -107,7 +107,7 @@ test("lark-cli --yes approval is derived from exact English/Chinese requests and
   assert.throws(() => authorizeLarkCommand(exactCommand, undefined, false, metadata), /Print mode cannot prompt/);
   assert.throws(() => authorizeLarkCommand(ambiguousCommand, undefined, true, metadata), /High-risk Approval required/);
   assert.deepEqual(approvalFromExactRequest("请以用户身份在one-document范围内删除doc-1"), { action: "delete", target: "doc-1", identity: "user", scope: "one-document", consumed: false });
-  assert.deepEqual(extractLarkOperation("lark-cli im messages delete --message-id om_1 --as user --yes"), { action: "delete", target: "om_1", identity: "user", scope: "im.messages.delete" });
+  assert.deepEqual(extractLarkOperation("lark-cli im messages delete --message-id om_1 --as user --yes", () => ({ risk: "high-risk-write", action: "delete", target: "--message-id", identity: "--as", scope: "im.messages.delete" })), { action: "delete", target: "om_1", identity: "user", scope: "im.messages.delete" });
   assert.equal(approvalFromExactRequest("delete the document"), undefined);
 });
 
