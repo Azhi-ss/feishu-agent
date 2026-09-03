@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { hermeticEnv } from "./helpers/hermetic-env.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -28,7 +29,7 @@ function fixture(baseUrl: string) {
 
 function runAsync(cwd: string, home: string, args: string[]) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveResult) => {
-    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, HOME: home, PI_OFFLINE: "1" } });
+    const child = spawn(process.execPath, [cli, ...args], { cwd, env: hermeticEnv({ HOME: home, PI_OFFLINE: "1" }) });
     let stdout = "", stderr = "";
     child.stdout.on("data", (chunk) => stdout += chunk);
     child.stderr.on("data", (chunk) => stderr += chunk);
@@ -84,7 +85,7 @@ test("print mode fails before prompting when a configured Feishu default is stal
   const f = fixture("http://127.0.0.1:1/v1");
   const piBefore = ["auth.json", "models.json", "settings.json"].map((name) => readFileSync(join(f.pi, name)));
   writeFileSync(join(f.feishu, "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "removed-model" }));
-  const result = spawnSync(process.execPath, [cli, "-p", "ping"], { cwd: f.cwd, encoding: "utf8", env: { ...process.env, HOME: f.home, PI_OFFLINE: "1" } });
+  const result = spawnSync(process.execPath, [cli, "-p", "ping"], { cwd: f.cwd, encoding: "utf8", env: hermeticEnv({ HOME: f.home, PI_OFFLINE: "1" }) });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /configured Feishu default fake\/removed-model is unavailable/i);
   assert.match(result.stderr, /feishu init --reset-model/i);
@@ -97,7 +98,7 @@ test("print mode fails before prompting when no authenticated model exists", () 
   mkdirSync(join(home, ".pi", "agent"), { recursive: true });
   mkdirSync(join(home, ".feishu-agent"), { recursive: true });
   writeFileSync(join(home, ".pi", "agent", "auth.json"), "{}");
-  const result = spawnSync(process.execPath, [cli, "-p", "ping"], { cwd: root, encoding: "utf8", env: { ...process.env, HOME: home, PI_OFFLINE: "1" } });
+  const result = spawnSync(process.execPath, [cli, "-p", "ping"], { cwd: root, encoding: "utf8", env: hermeticEnv({ HOME: home, PI_OFFLINE: "1" }) });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /No authenticated model is available/);
 });

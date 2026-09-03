@@ -7,6 +7,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { checkReadiness } from "../src/readiness.js";
+import { hermeticEnv } from "./helpers/hermetic-env.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -54,7 +55,7 @@ test("public init requires explicit model selection and preserves shared bytes a
   const host = await listen(server);
   const invariantPaths = [join(f.pi, "auth.json"), join(f.pi, "models.json"), join(f.pi, "settings.json"), join(f.lark, "config.json"), join(f.lark, "token.json")];
   const before = invariantPaths.map((path) => readFileSync(path));
-  const env = { ...process.env, HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: "mem0-secret", MEM0_API_HOST: host, PI_OFFLINE: "1" };
+  const env = hermeticEnv({ HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: "mem0-secret", MEM0_API_HOST: host, PI_OFFLINE: "1" });
   try {
     const single = publicFixture(["one"]); fakeLark(single.bin);
     const singleResult = await run(single.project, { ...env, HOME: single.home, PATH: `${single.bin}${delimiter}${process.env.PATH}` }, ["init", "--identity", "alice"]);
@@ -91,13 +92,13 @@ test("public init requires explicit model selection and preserves shared bytes a
 
 test("public init reports no models, missing and rejected Mem0, and doctor failure distinctly while keeping non-secret initialized state", async () => {
   const noModels = publicFixture([]); fakeLark(noModels.bin);
-  const baseEnv = { ...process.env, HOME: noModels.home, PATH: `${noModels.bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" };
+  const baseEnv = hermeticEnv({ HOME: noModels.home, PATH: `${noModels.bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" });
   const noModel = await run(noModels.project, { ...baseEnv, MEM0_API_KEY: "unused" }, ["init", "--identity", "alice", "--model", "fake/one"]);
   assert.notEqual(noModel.code, 0); assert.match(noModel.stderr, /No authenticated model is available; manage credentials through ordinary Pi/);
   assert.match(readFileSync(join(noModels.agent, "mem0-config.json"), "utf8"), /feishu:alice/);
 
   const f = publicFixture(["one"]); fakeLark(f.bin);
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" };
+  const env: NodeJS.ProcessEnv = hermeticEnv({ HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" });
   delete env.MEM0_API_KEY;
   delete env.MEM0_API_HOST;
   const missing = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/one"]);
@@ -125,7 +126,7 @@ test("public init rejects a stale existing Feishu default until explicit reset",
   writeFileSync(join(f.agent, "settings.json"), JSON.stringify({ packages: ["npm:@mem0/pi-agent-plugin@0.1.5"], defaultProvider: "fake", defaultModel: "gone" }) + "\n");
   const server = createServer((_request, response) => { response.writeHead(200, { "content-type": "application/json" }); response.end('{"status":"ok"}'); });
   const host = await listen(server);
-  const env = { ...process.env, HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: "healthy-key", MEM0_API_HOST: host, PI_OFFLINE: "1" };
+  const env = hermeticEnv({ HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: "healthy-key", MEM0_API_HOST: host, PI_OFFLINE: "1" });
   try {
     const stale = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/one"]);
     assert.notEqual(stale.code, 0); assert.match(stale.stderr, /Existing Feishu default is unavailable: fake\/gone.*--reset-model/);
