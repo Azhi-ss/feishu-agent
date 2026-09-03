@@ -41,3 +41,17 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 
 - 在本仓库目录里运行 `feishu` 时，本文件会被 FeishuResourceLoader 自动注入为项目上下文——等于修改那个助手系统提示的一部分，措辞需要慎重。
 - `~/.feishu-agent/` 是运行时状态（会话、skills 版本缓存、包、记忆配置），调试时可整体删除后重新 `feishu init`。
+
+## Agent skills
+
+### Issue tracker
+
+Issues 与 PRD 以 GitHub issue 管理（`Azhi-ss/feishu-agent`），统一用 `gh` CLI；不把外部 PR 作为 triage 请求面。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用五态默认标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文仓库：根目录 `CONTEXT.md` 领域词汇表 + `docs/adr/`；工程设计以 `SPEC.md` 为准。见 `docs/agents/domain.md`。
