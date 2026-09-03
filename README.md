@@ -39,16 +39,44 @@ Only Interactive and text Print modes are supported. JSON and RPC are intentiona
 
 ## Packages and Skills
 
+### Defaults (what you get out of the box)
+
+`feishu init` sets up a minimal runtime. Nothing is preloaded beyond:
+
+| Capability | Source | Notes |
+|---|---|---|
+| Long-term memory | `@mem0/pi-agent-plugin` (pinned, auto-installed by `feishu init`) | Project-scoped semantic capture of user/assistant text; `MEM0_API_KEY` env-only |
+| Core policy guard | built-in (hidden `feishu-core-policy` extension) | High-risk `lark-cli --yes` approval gate, blocked `/share` `/import` `/login` `/logout` |
+| Skill authoring | built-in `feishu-skill-maker` skill | Guide for creating new Feishu Skills |
+| Official Feishu skills | read-only cache from the local `lark-cli` (28 skills: lark-im, lark-doc, lark-calendar, …) | Keyed by CLI version, synced lazily; refresh with `feishu skills sync` |
+| Core tools | `read` `edit` `write` `bash` `grep` `find` `ls` | Third-party packages cannot replace these names |
+
+Themes and prompt templates are not bundled; load them via packages as needed.
+
+### Recommended optional packages
+
+Pi-compatible extension packages install with `feishu install npm:<package>`. Feishu does **not** auto-install any of these — opt in per machine/project. All listings below are real, `pi-coding-agent`-compatible npm packages; verify the current version with `npm view <package>` before pinning.
+
+| Package | What it adds | When to install |
+|---|---|---|
+| `pi-web-access` | Web search, URL fetching, GitHub repo cloning, PDF extraction, YouTube/video understanding; pluggable backends (Tavily, Firecrawl, Jina, Exa, Gemini, Kimi, SearXNG, …) | **Most recommended** — when Feishu needs to read online docs, look up Feishu API references, or fetch a link |
+| `pi-mcp-adapter` | Use MCP (Model Context Protocol) servers as tools | You already have MCP servers (or want a specific vendor's MCP integration) |
+| `pi-subagents` | Single-agent delegation and scripted multi-agent workflows | Long, parallelizable Feishu tasks |
+| `pi-background-tasks` | Durable background shell tasks, read-only delegated agents, attested local Pi runs | Letting long-running lark-cli jobs survive the session |
+| `pi-hermes-memory` | Persistent memory + session search + secret scanning, token-aware policy-only capture | Alternative/additional memory engine; note Feishu already ships Mem0 |
+
 ```bash
-feishu install npm:package
-feishu install -l ./local-package
+feishu install npm:pi-web-access        # recommended, global
+feishu install -l npm:pi-mcp-adapter     # current project only
 feishu list
-feishu remove package
+feishu remove npm:pi-subagents
 feishu update --extensions
-feishu config set npm:package extensions off
+feishu config set npm:pi-web-access extensions off
 feishu config -l set ./local-package skills off
 feishu skills sync
 ```
+
+Not recommended for Feishu: packages from the `@oh-my-pi/*` ecosystem — those target the separate `oh-my-pi`/`omp` agent, not `pi-coding-agent`, and are not compatible with this runtime.
 
 Global packages live below `~/.feishu-agent/`; project packages live in `<git-root>/.feishu-agent/`. Manifest Extensions, Skills, Prompts, and Themes load with Pi package filtering semantics; omitted types load all, `[]` loads none, glob exclusions narrow, and exact `+path`/`-path` entries force inclusion/exclusion. `feishu config` starts in Feishu global settings and `feishu config -l` starts in project Feishu settings; `feishu config [ -l ] set <source> <resource> <on|off>` is the scriptable equivalent for durable resource toggles. The isolated UI child prevents Pi's config exit behavior from terminating an embedding host. Official and private Feishu Skills never scan ordinary Pi, `.pi`, `.agents`, Codex, or Claude skill roots.
 
