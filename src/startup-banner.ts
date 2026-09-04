@@ -28,9 +28,9 @@ function shortCwd(): string {
 type BrandColor = "blue" | "teal";
 type BirdPart = [color: BrandColor, text: string];
 const BIRD_LINES: BirdPart[][] = [
-  [["teal", "   ◢"]],
-  [["blue", " ◢▰◣"]],
-  [["blue", "     "]],
+  [["teal", "  ◢◤"]],
+  [["blue", " ◢█◤"]],
+  [["blue", "    "]],
 ];
 
 const BRAND_COLORS = {
