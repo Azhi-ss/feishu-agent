@@ -28,7 +28,7 @@ test("init creates an idempotent private Home without overwriting choices", () =
   assert.throws(() => initializeHome(join(agent, "bad"), ""), /explicit stable/);
 });
 
-test("init installs the default feishu-skill-maker without overwriting user edits", () => {
+test("init installs default Feishu Skills without overwriting user edits", () => {
   const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-skill-")), ".feishu-agent");
   const first = initializeHome(agent, "alice");
   const skillPath = join(agent, "skills", "feishu-skill-maker", "SKILL.md");
@@ -36,6 +36,17 @@ test("init installs the default feishu-skill-maker without overwriting user edit
   const body = readFileSync(skillPath, "utf8");
   assert.match(body, /^---\nname: feishu-skill-maker\n/m);
   assert.match(body, /项目私有 > 全局私有 > 安装包 > 官方缓存/);
+  const finderPath = join(agent, "skills", "feishu-find-skill", "SKILL.md");
+  assert(first.created.includes(finderPath));
+  assert.match(readFileSync(finderPath, "utf8"), /~\/.feishu-agent\/skills/);
+  for (const name of ["feishu-latex-rendering", "process-optimization-biweekly"]) {
+    const path = join(agent, "skills", name, "SKILL.md");
+    assert(first.created.includes(path));
+    assert.match(readFileSync(path, "utf8"), new RegExp(`^---\\nname: ${name}\\n`, "m"));
+  }
+  const processTemplate = readFileSync(join(agent, "skills", "process-optimization-biweekly", "SKILL.md"), "utf8");
+  assert.match(processTemplate, /<CHAT_ID>|<DOC_TOKEN>|<SPREADSHEET_TOKEN>/);
+  assert.doesNotMatch(processTemplate, /(?:ou|oc)_[A-Za-z0-9]{12,}/);
   const edited = "---\nname: feishu-skill-maker\ndescription: 我的自定义规范\n---\n\n# Custom\n";
   writeFileSync(skillPath, edited);
   initializeHome(agent, "alice");

@@ -59,45 +59,48 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 39. 作为用户，我希望执行 `feishu skills sync` 强制刷新官方 Skills，从而可以主动修复缓存。
 40. 作为用户，我希望同名 Skill 使用“项目私有 > 全局私有 > 安装包 > 官方缓存”的确定优先级，从而覆盖行为可预测。
 41. 作为用户，我希望启动时列出所有被遮蔽的 Skill 来源，从而覆盖不能静默发生。
-42. 作为用户，我希望全局 `~/.feishu-agent/SYSTEM.md` 定义不可替换的 Feishu Agent 身份，从而项目和插件不能改变助手的根本职责。
-43. 作为项目维护者，我希望 `<project>/.feishu-agent/AGENTS.md` 追加 Feishu 专用项目规则，从而定制项目工作流。
-44. 作为项目维护者，我希望项目根目录 `AGENTS.md` 也自动加入上下文，从而复用已有项目约束。
-45. 作为用户，我希望 Feishu Agent 忽略其他 Agent 的全局提示词和项目 `.pi`、`.agents` 上下文，从而保持身份隔离。
-46. 作为用户，我希望项目 `.feishu-agent/` 和根 `AGENTS.md` 自动加载而不额外弹出信任门禁，从而减少重复确认。
-47. 作为用户，我希望 Feishu Agent 提供 `read`、`edit`、`write`、`bash`、`grep`、`find` 和 `ls`，从而能准备飞书交付所需的本地材料。
-48. 作为用户，我希望 Bash 能运行现有项目工具链和 `lark-cli`，从而无需额外的专用 CLI 包装工具。
-49. 作为用户，我希望 Agent 可以读取项目代码、Git 历史、实验记录和进展，从而基于真实项目状态生成飞书内容。
-50. 作为用户，我希望 Agent 可以修改直接服务于飞书交付的草稿、XML、Markdown 和辅助脚本，从而完成端到端工作流。
-51. 作为用户，我希望与飞书无关的普通开发请求被转交普通 `pi`，从而 Feishu Mem0 不学习大量无关编码内容。
-52. 作为用户，我希望个人飞书资源操作默认显式使用 `--as user`，从而调用者身份明确。
-53. 作为用户，我希望只有在我要求或接口强制时使用 `--as bot`，从而不会悄悄切换操作者。
-54. 作为用户，我希望 Feishu Agent 复用已有 `lark-cli` Profile 和登录态，从而不需要重复飞书授权。
-55. 作为用户，我希望可通过启动参数指定其他 `lark-cli` Profile，从而在多个应用配置间切换。
-56. 作为用户，我希望 Feishu Agent 不复制任何飞书 Token 到 Agent Home，从而降低凭证扩散风险。
-57. 作为用户，我希望明确请求某个准确的高风险飞书操作时，Agent 可以直接携带 `--yes`，从而不重复询问同一意图。
-58. 作为用户，我希望目标、身份或影响范围不明确时仍停下确认，从而破坏性意图不能被推断。
-59. 作为用户，我希望一次高风险批准只适用于该准确操作，从而不能扩展成其他删除或撤回动作。
-60. 作为用户，我希望 Feishu Project 以 Git Root 识别，从而从仓库任意子目录启动都共享配置、Skills、会话与 Mem0 Scope。
-61. 作为非 Git 目录用户，我希望启动目录回退为 Feishu Project，从而仍能正常使用专用 Agent。
-62. 作为用户，我希望运行时工作目录保持 `feishu` 的启动目录，从而相对路径符合当前终端位置。
-63. 作为用户，我希望项目身份和运行时工作目录分离，从而 Monorepo 可共享项目资源但保留子目录操作上下文。
-64. 作为用户，我希望会话集中存放在 `~/.feishu-agent/sessions/<project-key>/`，从而不会把飞书对话误提交进仓库。
-65. 作为用户，我希望 `feishu --session <id>` 精确恢复当前 Feishu Project 中该会话，`feishu -c` 只继续最近的会话，从而不会串到其他项目；退出提示不得引导用户绕过专用 Runtime 直接运行 `pi --session-dir ... --session ...`。
-66. 作为用户，我希望 `/resume` 只浏览当前项目会话，从而会话选择范围明确。
-67. 作为用户，我希望普通 Pi 的 `/resume` 看不到 Feishu Agent 会话，从而会话空间隔离。
-68. 作为用户，我希望 `feishu` 提供完整 Interactive TUI，从而可以进行持续的飞书工作。
-69. 作为自动化用户，我希望 `feishu -p "任务"` 单次运行并退出，从而可用于简单脚本。
-70. 作为用户，我希望 Print 模式无法交互确认时明确失败而不是挂起，从而自动化行为可预测。
-71. 作为用户，我希望首版不包含 JSON 和 RPC 模式，从而实现范围保持最小。
-72. 作为用户，我希望 `/share` 被提交前拦截，从而不能误把飞书会话上传为 GitHub Gist。
-73. 作为用户，我希望 `/import` 被提交前拦截，从而外部会话不能污染 Feishu 会话和自动记忆。
-74. 作为用户，我接受禁用命令仍可能出现在 Pi 原生自动补全中，从而无需为此 Fork 或重写整套 TUI。
-75. 作为用户，我希望本地 `/export` 仍可用，从而可以人工检查和脱敏后再处理会话。
-76. 作为用户，我希望 `/new`、`/resume`、`/tree`、`/fork`、`/clone` 和 `/compact` 仍可用，从而保留 Pi 的本地会话能力。
-77. 作为用户，我希望 `feishu init` 创建 Agent Home、系统提示词、默认配置、Mem0 设置和 Skills 缓存，从而一次初始化即可使用。
-78. 作为用户，我希望 `feishu init` 执行 `lark-cli doctor`，从而提前发现飞书配置或连接问题。
-79. 作为用户，我希望初始化检查复用的 Pi 模型认证，从而在进入 TUI 前发现无可用模型。
-80. 作为用户，我希望初始化可重复执行且不会覆盖已有身份、模型和自定义系统提示词，除非我明确选择重置，从而配置不会意外丢失。
+42. 作为用户，我希望在 Feishu Agent 中用 `/find-skill <query>` 搜索公开 Skill 目录，并在确认后把选中的 Skill 安装到 Feishu 私有目录，从而不污染普通 Pi 或其他 Agent。
+43. 作为用户，我希望 `/find-skill` 安装前显示来源、安装量、声明的许可证和目标路径，并要求交互确认，从而能先审阅第三方 Skill 的基本 provenance。
+44. 作为用户，我希望 Print/无人值守模式的 `/find-skill` 只支持搜索而不执行需要确认的安装，从而不会因网络或确认提示挂起。
+45. 作为用户，我希望全局 `~/.feishu-agent/SYSTEM.md` 定义不可替换的 Feishu Agent 身份，从而项目和插件不能改变助手的根本职责。
+46. 作为项目维护者，我希望 `<project>/.feishu-agent/AGENTS.md` 追加 Feishu 专用项目规则，从而定制项目工作流。
+47. 作为项目维护者，我希望项目根目录 `AGENTS.md` 也自动加入上下文，从而复用已有项目约束。
+48. 作为用户，我希望 Feishu Agent 忽略其他 Agent 的全局提示词和项目 `.pi`、`.agents` 上下文，从而保持身份隔离。
+49. 作为用户，我希望项目 `.feishu-agent/` 和根 `AGENTS.md` 自动加载而不额外弹出信任门禁，从而减少重复确认。
+50. 作为用户，我希望 Feishu Agent 提供 `read`、`edit`、`write`、`bash`、`grep`、`find` 和 `ls`，从而能准备飞书交付所需的本地材料。
+51. 作为用户，我希望 Bash 能运行现有项目工具链和 `lark-cli`，从而无需额外的专用 CLI 包装工具。
+52. 作为用户，我希望 Agent 可以读取项目代码、Git 历史、实验记录和进展，从而基于真实项目状态生成飞书内容。
+53. 作为用户，我希望 Agent 可以修改直接服务于飞书交付的草稿、XML、Markdown 和辅助脚本，从而完成端到端工作流。
+54. 作为用户，我希望与飞书无关的普通开发请求被转交普通 `pi`，从而 Feishu Mem0 不学习大量无关编码内容。
+55. 作为用户，我希望个人飞书资源操作默认显式使用 `--as user`，从而调用者身份明确。
+56. 作为用户，我希望只有在我要求或接口强制时使用 `--as bot`，从而不会悄悄切换操作者。
+57. 作为用户，我希望 Feishu Agent 复用已有 `lark-cli` Profile 和登录态，从而不需要重复飞书授权。
+58. 作为用户，我希望可通过启动参数指定其他 `lark-cli` Profile，从而在多个应用配置间切换。
+59. 作为用户，我希望 Feishu Agent 不复制任何飞书 Token 到 Agent Home，从而降低凭证扩散风险。
+60. 作为用户，我希望明确请求某个准确的高风险飞书操作时，Agent 可以直接携带 `--yes`，从而不重复询问同一意图。
+61. 作为用户，我希望目标、身份或影响范围不明确时仍停下确认，从而破坏性意图不能被推断。
+62. 作为用户，我希望一次高风险批准只适用于该准确操作，从而不能扩展成其他删除或撤回动作。
+63. 作为用户，我希望 Feishu Project 以 Git Root 识别，从而从仓库任意子目录启动都共享配置、Skills、会话与 Mem0 Scope。
+64. 作为非 Git 目录用户，我希望启动目录回退为 Feishu Project，从而仍能正常使用专用 Agent。
+65. 作为用户，我希望运行时工作目录保持 `feishu` 的启动目录，从而相对路径符合当前终端位置。
+66. 作为用户，我希望项目身份和运行时工作目录分离，从而 Monorepo 可共享项目资源但保留子目录操作上下文。
+67. 作为用户，我希望会话集中存放在 `~/.feishu-agent/sessions/<project-key>/`，从而不会把飞书对话误提交进仓库。
+68. 作为用户，我希望 `feishu --session <id>` 精确恢复当前 Feishu Project 中该会话，`feishu -c` 只继续最近的会话，从而不会串到其他项目；退出提示不得引导用户绕过专用 Runtime 直接运行 `pi --session-dir ... --session ...`。
+69. 作为用户，我希望 `/resume` 只浏览当前项目会话，从而会话选择范围明确。
+70. 作为用户，我希望普通 Pi 的 `/resume` 看不到 Feishu Agent 会话，从而会话空间隔离。
+71. 作为用户，我希望 `feishu` 提供完整 Interactive TUI，从而可以进行持续的飞书工作。
+72. 作为自动化用户，我希望 `feishu -p "任务"` 单次运行并退出，从而可用于简单脚本。
+73. 作为用户，我希望 Print 模式无法交互确认时明确失败而不是挂起，从而自动化行为可预测。
+74. 作为用户，我希望首版不包含 JSON 和 RPC 模式，从而实现范围保持最小。
+75. 作为用户，我希望 `/share` 被提交前拦截，从而不能误把飞书会话上传为 GitHub Gist。
+76. 作为用户，我希望 `/import` 被提交前拦截，从而外部会话不能污染 Feishu 会话和自动记忆。
+77. 作为用户，我接受禁用命令仍可能出现在 Pi 原生自动补全中，从而无需为此 Fork 或重写整套 TUI。
+78. 作为用户，我希望本地 `/export` 仍可用，从而可以人工检查和脱敏后再处理会话。
+79. 作为用户，我希望 `/new`、`/resume`、`/tree`、`/fork`、`/clone` 和 `/compact` 仍可用，从而保留 Pi 的本地会话能力。
+80. 作为用户，我希望 `feishu init` 创建 Agent Home、系统提示词、默认配置、Mem0 设置和 Skills 缓存，从而一次初始化即可使用。
+81. 作为用户，我希望 `feishu init` 执行 `lark-cli doctor`，从而提前发现飞书配置或连接问题。
+82. 作为用户，我希望初始化检查复用的 Pi 模型认证，从而在进入 TUI 前发现无可用模型。
+83. 作为用户，我希望初始化可重复执行且不会覆盖已有身份、模型和自定义系统提示词，除非我明确选择重置，从而配置不会意外丢失。
 
 ## Implementation Decisions
 
@@ -159,6 +162,18 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 升级 lark-cli 属于用户手动操作（`lark-cli update`）；启动路径不做任何网络更新检查。
 - 同名 Skill 按“项目私有 > 全局私有 > 安装包 > 官方缓存”解析。
 - 每次启动输出冲突诊断，列出最终来源与所有被遮蔽路径。
+
+### 6.1. Private Skill discovery and installation
+
+- 交互式 `/find-skill <query>` 只在用户显式提交命令后查询公开的 `skills.sh` 搜索索引；启动和 `feishu init` 绝不搜索或安装第三方 Skill。
+- 搜索结果展示 source、Skill 名称、安装量和 `skills.sh` 链接。用户选择结果后，系统先用公开的 `skills` CLI 做临时 staging，读取其中的元数据（若声明了许可证则一并显示），再在启用前请求确认。
+- `/find-skill install <owner/repo@skill>` 是显式指定结果的安装形式。首版只接受经过校验的 GitHub shorthand 和一个 Skill 名称；任意 Shell 文本、本地路径和未经审阅的 URL 都拒绝。
+- 安装器绝不能在真实用户 `HOME` 下执行 `npx skills add --global`。它使用临时 `HOME` 和 Pi 目标（`--global --agent pi --copy`），然后只把选中且校验通过的 Skill 树（包括相对引用文件）复制到 `~/.feishu-agent/skills/<name>`。
+- staging 子进程不继承 `MEM0_API_KEY`、Token、Secret、Password 等凭证环境变量；npm 缓存、配置和临时锁文件也必须留在临时 HOME 中。
+- 已存在的私有 Skill 必须经过第二次明确确认才能覆盖。源树中的符号链接和路径穿越会被拒绝；安装先 staging，目标变更完成后再清理临时树。
+- 复制成功后，当前 Runtime 重新加载 Resources，使 Skill 立即可用。已安装 Skill 仍以当前用户权限运行，确认流程不构成沙箱。
+- Print 模式可以输出搜索结果；没有 UI 时安装必须快速失败，不能等待确认。
+- 全新 Feishu Home 默认创建 `feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering` 和 `process-optimization-biweekly`；公共仓库内的工作流 Skill 只能使用脱敏占位符，个人 Chat/Doc/Sheet 标识必须留在用户本地。
 
 ### 7. Package management
 
@@ -265,8 +280,9 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu -r`
 - `feishu --session <id>`
 - `feishu --lark-profile <profile>`
+- 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`
 
-CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容。
+CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/find-skill` 属于 Runtime 内的交互命令，不新增顶层 `feishu` 参数。
 
 ## Testing Decisions
 
@@ -347,8 +363,15 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容。
     - 持久化 Interactive 会话的 Feishu 退出提示为 `feishu --session <id>`，精确恢复只查当前 Project 分区，不把普通 Pi 命令作为恢复入口；`feishu` 不在 PATH 时显示 `FEISHU_RESUME_COMMAND`。
     - 会话文件不出现在项目目录。
 
-12. **Initialization**
-    - 全新 HOME 一次初始化成功。
+12. **Private Skill discovery**
+    - `/find-skill` 搜索只在显式调用时访问回环 Fake/测试替代的搜索端点；启动和初始化零搜索、零第三方安装。
+    - 选择结果后显示 source、Skill name、install count、license（缺失时明确显示未声明）和 Feishu 目标路径，并在拒绝确认时不改变目标目录。
+    - 使用临时 HOME 调用 fake `npx skills add --global --agent pi --copy`，验证真实 `~/.agents/skills`、`~/.pi/agent/skills` 和项目 `.agents/.pi` 没有被写入；只把选中的 Skill 与 references 复制到 `~/.feishu-agent/skills`。
+    - 恶意 source、路径穿越、符号链接、缺少合法 `SKILL.md` 或已存在目标的行为均快速失败或要求覆盖确认；安装失败不留下半成品。
+    - 安装后 ResourceLoader reload 能发现新 Skill；Print 模式搜索可输出结果，安装在无 UI 时非零快速失败而不挂起。
+
+13. **Initialization**
+    - 全新 HOME 一次初始化成功，并创建四个内置 Feishu Skill；已有同名 Skill 的用户内容不被覆盖。
     - 缺少 API Key、无模型、`lark-cli doctor` 失败时输出精确诊断。
     - 重复初始化幂等，不覆盖已有配置。
     - 显式重置选项才改变 Identity、模型或 System Prompt。

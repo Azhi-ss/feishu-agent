@@ -21,6 +21,7 @@ Feishu Agent drives Feishu/Lark work through natural language, backed by the 28 
 - **Operate Bitable / Base** — create tables, fields, records, views, and dashboards in Feishu Base (`lark-base`).
 - **Remember across sessions** — project-scoped long-term memory via Mem0; secrets and raw tool output stay out of capture.
 - **Author your own skills** — encode repeatable Feishu workflows as private skills (`feishu-skill-maker`).
+- **Write technical notes that render well in Feishu** — use the bundled LaTeX/XML guidance and process-report workflow templates.
 - **Extend with packages** — add MCP servers, web access, and subagents through Pi-compatible extensions.
 
 High-risk actions (deletes, revocations, `/share`) require explicit one-shot approval; ambiguous or chained destructive commands are blocked.
@@ -53,7 +54,7 @@ npm link          # exposes the `feishu` binary (or run `node dist/src/cli.js` d
 MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
 ```
 
-Initialization creates private state under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs the unmodified Mem0 package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, or customized `SYSTEM.md`. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
+Initialization creates private state and four bundled Feishu Skills under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs the unmodified Mem0 package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, customized `SYSTEM.md`, or edited Skills. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
 
 ## Run
 
@@ -66,6 +67,8 @@ feishu --session <id>     # resume an exact session in this Feishu Project
 feishu --lark-profile finance -p "task"
 ```
 
+In Interactive mode, `/find-skill <query>` searches the public Skill index; selecting a result shows its source, install count, declared license, and private target path before confirmation. You can also use `/find-skill install <owner/repo@skill-name>` for an explicit result. Installation writes only to `~/.feishu-agent/skills/`—never the real HOME's ordinary Pi global directories—and Print mode searches without waiting for install confirmation.
+
 Normal Interactive exit rewrites Pi's generic resume line to `To resume this Feishu session: feishu --session <id>`; copy that command to resume the exact session. Use `feishu -c` for the latest session or `feishu -r` to choose one. If `feishu` is not on PATH, set `FEISHU_RESUME_COMMAND` to the full executable path. Do not resume Feishu sessions through ordinary `pi --session-dir ... --session ...`, because that bypasses the Feishu Runtime boundary.
 
 The Feishu Runtime disables Pi's built-in startup network checks, so you will never see Pi's `pi update` version notice or `pi update --extensions` package-update notice: upgrading Pi or extensions stays a deliberate, out-of-band action.
@@ -76,13 +79,16 @@ Only Interactive and text Print modes are supported. JSON and RPC are intentiona
 
 ### Defaults (what you get out of the box)
 
-`feishu init` sets up a minimal runtime. Nothing is preloaded beyond:
+`feishu init` sets up a minimal runtime plus four bundled private Feishu Skills. Nothing else is preloaded beyond:
 
 | Capability | Source | Notes |
 |---|---|---|
 | Long-term memory | `@mem0/pi-agent-plugin` (pinned, auto-installed by `feishu init`) | Project-scoped semantic capture of user/assistant text; `MEM0_API_KEY` env-only |
 | Core policy guard | built-in (hidden `feishu-core-policy` extension) | High-risk `lark-cli --yes` approval gate, blocked `/share` `/import` `/login` `/logout` |
 | Skill authoring | built-in `feishu-skill-maker` skill | Guide for creating new Feishu Skills |
+| Skill discovery and private installation | built-in `/find-skill` command and `feishu-find-skill` skill | Reuses the `skills.sh` index and `npx skills` staging; final files go only to `~/.feishu-agent/skills/`, never `~/.agents/skills` or `~/.pi/agent/skills` |
+| Technical-note formula rendering | bundled `feishu-latex-rendering` skill | Markdown/LaTeX to Feishu XML guidance, nesting rules, escaping checklist, and conversion example |
+| Process-report workflow | bundled `process-optimization-biweekly` skill | Sanitized reusable template for source collection, lifecycle-based progress writing, and Feishu document updates |
 | Official Feishu skills | read-only cache from the local `lark-cli` (28 skills: lark-im, lark-doc, lark-calendar, …) | Keyed by CLI version, synced lazily; refresh with `feishu skills sync` |
 | Core tools | `read` `edit` `write` `bash` `grep` `find` `ls` | Third-party packages cannot replace these names |
 
@@ -113,7 +119,7 @@ feishu skills sync
 
 Not recommended for Feishu: packages from the `@oh-my-pi/*` ecosystem — those target the separate `oh-my-pi`/`omp` agent, not `pi-coding-agent`, and are not compatible with this runtime.
 
-Global packages live below `~/.feishu-agent/`; project packages live in `<git-root>/.feishu-agent/`. Manifest Extensions, Skills, Prompts, and Themes load with Pi package filtering semantics; omitted types load all, `[]` loads none, glob exclusions narrow, and exact `+path`/`-path` entries force inclusion/exclusion. `feishu config` starts in Feishu global settings and `feishu config -l` starts in project Feishu settings; `feishu config [ -l ] set <source> <resource> <on|off>` is the scriptable equivalent for durable resource toggles. The isolated UI child prevents Pi's config exit behavior from terminating an embedding host. Official and private Feishu Skills never scan ordinary Pi, `.pi`, `.agents`, Codex, or Claude skill roots.
+Global packages live below `~/.feishu-agent/`; project packages live in `<git-root>/.feishu-agent/`. Manifest Extensions, Skills, Prompts, and Themes load with Pi package filtering semantics; omitted types load all, `[]` loads none, glob exclusions narrow, and exact `+path`/`-path` entries force inclusion/exclusion. `feishu config` starts in Feishu global settings and `feishu config -l` starts in project Feishu settings; `feishu config [ -l ] set <source> <resource> <on|off>` is the scriptable equivalent for durable resource toggles. The isolated UI child prevents Pi's config exit behavior from terminating an embedding host. Official and private Feishu Skills never scan ordinary Pi, `.pi`, `.agents`, Codex, or Claude skill roots. Before installing a third-party Skill, `/find-skill` displays its declared license (or clearly says it is missing); that declaration is not legal clearance for the Skill or any third-party material it references, so review it manually.
 
 ## Lark Identity and High-risk Approval
 

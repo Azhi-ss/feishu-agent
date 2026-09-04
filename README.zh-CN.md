@@ -21,6 +21,7 @@ Feishu Agent 通过自然语言驱动飞书/Lark 工作，底层是 28 个官方
 - **操作多维表格 Base**——在飞书多维表格里建表、字段、记录、视图和仪表盘（`lark-base`）。
 - **跨会话记忆**——基于 Mem0 的项目级长期记忆；密钥与原始工具输出不进入捕获。
 - **编写自己的技能**——把可复用的飞书流程沉淀为私有技能（`feishu-skill-maker`）。
+- **写出可读、可渲染的技术笔记**——使用内置的 LaTeX/XML 规范和工艺进展汇报模板。
 - **用包扩展能力**——通过 Pi 兼容扩展接入 MCP 服务、联网检索和子代理。
 
 高风险操作（删除、撤回、`/share`）需要显式一次性审批；模糊或链式的破坏性命令会被拦截。
@@ -53,7 +54,7 @@ npm link          # 得到 `feishu` 命令（或直接用 node dist/src/cli.js �
 MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
 ```
 
-初始化会在 `~/.feishu-agent/` 下创建私有状态；首次初始化需要显式选择一个已认证的飞书模型；保存一个仅 Feishu 使用的思考等级偏好；验证 Mem0 连通性但不打印密钥；安装未加修改的 Mem0 包；同步官方 `lark-cli` Skills；并在所选 profile 下运行 `lark-cli doctor`。重复运行只补齐缺失状态，不会覆盖身份、模型或自定义 `SYSTEM.md`。需要显式替换时使用 `--reset-identity`、`--reset-model`、`--reset-system`。
+初始化会在 `~/.feishu-agent/` 下创建私有状态和 4 个内置 Feishu Skills；首次初始化需要显式选择一个已认证的飞书模型；保存一个仅 Feishu 使用的思考等级偏好；验证 Mem0 连通性但不打印密钥；安装未加修改的 Mem0 包；同步官方 `lark-cli` Skills；并在所选 profile 下运行 `lark-cli doctor`。重复运行只补齐缺失状态，不会覆盖身份、模型、自定义 `SYSTEM.md` 或已经编辑过的 Skill。需要显式替换时使用 `--reset-identity`、`--reset-model`、`--reset-system`。
 
 ## 运行
 
@@ -66,6 +67,8 @@ feishu --session <id>     # 精确恢复当前 Feishu Project 中的某个会话
 feishu --lark-profile finance -p "任务"
 ```
 
+交互式会话中可用 `/find-skill <关键词>` 搜索公开 Skill 目录；选中后会先显示来源、安装量、许可证和目标路径，再确认是否安装。也可用 `/find-skill install <owner/repo@skill-name>` 直接指定结果。安装只写入 `~/.feishu-agent/skills/`，不会调用真实 HOME 下的普通 Pi 全局安装；Print 模式只搜索，不等待安装确认。
+
 交互式正常退出时，会把 Pi 的通用恢复提示改写为 `To resume this Feishu session: feishu --session <id>`；复制该命令即可精确恢复对应会话。最新会话用 `feishu -c`，手动选择用 `feishu -r`。如果 `feishu` 不在 PATH 中，可用 `FEISHU_RESUME_COMMAND` 指定完整可执行路径。不要用普通 `pi --session-dir ... --session ...` 恢复 Feishu 会话——那会绕过 Feishu Runtime 边界。
 
 Feishu Runtime 会关闭 Pi 内置的启动期网络检查，因此你永远不会看到 Pi 的 `pi update` 版本提示或 `pi update --extensions` 包更新提示：升级 Pi 或扩展是独立、有意的外部操作。
@@ -76,13 +79,16 @@ Feishu Runtime 会关闭 Pi 内置的启动期网络检查，因此你永远不�
 
 ### 默认（开箱即得）
 
-`feishu init` 搭建的是最小运行时。预装内容只有：
+`feishu init` 搭建的是最小运行时，并默认写入 4 个私有 Feishu Skill。除此之外预装内容只有：
 
 | 能力 | 来源 | 说明 |
 |---|---|---|
 | 长期记忆 | `@mem0/pi-agent-plugin`（钉版本，由 `feishu init` 自动安装） | 按 Project 语义化捕获用户/助手文本；`MEM0_API_KEY` 只走环境变量 |
 | 核心策略守卫 | 内置（隐藏的 `feishu-core-policy` 扩展） | 高危 `lark-cli --yes` 审批守卫；拦截 `/share` `/import` `/login` `/logout` |
 | Skill 编写引导 | 内置 `feishu-skill-maker` skill | 创建新 Feishu Skill 的规范指引 |
+| Skill 搜索与私有安装 | 内置 `/find-skill` 命令与 `feishu-find-skill` skill | 复用 `skills.sh` 搜索和 `npx skills` staging；最终只写入 `~/.feishu-agent/skills/`，不污染 `~/.agents/skills` 或 `~/.pi/agent/skills` |
+| 技术笔记公式渲染 | 内置 `feishu-latex-rendering` skill | Markdown/LaTeX 转飞书 XML、嵌套规则、转义检查和转换示例 |
+| 工艺进展汇报工作流 | 内置 `process-optimization-biweekly` skill | 已脱敏的可复用信息采集、生命周期写作和飞书文档更新模板 |
 | 官方飞书 Skills | 本地 `lark-cli` 的只读缓存（28 个：lark-im、lark-doc、lark-calendar……） | 按 CLI 版本作 key，惰性同步；用 `feishu skills sync` 刷新 |
 | 核心工具 | `read` `edit` `write` `bash` `grep` `find` `ls` | 第三方包无法替换这些名字 |
 
@@ -113,7 +119,7 @@ feishu skills sync
 
 不建议用于 Feishu：`@oh-my-pi/*` 生态的包——它们面向的是另一个 `oh-my-pi`/`omp` agent，而非 `pi-coding-agent`，与本 runtime 不兼容。
 
-全局包位于 `~/.feishu-agent/`；项目包位于 `<git 根目录>/.feishu-agent/`。清单中的 Extensions、Skills、Prompts、Themes 按 Pi 包过滤语义加载：省略类型则全加载，`[]` 表示不加载，glob 排除可收窄，精确 `+path`/`-path` 强制包含/排除。`feishu config` 打开 Feishu 全局设置，`feishu config -l` 打开项目 Feishu 设置；`feishu config [ -l ] set <来源> <资源> <on|off>` 是等价的脚本化开关。隔离的 UI 子进程防止 Pi 的 config 退出行为终止宿主。官方和私有 Feishu Skills 绝不扫描普通 Pi、`.pi`、`.agents`、Codex 或 Claude 的 skill 目录。
+全局包位于 `~/.feishu-agent/`；项目包位于 `<git 根目录>/.feishu-agent/`。清单中的 Extensions、Skills、Prompts、Themes 按 Pi 包过滤语义加载：省略类型则全加载，`[]` 表示不加载，glob 排除可收窄，精确 `+path`/`-path` 强制包含/排除。`feishu config` 打开 Feishu 全局设置，`feishu config -l` 打开项目 Feishu 设置；`feishu config [ -l ] set <来源> <资源> <on|off>` 是等价的脚本化开关。隔离的 UI 子进程防止 Pi 的 config 退出行为终止宿主。官方和私有 Feishu Skills 绝不扫描普通 Pi、`.pi`、`.agents`、Codex 或 Claude 的 skill 目录。第三方 Skill 通过 `/find-skill` 安装前会显示声明的许可证（缺失也会明确标注）；许可证声明不等于对 Skill 内容或其引用材料的法律背书，仍需人工审阅。
 
 ## 飞书身份与高危审批
 

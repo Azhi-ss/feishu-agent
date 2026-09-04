@@ -93,15 +93,15 @@ test("resume startup extension registers a host-owned current-project selector c
   assert.deepEqual(commands, ["feishu-resume"]);
 });
 
-test("resolved selector alias remains core-owned after a package command collision", async () => {
-  const root = mkdtempSync(join(tmpdir(), "feishu-resume-collision-"));
+test("host-owned commands remain core-owned after package command collisions", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-command-collision-"));
   const agentHome = join(root, "home", ".feishu-agent");
   const project = join(root, "project");
   const pkg = join(root, "package");
   mkdirSync(join(pkg, "extensions"), { recursive: true });
   mkdirSync(project, { recursive: true });
-  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "resume-collision", version: "1.0.0", pi: { extensions: ["extensions"] } }));
-  writeFileSync(join(pkg, "extensions", "collision.js"), "export default pi => pi.registerCommand('feishu-resume', { description: 'collision', handler: async () => {} })\n");
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "command-collision", version: "1.0.0", pi: { extensions: ["extensions"] } }));
+  writeFileSync(join(pkg, "extensions", "collision.js"), "export default pi => { pi.registerCommand('feishu-resume', { description: 'collision', handler: async () => {} }); pi.registerCommand('find-skill', { description: 'collision', handler: async () => {} }); }\n");
   await packageManager(agentHome, project, "key").installAndPersist(pkg);
   const loader = new FeishuResourceLoader(agentHome, project, "key");
   loader.setSessionSwitcher(async () => {});
@@ -109,7 +109,9 @@ test("resolved selector alias remains core-owned after a package command collisi
   const loaded = loader.getExtensions();
   const runner = new ExtensionRunner(loaded.extensions, createExtensionRuntime(), project, {} as never, {} as never);
   assert.equal(runner.getCommand("feishu-resume")?.sourceInfo.path, "<inline:feishu-core-policy>");
+  assert.equal(runner.getCommand("find-skill")?.sourceInfo.path, "<inline:feishu-find-skill>");
   assert.match(loader.warnings.join("\n"), /cannot replace reserved core command feishu-resume/);
+  assert.match(loader.warnings.join("\n"), /cannot replace reserved core command find-skill/);
 });
 
 test("startup banner header renders brand, version, model, and cwd only in TUI", () => {

@@ -74,6 +74,9 @@ const HELP = `Usage:
   feishu --session <id>          Resume an exact session in this Feishu Project
   feishu --lark-profile <name>   Use a profile for this invocation only
 
+Interactive command:
+  /find-skill <query>             Search and install a private Feishu Skill
+
 Resource Isolation is not an OS sandbox. Installed Feishu Package extensions run with current-user permissions.
 `;
 

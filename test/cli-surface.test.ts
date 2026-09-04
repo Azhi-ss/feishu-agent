@@ -32,7 +32,7 @@ function snapshot(root: string): Map<string, Buffer> {
 test("help exposes only the Feishu Agent surface and security boundary", () => {
   const result = run(["--help"]);
   assert.equal(result.status, 0);
-  for (const text of ["feishu -p", "feishu init", "feishu install", "feishu remove", "feishu list", "feishu update", "feishu config", "feishu skills sync", "-c", "-r", "--session", "--lark-profile"]) assert.match(result.stdout, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  for (const text of ["feishu -p", "feishu init", "feishu install", "feishu remove", "feishu list", "feishu update", "feishu config", "feishu skills sync", "/find-skill", "-c", "-r", "--session", "--lark-profile"]) assert.match(result.stdout, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(result.stdout, /not an OS sandbox/i);
   assert.match(result.stdout, /current-user permissions/i);
 });
