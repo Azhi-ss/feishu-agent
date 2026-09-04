@@ -21,6 +21,7 @@ import {
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { withCompatibilityHome } from "./compatibility-home.js";
 import { memoryWarning, redactSecrets } from "./memory-degradation.js";
+import { setMemoryStatus } from "./tui-status.js";
 
 export interface MemoryConfig {
   userId: string;
@@ -43,7 +44,7 @@ export function writeMemoryConfig(agentHome: string, identity: string): string {
 }
 
 interface MemoryClientLike {
-  ping(): Promise<void>;
+  ping(signal?: AbortSignal): Promise<void>;
   add(...args: any[]): Promise<any>;
   search(...args: any[]): Promise<any>;
   getAll(...args: any[]): Promise<any>;
@@ -71,15 +72,37 @@ export interface MemoryRuntime {
   diagnostic: () => string | undefined;
 }
 
-interface DefaultMemoryClientConstructor {
-  new(options: { apiKey: string; host?: string }): MemoryClientLike;
+interface DefaultMemoryClientInstance extends MemoryClientLike {
+  apiKey: string;
+  host: string;
 }
 
-// Mem0 starts an untracked async initializer in its constructor. Override it so startup has only the awaited health ping below.
+interface DefaultMemoryClientConstructor {
+  new(options: { apiKey: string; host?: string }): DefaultMemoryClientInstance;
+}
+
+// mem0ai starts an untracked async initializer in its constructor. Override it
+// so startup creates no network request; health is checked lazily before use.
 const DefaultMemoryClient = class extends (MemoryClient as unknown as DefaultMemoryClientConstructor) {
   _initializeClient(): void {}
+
+  async ping(signal?: AbortSignal): Promise<void> {
+    const response = await fetch(`${this.host}/v1/ping/`, {
+      method: "GET",
+      headers: { Authorization: `Token ${this.apiKey}` },
+      signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    const body = await response.json() as { status?: unknown; message?: unknown; orgId?: string; projectId?: string; userEmail?: string };
+    if (!body || body.status !== "ok") throw new Error(typeof body?.message === "string" ? body.message : "Mem0 ping returned unsuccessful status");
+    const state = this as unknown as { organizationId: string | null; projectId: string | null; telemetryId: string };
+    if (body.orgId) state.organizationId = body.orgId;
+    if (body.projectId) state.projectId = body.projectId;
+    if (body.userEmail) state.telemetryId = body.userEmail;
+    else if (!state.telemetryId) state.telemetryId = "feishu-agent";
+  }
 };
-const createDefaultClient = (apiKey: string) => new DefaultMemoryClient({ apiKey, ...(process.env.MEM0_API_HOST ? { host: process.env.MEM0_API_HOST } : {}) });
+const createDefaultClient = (apiKey: string): MemoryClientLike => new DefaultMemoryClient({ apiKey, ...(process.env.MEM0_API_HOST ? { host: process.env.MEM0_API_HOST } : {}) });
 
 export async function memoryRuntime(
   agentHome: string,
@@ -111,12 +134,26 @@ export async function memoryRuntime(
       }
     });
   } catch (error) { return unavailable("load", error); }
+
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
   try {
+    const pingPromise = client.ping(controller.signal);
     await Promise.race([
-      client.ping(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`health check timed out after ${timeoutMs}ms`)), timeoutMs)),
+      pingPromise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error(`health check timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
     ]);
-  } catch (error) { return unavailable("health", error); }
+  } catch (error) {
+    controller.abort();
+    return unavailable("health", error);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   const pluginConfig: Mem0Config = {
     apiKey: "",
@@ -134,10 +171,12 @@ export async function memoryRuntime(
   let dreamWriteSucceeded = false;
   let dreamChecked = false;
   let notifyWarning: ((message: string) => void) | undefined;
-  const disable = (feature: "load" | "recall" | "capture" | "dream", error: unknown) => {
+  let setStatus: ((degraded: boolean) => void) | undefined;
+  const disable = (feature: "load" | "health" | "recall" | "capture" | "dream", error: unknown) => {
     if (degraded) return;
     degraded = true;
     warning = memoryWarning(feature, error);
+    setStatus?.(true);
     process.stderr.write(`${warning}\n`);
     notifyWarning?.(warning);
   };
@@ -162,8 +201,10 @@ export async function memoryRuntime(
   });
   const extension = (pi: ExtensionAPI) => {
     pi.on("session_start", (_event, ctx) => {
-      notifyWarning = (message) => ctx.ui.notify(message, "warning");
-      if (warning) notifyWarning(warning);
+      notifyWarning = ctx.mode === "tui" ? (message) => ctx.ui.notify(message, "warning") : undefined;
+      setStatus = (isDegraded) => setMemoryStatus(ctx, isDegraded);
+      setStatus?.(degraded);
+      if (warning) notifyWarning?.(warning);
       const file = ctx.sessionManager?.getSessionFile?.();
       scope.runId = file ?? "unknown";
       if (!degraded && pluginConfig.dream.enabled) incrementSessionCount(dreamStateDir, scope.runId);

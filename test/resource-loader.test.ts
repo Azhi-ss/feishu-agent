@@ -43,6 +43,9 @@ test("Feishu loader keeps identity, allowed contexts, package prompts/themes, an
   const { packageManager } = await import("../src/packages.js");
   await packageManager(home, project, "project").installAndPersist(pkg);
 
+  const officialCache = join(home, "official-skills", Buffer.from("lark-cli 1.0.0").toString("base64url"));
+  skill(join(officialCache, "shared"), "shared", "official");
+  writeFileSync(join(officialCache, ".success"), "lark-cli 1.0.0");
   const oldPath = process.env.PATH;
   const oldAgentDir = process.env.PI_AGENT_DIR;
   process.env.PATH = `${bin}${delimiter}${oldPath}`;

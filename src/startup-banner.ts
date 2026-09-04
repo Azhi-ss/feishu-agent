@@ -23,27 +23,37 @@ function shortCwd(): string {
   return cwd;
 }
 
-// 16x8 sample of the supplied 45x42 Feishu icon. G = teal upper wing,
-// B = blue body and lower wing/tail. Keep only the two visible brand colors.
-const BIRD_GRID = [
-  "   GGGGGGG      ",
-  "    GGGGGGG     ",
-  "     GGGGGGBBB  ",
-  " BBB   GGGBBBBB ",
-  " BBBBB BBBBBBB  ",
-  " BBBBBBBBBBBB   ",
-  " BBBBBBBBBBB    ",
-  "  BBBBBBBB      ",
-] as const;
+// Small fixed mark made from single-cell geometric Unicode. It is intentionally
+// an abstraction of the bird, not a coarse raster of the source image.
+type BrandColor = "blue" | "teal";
+type BirdPart = [color: BrandColor, text: string];
+const BIRD_LINES: BirdPart[][] = [
+  [["teal", "   ◢"]],
+  [["blue", " ◢▰◣"]],
+  [["blue", "     "]],
+];
 
-function birdLine(row: string, theme: { fg(c: ThemeColor, t: string): string }): string {
-  let out = "";
-  for (const cell of row) {
-    if (cell === "B") out += theme.fg("accent", "█");
-    else if (cell === "G") out += theme.fg("success", "█");
-    else out += " ";
-  }
-  return out;
+const BRAND_COLORS = {
+  blue: { rgb: [51, 112, 255], ansi256: 27 },
+  teal: { rgb: [0, 214, 185], ansi256: 43 },
+} as const;
+
+type BannerTheme = {
+  fg(c: ThemeColor, t: string): string;
+  getColorMode?: () => string;
+};
+
+function brandFg(color: BrandColor, text: string, theme: BannerTheme): string {
+  if (process.env.NO_COLOR) return text;
+  const { rgb, ansi256 } = BRAND_COLORS[color];
+  const open = theme.getColorMode?.() === "truecolor"
+    ? `\x1b[38;2;${rgb.join(";")}m`
+    : `\x1b[38;5;${ansi256}m`;
+  return `${open}${text}\x1b[39m`;
+}
+
+function birdLine(parts: BirdPart[], theme: BannerTheme): string {
+  return parts.map(([color, text]) => brandFg(color, text, theme)).join("");
 }
 
 export function startupBannerExtension(): ExtensionFactory {
@@ -53,20 +63,22 @@ export function startupBannerExtension(): ExtensionFactory {
       if (ctx.mode !== "tui") return;
       ctx.ui.setHeader((_tui, theme) => ({
         render(_width: number): string[] {
-          const a = (t: string) => theme.fg("accent", t);
-          const muted = (t: string) => theme.fg("muted", t);
-          const dim = (t: string) => theme.fg("dim", t);
+          const paint = (color: ThemeColor, text: string) => process.env.NO_COLOR ? text : theme.fg(color, text);
+          const a = (t: string) => paint("accent", t);
+          const muted = (t: string) => paint("muted", t);
+          const dim = (t: string) => paint("dim", t);
           const model = (ctx as { model?: { id?: string } }).model?.id ?? "";
-          const bird = BIRD_GRID.map((row) => birdLine(row, theme));
+          const bird = BIRD_LINES.map((parts) => birdLine(parts, theme));
           const text = [
             `${a("Feishu Agent")} ${dim(`v${version}`)}`,
             muted(model ? `${model}  ${dim("·")}  ${shortCwd()}` : shortCwd()),
             dim("/ commands · ? help · /quit exit"),
           ];
-          const textStart = Math.floor((bird.length - text.length) / 2);
           return [
             "",
-            ...bird.map((line, i) => `${line}   ${text[i - textStart] ?? ""}`.trimEnd()),
+            `${bird[0]}   ${text[0]}`.trimEnd(),
+            `${bird[1]}   ${text[1]}`.trimEnd(),
+            `${bird[2]}   ${text[2]}`.trimEnd(),
             "",
           ];
         },

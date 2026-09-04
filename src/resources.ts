@@ -14,6 +14,7 @@ import { CORE_TOOLS } from "./policy.js";
 import { settingsManagerFor } from "./settings.js";
 import { corePolicyExtension } from "./core-extension.js";
 import { startupBannerExtension } from "./startup-banner.js";
+import type { SkillsStatus } from "./tui-status.js";
 import { DEFAULT_SYSTEM } from "./init.js";
 
 function read(path: string): string | undefined {
@@ -31,6 +32,7 @@ export class FeishuResourceLoader implements ResourceLoader {
 
   private sessionSwitcher?: (path: string) => Promise<void>;
   private memoryDiagnostic?: () => string | undefined;
+  private skillsStatus = "unavailable" as SkillsStatus;
   private extensionLoader?: DefaultResourceLoader;
   private extensionPathsKey = "";
 
@@ -62,10 +64,14 @@ export class FeishuResourceLoader implements ResourceLoader {
     const selected = new Map<string, Skill>();
     let official: Skill[] = [];
     try {
-      const result = syncOfficialSkills(join(this.agentHome, "official-skills"));
+      const result = await syncOfficialSkills(join(this.agentHome, "official-skills"), false, process.env, { allowSync: false });
       official = result.skills;
+      this.skillsStatus = result.source === "current" ? "ready" : result.source === "fallback" ? "cached" : "unavailable";
       if (result.warning) this.warnings.push(result.warning);
-    } catch (error) { this.warnings.push(`Official Skills unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) {
+      this.skillsStatus = "unavailable";
+      this.warnings.push(`Official Skills unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
     const manager = packageManager(this.agentHome, this.projectRoot, this.projectKey);
     const resolved = await manager.resolve(async () => "skip");
@@ -126,6 +132,7 @@ export class FeishuResourceLoader implements ResourceLoader {
   getThemes() { return this.themes; }
   getAgentsFiles() { return { agentsFiles: this.agentsFiles }; }
   getSystemPrompt() { return this.prompt; }
+  getSkillsStatus() { return this.skillsStatus; }
   getSystemPromptSource() { return undefined; }
   getAppendSystemPrompt() { return []; }
   getAppendSystemPromptSources() { return []; }

@@ -81,9 +81,19 @@ function mount(extension: NonNullable<Awaited<ReturnType<typeof memoryRuntime>>[
     sendMessage,
   } as never);
   const notifications: string[] = [];
-  const ctx = { mode: "tui", ui: { notify: (message: string) => notifications.push(message), confirm: async () => false, select: async () => undefined }, sessionManager: { getSessionFile: () => undefined } };
+  const statusCalls: Array<[string, string | undefined]> = [];
+  const ctx = {
+    mode: "tui",
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      confirm: async () => false,
+      select: async () => undefined,
+      setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+    },
+    sessionManager: { getSessionFile: () => undefined },
+  };
   handlers.get("session_start")?.[0]({}, ctx);
-  return { handlers, commands, tool, notifications, ctx };
+  return { handlers, commands, tool, notifications, statusCalls, ctx };
 }
 
 test("delayed first Mem0 ping cannot outlive a successful startup health check", async () => {
@@ -357,4 +367,48 @@ test("degraded Print still runs core write/Bash and fake lark-cli, mounted TUI w
     for (const path of sessionFiles) assert.doesNotMatch(readFileSync(path, "utf8"), new RegExp(apiKeySentinel), path);
     assert(mem0Payloads.every((payload) => !payload.includes(apiKeySentinel) && !payload.includes(toolOutputSentinel)), "a sentinel reached fake Mem0");
   } finally { await Promise.all([closeServer(server), closeServer(mem0Server)]); }
+});
+
+test("memory status updates dynamically during session upon degradation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-dynamic-status-"));
+  const agent = join(root, ".feishu-agent");
+  writeMemoryConfig(agent, "alice");
+  process.env.MEM0_API_KEY = "status-key";
+  const failingClient = client({
+    search: async () => { throw new Error("recall error"); },
+  });
+  const runtime = await memoryRuntime(agent, "project", () => failingClient);
+  const mounted = mount(runtime.extension!);
+  assert.equal(mounted.statusCalls.find(([k]) => k === "feishu-1-memory")?.[1], "● mem");
+
+  // Degrade via recall error:
+  await mounted.handlers.get("before_agent_start")![0]({ prompt: "search", systemPrompt: "base" }, mounted.ctx);
+  assert.equal(mounted.statusCalls.filter(([k]) => k === "feishu-1-memory").at(-1)?.[1], "○ mem off");
+});
+
+test("timed out health check aborts the in-flight ping and leaves no lingering request", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-abort-"));
+  const agent = join(root, ".feishu-agent");
+  writeMemoryConfig(agent, "alice");
+  process.env.MEM0_API_KEY = "sentinel-key";
+  let aborted = false;
+  let signalReceived = false;
+  const slowClient = {
+    ping: (signal?: AbortSignal) => new Promise<void>((_resolve, reject) => {
+      if (signal) {
+        signalReceived = true;
+        signal.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        });
+      }
+    }),
+    add: async () => [], search: async () => ({ results: [] }), getAll: async () => ({ results: [] }),
+    update: async () => ({}), delete: async () => ({}), deleteAll: async () => ({}),
+  };
+  const runtime = await memoryRuntime(agent, "project", () => slowClient, 50);
+  assert.equal(runtime.extension, undefined);
+  assert.match(runtime.warning!, /health check timed out after 50ms/);
+  assert.equal(signalReceived, true);
+  assert.equal(aborted, true);
 });

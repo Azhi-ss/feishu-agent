@@ -48,60 +48,40 @@ test("core tool_call hook allows destructive --yes within an approving turn and 
   assert.deepEqual({ block: denied.block, terminate: denied.terminate }, { block: true, terminate: true });
   assert.match(denied.reason, /Blocked lark-cli --yes/);
 });
-test("status line chips: model + healthy memory at session start, refreshed on model change; degraded memory warns", async () => {
+test("status line shows only Memory and official Skill readiness, while Pi owns native model/context/footer data", async () => {
   const handlerLists = new Map<string, Function[]>();
-  const piStub = (name: string, handler: Function) => {
-    const list = handlerLists.get(name) ?? [];
-    list.push(handler);
-    handlerLists.set(name, list);
+  const on = (name: string, handler: Function) => handlerLists.set(name, [...(handlerLists.get(name) ?? []), handler]);
+  const calls: Array<[string, string | undefined]> = [];
+  const theme = { fg: (color: string, text: string) => `[${color}]${text}[/${color}]` };
+  const resourceLoader = { getSystemPrompt: () => undefined, getSkillsStatus: () => "ready" as const };
+  corePolicyExtension(undefined, undefined, () => undefined, resourceLoader)({ on, registerCommand: () => {} } as never);
+  const ctx = {
+    mode: "tui",
+    model: { id: "must-not-appear" },
+    ui: { theme, setStatus: (key: string, value: string | undefined) => calls.push([key, value]), getEditorComponent: () => undefined, setEditorComponent: () => {}, notify: () => {} },
   };
-  const calls: string[] = [];
-  const fakeUi = {
-    setStatus: (key: string, value: string) => calls.push(`${key}=${value}`),
-    theme: { fg: (color: string, text: string) => `[${color}]${text}[/${color}]` },
-    notify: () => {},
-    getEditorComponent: () => undefined,
-    setEditorComponent: () => {},
-  };
-  const fakeCtx = { mode: "tui", model: { id: "fake-model" }, ui: fakeUi };
-  corePolicyExtension(undefined, undefined, () => undefined)({
-    on: piStub,
+  await Promise.all(handlerLists.get("session_start")!.map((handler) => handler({}, ctx)));
+  const output = calls.map(([, value]) => value ?? "").join(" ");
+  assert.match(output, /● mem/);
+  assert.match(output, /│ → skills:skills/);
+  assert.doesNotMatch(output, /must-not-appear|context|provider|cwd|thinking|auth status/);
+  assert.equal(handlerLists.has("model_select"), false);
+  assert.equal(handlerLists.has("turn_start"), false);
+
+  const degraded: Array<[string, string | undefined]> = [];
+  const degradedHandlers = new Map<string, Function[]>();
+  corePolicyExtension(undefined, undefined, () => "degraded", { getSystemPrompt: () => undefined, getSkillsStatus: () => "cached" as const })({
+    on: (name: string, handler: Function) => degradedHandlers.set(name, [...(degradedHandlers.get(name) ?? []), handler]),
     registerCommand: () => {},
   } as never);
-  const root = mkdtempSync(join(tmpdir(), "feishu-status-line-"));
-  const bin = join(root, "bin");
-  mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, "lark-cli"), "#!/bin/sh\n[ \"$1 $2\" = \"auth status\" ] && echo '{\"defaultAs\": \"bot\"}' || exit 0\n", { mode: 0o755 });
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${bin}:${oldPath}`;
-  await Promise.all(handlerLists.get("session_start")!.map((h) => h({}, fakeCtx)));
-  await new Promise((resolve) => setImmediate(resolve));
-  process.env.PATH = oldPath;
-  const healthy = calls.at(-1)!;
-  assert.match(healthy, /\[accent\]◆ fake-model/);
-  assert.match(healthy, /\[success\]● mem/);
-  assert.doesNotMatch(healthy, /mem off/);
-  assert.match(healthy, /lark:bot/);
+  const degradedCtx = { mode: "tui", ui: { theme, setStatus: (key: string, value: string | undefined) => degraded.push([key, value]), getEditorComponent: () => undefined, setEditorComponent: () => {}, notify: () => {} } };
+  await Promise.all(degradedHandlers.get("session_start")!.map((handler) => handler({}, degradedCtx)));
+  assert.match(degraded.map(([, value]) => value ?? "").join(" "), /○ mem off/);
+  assert.match(degraded.map(([, value]) => value ?? "").join(" "), /skills:cached/);
 
-  const changedCalls: string[] = [];
-  const changedCtx = { mode: "tui", model: { id: "other-model" }, ui: { ...fakeUi, setStatus: (_k: string, v: string) => changedCalls.push(v) } };
-  await Promise.all(handlerLists.get("model_select")!.map((h) => h({ model: { id: "other-model" } }, changedCtx)));
-  assert.match(changedCalls.at(-1)!, /other-model/);
-
-  const degradedLists = new Map<string, Function[]>();
-  const degradedCalls: string[] = [];
-  corePolicyExtension(undefined, undefined, () => "Memory degraded")({
-    on: (name: string, handler: Function) => { const list = degradedLists.get(name) ?? []; list.push(handler); degradedLists.set(name, list); },
-    registerCommand: () => {},
-  } as never);
-  await Promise.all(degradedLists.get("session_start")!.map((h) => h({}, { mode: "tui", model: { id: "m" }, ui: { setStatus: (_k: string, v: string) => degradedCalls.push(v), theme: fakeUi.theme, notify: () => {}, getEditorComponent: () => undefined, setEditorComponent: () => {} } })));
-  assert.match(degradedCalls.at(-1)!, /\[warning\]○ mem off/);
-
-  // Print mode never sets footer status.
-  const printCalls: string[] = [];
-  await Promise.all(handlerLists.get("session_start")!.map((h) =>
-    h({}, { mode: "print", model: { id: "m" }, ui: { setStatus: (_k: string, v: string) => printCalls.push(v), theme: fakeUi.theme, notify: () => {}, getEditorComponent: () => undefined, setEditorComponent: () => {} } })));
-  assert.deepEqual(printCalls, []);
+  const print: Array<[string, string | undefined]> = [];
+  await Promise.all(handlerLists.get("session_start")!.map((handler) => handler({}, { mode: "print", ui: { setStatus: (key: string, value: string | undefined) => print.push([key, value]) } })));
+  assert.deepEqual(print, []);
 });
 
 test("resume startup extension registers a host-owned current-project selector command", () => {
@@ -149,10 +129,54 @@ test("startup banner header renders brand, version, model, and cwd only in TUI",
   assert.match(output, /v0\.1\.0/);
   assert.match(output, /gpt-test/);
   assert.match(output, /\/ commands/);
-  assert.ok(output.split("\n").filter((line) => line.includes("█")).length >= 7);
-  assert.deepEqual([...usedColors].sort(), ["accent", "dim", "muted", "success"]);
+  assert.deepEqual([...usedColors].sort(), ["accent", "dim", "muted"]);
 
   let printSet = false;
   handlers.get("session_start")!({}, { mode: "print", ui: { setHeader: () => { printSet = true; } } });
   assert.equal(printSet, false);
+});
+
+test("skills status reflects dynamic resource loader status across reload", async () => {
+  let currentStatus: "cached" | "ready" | "unavailable" = "cached";
+  const loader = { getSystemPrompt: () => undefined, getSkillsStatus: () => currentStatus };
+  const handlerLists = new Map<string, Function[]>();
+  const on = (name: string, handler: Function) => handlerLists.set(name, [...(handlerLists.get(name) ?? []), handler]);
+  const calls: Array<[string, string | undefined]> = [];
+  const theme = { fg: (_c: string, text: string) => text };
+  corePolicyExtension(undefined, undefined, () => undefined, loader)({ on, registerCommand: () => {} } as never);
+  const ctx = {
+    mode: "tui",
+    ui: { theme, setStatus: (key: string, value: string | undefined) => calls.push([key, value]), getEditorComponent: () => undefined, setEditorComponent: () => {}, notify: () => {} },
+  };
+  await Promise.all(handlerLists.get("session_start")!.map((handler) => handler({ type: "session_start", reason: "startup" }, ctx)));
+  assert.match(calls.find(([k]) => k === "feishu-2-skills")![1]!, /skills:cached/);
+
+  // Dynamic reload updates the loader state:
+  currentStatus = "ready";
+  calls.length = 0;
+  await Promise.all(handlerLists.get("session_start")!.map((handler) => handler({ type: "session_start", reason: "reload" }, ctx)));
+  assert.match(calls.find(([k]) => k === "feishu-2-skills")![1]!, /skills:skills/);
+});
+
+test("startup banner respects NO_COLOR", () => {
+  const handlers = new Map<string, Function>();
+  startupBannerExtension()({ on: (n: string, h: Function) => handlers.set(n, h), registerCommand: () => {} } as never);
+  let factory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+  const theme = { fg: (color: string, text: string) => `\x1b[31m${text}\x1b[0m` };
+  handlers.get("session_start")!({}, {
+    mode: "tui",
+    model: { id: "gpt-test" },
+    ui: { setHeader: (f: typeof factory) => { factory = f; } },
+  });
+  assert.ok(factory);
+  const oldNoColor = process.env.NO_COLOR;
+  try {
+    process.env.NO_COLOR = "1";
+    const plain = factory!(null, theme).render(120).join("\n");
+    assert.doesNotMatch(plain, /\x1b\[/);
+    assert.match(plain, /Feishu Agent/);
+  } finally {
+    if (oldNoColor === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = oldNoColor;
+  }
 });

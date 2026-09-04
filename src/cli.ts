@@ -211,7 +211,7 @@ else {
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source === MEM0_PACKAGE && entry.installedPath)) {
       await manager.installAndPersist(MEM0_PACKAGE);
     }
-    const skills = syncOfficialSkills(join(agentHome, "official-skills"));
+    const skills = await syncOfficialSkills(join(agentHome, "official-skills"));
     if (skills.warning) {
       if (!existsSync(join(skills.cacheDir, ".success"))) fail(skills.warning);
       process.stderr.write(`Startup Warning: ${skills.warning}\n`);
@@ -221,7 +221,7 @@ else {
   else if (args[0] === "skills" && args[1] === "sync") {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
     try {
-      const result = syncOfficialSkills(join(agentHome, "official-skills"), true);
+      const result = await syncOfficialSkills(join(agentHome, "official-skills"), true);
       process.stdout.write(`Synchronized official Skills for ${result.version}.\n`);
     } catch (error) {
       fail(`Official Skill synchronization failed: ${error instanceof Error ? error.message : String(error)}`);

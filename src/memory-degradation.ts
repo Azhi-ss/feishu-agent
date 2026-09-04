@@ -5,5 +5,5 @@ export function redactSecrets(value: string): string {
 
 export function memoryWarning(feature: "load" | "health" | "recall" | "capture" | "dream", error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return `Startup Warning: Long-term Memory ${feature} unavailable for this session: ${redactSecrets(message)}`;
+  return `${feature === "health" ? "Startup Warning" : "Warning"}: Long-term Memory ${feature} unavailable for this session: ${redactSecrets(message)}`;
 }
