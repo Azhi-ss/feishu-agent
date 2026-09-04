@@ -29,7 +29,7 @@ export function setMemoryStatus(ctx: ExtensionContext, degraded: boolean): void 
 export function setSkillsStatus(ctx: ExtensionContext, status: SkillsStatus): void {
   const ui = uiFor(ctx);
   if (!ui?.setStatus) return;
-  const label = status === "ready" ? "skills" : status === "cached" ? "cached" : "off";
+  const label = status === "ready" ? "ready" : status === "cached" ? "cached" : "off";
   const color = status === "ready" ? "success" : status === "cached" ? "muted" : "warning";
   ui.setStatus(SKILLS_STATUS_KEY, paint(ui, color, `│ → skills:${label}`));
 }

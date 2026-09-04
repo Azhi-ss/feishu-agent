@@ -63,7 +63,7 @@ test("status line shows only Memory and official Skill readiness, while Pi owns 
   await Promise.all(handlerLists.get("session_start")!.map((handler) => handler({}, ctx)));
   const output = calls.map(([, value]) => value ?? "").join(" ");
   assert.match(output, /● mem/);
-  assert.match(output, /│ → skills:skills/);
+  assert.match(output, /│ → skills:ready/);
   assert.doesNotMatch(output, /must-not-appear|context|provider|cwd|thinking|auth status/);
   assert.equal(handlerLists.has("model_select"), false);
   assert.equal(handlerLists.has("turn_start"), false);
@@ -155,7 +155,7 @@ test("skills status reflects dynamic resource loader status across reload", asyn
   currentStatus = "ready";
   calls.length = 0;
   await Promise.all(handlerLists.get("session_start")!.map((handler) => handler({ type: "session_start", reason: "reload" }, ctx)));
-  assert.match(calls.find(([k]) => k === "feishu-2-skills")![1]!, /skills:skills/);
+  assert.match(calls.find(([k]) => k === "feishu-2-skills")![1]!, /skills:ready/);
 });
 
 test("startup banner respects NO_COLOR", () => {
