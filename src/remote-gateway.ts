@@ -21,6 +21,12 @@ export interface RemoteInboundEvent {
 export interface RemoteGateway {
   start(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void): Promise<void>;
   sendMessage(chatId: string, text: string): Promise<void>;
+  /** Open a streaming card in the chat; resolves with the card id. */
+  openStreamCard(chatId: string): Promise<string>;
+  /** Append a complete-content snapshot. sequence is monotonic per card; uuid unique per write. */
+  appendStreamText(cardId: string, text: string, sequence: number, uuid: string): Promise<void>;
+  /** Finalize the card with the complete reply (one envelope; the bridge shards over-long finals). */
+  closeStreamCard(cardId: string, finalText: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -111,6 +117,36 @@ export class LoopbackGateway implements RemoteGateway {
       body: JSON.stringify({ chatId, text }),
     });
     if (!response.ok) throw new Error(`loopback send failed: HTTP ${response.status}`);
+  }
+
+  async openStreamCard(chatId: string): Promise<string> {
+    const response = await fetch(`${this.baseUrl}/open-stream-card`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chatId }),
+    });
+    if (!response.ok) throw new Error(`loopback card open failed: HTTP ${response.status}`);
+    const data = (await response.json()) as { cardId?: string };
+    if (!data.cardId) throw new Error("loopback card open failed: no card id");
+    return data.cardId;
+  }
+
+  async appendStreamText(cardId: string, text: string, sequence: number, uuid: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/append-stream-text`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cardId, text, sequence, uuid }),
+    });
+    if (!response.ok) throw new Error(`loopback card append failed: HTTP ${response.status}`);
+  }
+
+  async closeStreamCard(cardId: string, finalText: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/close-stream-card`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cardId, text: finalText }),
+    });
+    if (!response.ok) throw new Error(`loopback card close failed: HTTP ${response.status}`);
   }
 
   async close(): Promise<void> {

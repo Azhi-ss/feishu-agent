@@ -3,7 +3,10 @@
 // /remote start or FEISHU_REMOTE=1, so the offline-startup invariant holds.
 // Inbound owner text is injected with pi.sendUserMessage; turn ownership is an
 // active-turn flag plus a FIFO follow-up queue drained one item per turn end
-// (which structurally avoids Pi's "agent already processing" error).
+// (which structurally avoids Pi's "agent already processing" error). Each
+// phone-triggered turn opens ONE Feishu streaming card; assistant text streams
+// into it in coalesced segments and the card is finalized with the complete
+// reply (sharded when over-long). Reasoning/thinking text never reaches the card.
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import {
   authorizeInbound,
@@ -16,6 +19,7 @@ import {
   type RemoteGateway,
   type RemoteInboundEvent,
 } from "./remote-gateway.js";
+import { shardText, StreamCardSession, visibleAssistantText } from "./stream-card.js";
 import { setRemoteStatus, type RemoteStatus } from "./tui-status.js";
 
 const MISSING_SECRET = `Remote bridge needs an app secret: set ${REMOTE_SECRET_ENV} to the existing bot app's secret (view it in the Feishu developer console — do not reset it), then run /remote start.`;
@@ -25,14 +29,15 @@ interface QueuedMessage {
   text: string;
 }
 
+interface ActiveCard {
+  session: StreamCardSession | undefined;
+  open: Promise<StreamCardSession | undefined>;
+}
+
 function lastAssistantText(messages: Array<{ role?: string; content?: unknown }>): string | undefined {
   const last = [...messages].reverse().find((message) => message.role === "assistant");
-  if (!last || !Array.isArray(last.content)) return undefined;
-  const text = last.content
-    .filter((part): part is { type: string; text?: string } => (part as { type?: string }).type === "text")
-    .map((part) => part.text ?? "")
-    .join("")
-    .trim();
+  if (!last) return undefined;
+  const text = visibleAssistantText(last.content);
   return text || undefined;
 }
 
@@ -44,10 +49,12 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let credentials: RemoteCredentials | undefined;
     let secret: string | undefined; // in memory only; dropped on stop
     let activeTurn: { chatId: string } | undefined;
+    let activeCard: ActiveCard | undefined;
     const queue: QueuedMessage[] = [];
     let latestCtx: ExtensionContext | undefined;
     let lastError: string | undefined;
     let reportedPollError = false;
+    let reportedCardError = false;
     const dedup = new MessageDedup();
 
     function paint(ctx: ExtensionContext | undefined): void {
@@ -72,6 +79,35 @@ export function remoteBridgeExtension(): ExtensionFactory {
       return activeTurn !== undefined || !(latestCtx?.isIdle() ?? true);
     }
 
+    function beginCard(chatId: string): ActiveCard | undefined {
+      const gw = gateway;
+      if (!gw) return undefined;
+      const card: ActiveCard = { session: undefined, open: Promise.resolve(undefined) };
+      card.open = gw.openStreamCard(chatId).then(
+        (cardId) => {
+          const session = new StreamCardSession(
+            cardId,
+            {
+              append: (id, text, sequence, uuid) => gw.appendStreamText(id, text, sequence, uuid),
+              closeCard: (id, text) => gw.closeStreamCard(id, text),
+            },
+            (error) => {
+              if (reportedCardError) return;
+              reportedCardError = true;
+              notify(latestCtx, `Remote bridge card write failed (the final reply is still delivered): ${error instanceof Error ? error.message : String(error)}`, "warning");
+            },
+          );
+          card.session = session;
+          return session;
+        },
+        (error) => {
+          notify(latestCtx, `Remote bridge could not open the streaming card (the reply will arrive as a plain message): ${error instanceof Error ? error.message : String(error)}`, "warning");
+          return undefined;
+        },
+      );
+      return card;
+    }
+
     function submit(next: QueuedMessage, deliverAs?: "followUp"): void {
       activeTurn = { chatId: next.chatId };
       try {
@@ -80,7 +116,9 @@ export function remoteBridgeExtension(): ExtensionFactory {
         activeTurn = undefined;
         setState("error", latestCtx, `Remote bridge could not start the turn: ${error instanceof Error ? error.message : String(error)}`);
         notify(latestCtx, lastError!, "error");
+        return;
       }
+      activeCard = beginCard(next.chatId);
     }
 
     function deliver(next: QueuedMessage): void {
@@ -145,12 +183,19 @@ export function remoteBridgeExtension(): ExtensionFactory {
 
     async function stop(paintCtx?: ExtensionContext): Promise<void> {
       const candidate = gateway;
+      const card = activeCard;
       gateway = undefined;
       transport = undefined;
       activeTurn = undefined;
+      activeCard = undefined;
       queue.length = 0;
       secret = undefined;
       reportedPollError = false;
+      reportedCardError = false;
+      // Close any in-flight streaming card before dropping the gateway so the
+      // phone never watches a card hang in streaming mode.
+      const session = await card?.open;
+      if (session) await session.finalize("").catch(() => {});
       await candidate?.close();
       // No paint on session_shutdown: the captured ctx is stale and the UI is going away.
       status = "off";
@@ -167,21 +212,40 @@ export function remoteBridgeExtension(): ExtensionFactory {
       void stop();
     });
 
+    pi.on("message_update", (event) => {
+      const card = activeCard;
+      if (!card?.session) return;
+      if ((event.message as { role?: string }).role !== "assistant") return;
+      card.session.update(visibleAssistantText((event.message as { content?: unknown }).content));
+    });
+
     pi.on("agent_end", async (event) => {
       const turn = activeTurn;
-      if (turn) {
-        activeTurn = undefined;
-        const reply = lastAssistantText(event.messages);
-        // Drain the queue BEFORE awaiting the outbound send so activeTurn is never
-        // undefined while turns can still start: an inbound message arriving during
-        // the send would otherwise start an untracked turn and steal the next reply.
+      if (!turn) {
         const next = queue.shift();
         if (next) submit(next, "followUp");
-        if (gateway && reply) await gateway.sendMessage(turn.chatId, reply).catch(() => { /* outbound failures never abort the turn */ });
-      } else {
-        const next = queue.shift();
-        if (next) submit(next, "followUp");
+        return;
       }
+      activeTurn = undefined;
+      const card = activeCard;
+      activeCard = undefined;
+      const reply = lastAssistantText(event.messages) ?? "";
+      // Drain the queue BEFORE awaiting the outbound send so activeTurn is never
+      // undefined while turns can still start: an inbound message arriving during
+      // the card finalize would otherwise start an untracked turn and steal the next reply.
+      const next = queue.shift();
+      if (next) submit(next, "followUp");
+      if (!card) return;
+      const session = await card.open;
+      if (!session) {
+        // Card open failed: the plain-message path still delivers the answer.
+        if (gateway && reply) await gateway.sendMessage(turn.chatId, reply).catch(() => { /* outbound failures never abort the turn */ });
+        return;
+      }
+      const shards = shardText(reply);
+      await session.finalize(shards[0]);
+      const gw = gateway;
+      for (const shard of shards.slice(1)) await gw?.sendMessage(turn.chatId, shard).catch(() => {});
     });
 
     pi.registerCommand("remote", {

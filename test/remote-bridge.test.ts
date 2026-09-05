@@ -7,6 +7,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { projectKeyFor } from "../src/policy.js";
+import { STREAM_CARD_TEXT_LIMIT_BYTES } from "../src/stream-card.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -39,6 +40,11 @@ interface FeishuStats {
   pollTimes: number[];
   sends: Array<{ chatId: string; text: string }>;
   closes: number[];
+  cards: {
+    opened: Array<{ chatId: string; cardId: string; at: number }>;
+    appends: Array<{ cardId: string; text: string; sequence: number; uuid: string; at: number }>;
+    closes: Array<{ cardId: string; text: string; at: number }>;
+  };
 }
 
 async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent }>): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats> }> {
@@ -47,6 +53,9 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
     waiters: [] as Array<(events: InboundEvent[]) => void>,
     sends: [] as Array<{ chatId: string; text: string }>,
     closes: [] as number[],
+    opened: [] as Array<{ chatId: string; cardId: string; at: number }>,
+    appends: [] as Array<{ cardId: string; text: string; sequence: number; uuid: string; at: number }>,
+    cardCloses: [] as Array<{ cardId: string; text: string; at: number }>,
     polls: 0,
     pollTimes: [] as number[],
     scripted: false,
@@ -81,8 +90,25 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
     request.on("data", (chunk) => body += chunk);
     request.on("end", () => {
       if (request.url === "/send-message") { state.sends.push(JSON.parse(body)); response.writeHead(200).end(); }
+      else if (request.url === "/open-stream-card") {
+        const { chatId } = JSON.parse(body) as { chatId: string };
+        const cardId = `card-${state.opened.length + 1}`;
+        state.opened.push({ chatId, cardId, at: Date.now() });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ cardId }));
+      }
+      else if (request.url === "/append-stream-text") {
+        const { cardId, text, sequence, uuid } = JSON.parse(body) as { cardId: string; text: string; sequence: number; uuid: string };
+        state.appends.push({ cardId, text, sequence, uuid, at: Date.now() });
+        response.writeHead(200).end();
+      }
+      else if (request.url === "/close-stream-card") {
+        const { cardId, text } = JSON.parse(body) as { cardId: string; text: string };
+        state.cardCloses.push({ cardId, text, at: Date.now() });
+        response.writeHead(200).end();
+      }
       else if (request.url === "/disconnect") { state.closes.push(Date.now()); response.writeHead(200).end(); }
-      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, sends: state.sends, closes: state.closes })); }
+      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, sends: state.sends, closes: state.closes, cards: { opened: state.opened, appends: state.appends, closes: state.cardCloses } })); }
       else response.writeHead(404).end();
     });
   });
@@ -99,10 +125,24 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
   };
 }
 
-type ModelResponder = (lastUserText: string) => { delayMs?: number; sse: string };
+interface ModelPlan {
+  delayMs?: number;
+  sse?: string;
+  stream?: Array<{ line: string; delayMs: number }>;
+}
+
+type ModelResponder = (lastUserText: string) => ModelPlan;
 
 function sse(content: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`;
+}
+
+function sseDelta(delta: Record<string, unknown>): string {
+  return `data: ${JSON.stringify({ choices: [{ delta, finish_reason: null }] })}\n\n`;
+}
+
+function sseDone(): string {
+  return `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`;
 }
 
 async function modelServer(responder: ModelResponder): Promise<{ server: Server; modelUrl: string }> {
@@ -122,7 +162,21 @@ async function modelServer(responder: ModelResponder): Promise<{ server: Server;
         lastUser = userTexts[userTexts.length - 1] ?? "";
       } catch { /* not a chat completion */ }
       const plan = responder(lastUser);
-      const write = () => { response.writeHead(200, { "content-type": "text/event-stream" }); response.end(plan.sse); };
+      const write = () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        if (plan.stream) {
+          let index = 0;
+          const step = () => {
+            if (index >= plan.stream!.length) return response.end();
+            response.write(plan.stream![index].line);
+            setTimeout(step, plan.stream![index].delayMs).unref();
+            index += 1;
+          };
+          step();
+        } else {
+          response.end(plan.sse ?? "");
+        }
+      };
       if (plan.delayMs) setTimeout(write, plan.delayMs).unref();
       else write();
     });
@@ -185,7 +239,7 @@ test("default startup opens no gateway connection; /remote status shows off", as
   }
 });
 
-test("owner P2P message drives the session and gets one plain-text reply; strangers, groups and duplicates are ignored; stop/reload tear down", async () => {
+test("owner P2P message drives the session and gets one streaming card with the reply; strangers, groups and duplicates are ignored; stop/reload tear down", async () => {
   const f = await fixture(echoModel, [
     { delayMs: 400, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "msg-1", messageType: "text", text: "phone-message-1" } },
     { delayMs: 900, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "msg-1", messageType: "text", text: "phone-message-1" } },
@@ -209,8 +263,10 @@ test("owner P2P message drives the session and gets one plain-text reply; strang
     assert.doesNotMatch(result.output, /intruder-message|group-noise/);
     assert.doesNotMatch(result.output, /Agent is already processing/);
     const stats = await f.feishu.stats();
-    assert.equal(stats.sends.length, 1, `exactly one reply: ${JSON.stringify(stats.sends)}`);
-    assert.deepEqual(stats.sends, [{ chatId: "oc_phone", text: "PTY-PONG:phone-message-1" }]);
+    assert.equal(stats.cards.opened.length, 1, JSON.stringify(stats.cards.opened));
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0].text, "PTY-PONG:phone-message-1", "final close delivers the complete reply");
+    assert.equal(stats.sends.length, 0, "the reply rides on the card, not a plain message");
     assert(stats.closes.length >= 1, "gateway disconnect is recorded on stop");
     assert(stats.pollTimes.every((time) => time <= stats.closes[0]), "no polling after teardown");
 
@@ -263,9 +319,11 @@ test("FEISHU_REMOTE=1 autostarts and a message arriving during a busy turn is qu
     assert.doesNotMatch(result.output, /Agent is already processing/);
     assert.doesNotMatch(result.output, new RegExp(SECRET));
     const stats = await f.feishu.stats();
-    assert.equal(stats.sends.length, 2, JSON.stringify(stats.sends));
-    assert.match(stats.sends[0].text, /SLOW-phone-1/);
-    assert.match(stats.sends[1].text, /followup-2/);
+    assert.equal(stats.cards.opened.length, 2, JSON.stringify(stats.cards.opened));
+    const replies = stats.cards.closes.map((card) => card.text);
+    assert.equal(replies.length, 2, JSON.stringify(stats.cards.closes));
+    assert.match(replies[0], /SLOW-phone-1/);
+    assert.match(replies[1], /followup-2/);
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);
@@ -294,8 +352,89 @@ test("High-risk Approval guard still applies to phone-originated turns", async (
     const calls = existsSync(f.larkTrace) ? readFileSync(f.larkTrace, "utf8").trim().split("\n").filter((line) => !line.endsWith("--version") && !line.endsWith("skills list --json")) : [];
     assert.deepEqual(calls, [], "blocked command must never reach lark-cli");
     const stats = await f.feishu.stats();
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0].text, "GUARD-DONE");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a phone turn streams assistant text into ONE card in segments, finalizes it with the complete reply, and excludes reasoning", async () => {
+  const textChunks: string[] = [];
+  for (let i = 0; i < 24; i++) textChunks.push(`stream-chunk-${i}-`);
+  const reply = textChunks.join("") + "。";
+  const stream: Array<{ line: string; delayMs: number }> = [];
+  for (let i = 0; i < textChunks.length; i++) {
+    if (i % 4 === 0) stream.push({ line: sseDelta({ reasoning_content: `THOUGHT-${i}-hidden` }), delayMs: 20 });
+    stream.push({ line: sseDelta({ content: textChunks[i] }), delayMs: 20 });
+  }
+  stream.push({ line: sseDelta({ content: "。" }), delayMs: 10 });
+  stream.push({ line: sseDone(), delayMs: 0 });
+  const streamingModel: ModelResponder = () => ({ stream });
+  const f = await fixture(streamingModel, [
+    { delayMs: 400, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "stream-1", messageType: "text", text: "stream-for-me" } },
+  ]);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "stream-chunk-0-", send: "" },
+      { wait: "stream-chunk-23-。", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened.length, 1, JSON.stringify(stats.cards.opened));
+    assert.equal(stats.cards.opened[0].chatId, "oc_phone");
+    const appends = stats.cards.appends;
+    assert.ok(appends.length >= 2 && appends.length <= 20, `segmented but coalesced arrival: ${appends.length} appends`);
+    for (let i = 0; i < appends.length; i++) {
+      assert.ok(reply.startsWith(appends[i].text), `append ${i} must be a prefix snapshot of the reply: ${JSON.stringify(appends[i].text)}`);
+      assert.equal(appends[i].sequence, i + 1, "monotonic sequence per write");
+      assert.doesNotMatch(appends[i].text, /THOUGHT-/, "reasoning must never reach the card");
+    }
+    assert.equal(new Set(appends.map((append) => append.uuid)).size, appends.length, "unique id per write");
+    for (let i = 1; i < appends.length; i++) {
+      const gap = appends[i].at - appends[i - 1].at;
+      if (gap < 140) {
+        const forced = /[\n。！？!?；;：:]$/.test(appends[i].text) || appends[i].text.length - appends[i - 1].text.length >= 18;
+        assert.ok(forced, `writes ${i - 1}->${i} were ${gap}ms apart without a boundary or delta force`);
+      }
+    }
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0].text, reply, "the final close is authoritative: complete reply");
+    assert.equal(stats.sends.length, 0, "no plain-text fallback when the card works");
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("over-long final replies are delivered completely (sharded), not truncated", async () => {
+  const reply = "LONG-REPLY:" + "A".repeat(30_150) + "LONG-REPLY-END-MARKER";
+  const longModel: ModelResponder = () => ({ sse: sse(reply) });
+  const f = await fixture(longModel, [
+    { delayMs: 400, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "long-1", messageType: "text", text: "long-answer-please" } },
+  ]);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "LONG-REPLY-END-MARKER", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened.length, 1);
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.ok(stats.cards.closes[0].text.length <= STREAM_CARD_TEXT_LIMIT_BYTES, `first shard must fit one card envelope: ${stats.cards.closes[0].text.length}`);
+    const delivered = stats.cards.closes[0].text + stats.sends.map((send) => send.text).join("");
+    assert.equal(delivered, reply, "sharded delivery must reassemble the complete reply");
     assert.equal(stats.sends.length, 1, JSON.stringify(stats.sends));
-    assert.equal(stats.sends[0].text, "GUARD-DONE");
+    assert.ok(Buffer.byteLength(stats.sends[0].text, "utf8") <= STREAM_CARD_TEXT_LIMIT_BYTES);
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);
