@@ -5,3 +5,6 @@ dist/
 .agents/
 .claude/
 skills-lock.json
+
+# reference repositories for dev-time design research
+reference/

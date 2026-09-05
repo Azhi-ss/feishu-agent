@@ -51,3 +51,13 @@ _Avoid_: Mandatory duplicate confirmation, blanket approval, inferred destructiv
 **Feishu Package**:
 An installable Pi-compatible capability enabled for Feishu Agent rather than for other agents on the machine. `feishu install` installs globally under `~/.feishu-agent/` by default; `feishu install -l` installs under the current project's `.feishu-agent/`. A private compatibility workspace lets Pi's package manager retain its `.pi` assumptions without creating or loading the project's real `.pi/` directory. Installing a package authorizes all resource types declared by its manifest, including extensions, skills, prompts, and themes, subject to later filtering through `feishu config`; it does not authorize replacement of reserved core tools, the base identity, or command restrictions.
 _Avoid_: Global plugin, shared extension, ordinary Pi installation, project `.pi` package storage, core-policy override
+
+**Feishu Remote Bridge**:
+An optional, session-bound capability that mirrors the active interactive Feishu Runtime to a mobile Feishu chat over an outbound WebSocket connection without public network exposure. It injects user messages directly into the active session and streams assistant output (via the Feishu Card Kit streaming card, with a transient one-line tool-status strip that is stripped from the final reply) rather than spawning an independent background agent or headless daemon, ensuring single-session consistency, shared Mem0 memory, and turn-scoped high-risk guards. It is strictly owner-only in 1-on-1 private chat (P2P), ignoring group messages and other senders. Activation is explicit via a session command or opt-in configuration, preserving the offline startup invariant.
+_Avoid_: Standalone daemon, multi-session server, independent chat bot, public webhook listener, background agent spawn, split-brain session, group-chat execution, multi-user pairing
+
+**Remote Bridge Credential**:
+The bot credential the in-process bridge uses: it reuses the existing `lark-cli` bot app rather than a separate identity, so no second app or pairing flow is needed. The app id and the owner's `open_id` are read from the on-disk `lark-cli` config; the app secret is held in the OS keychain by `lark-cli` and cannot be read in-process, so the owner supplies it once via an environment variable (like Mem0), never persisted into the Feishu Agent Home. The in-process WebSocket is a separate instance for that app, so a `lark-cli event consume` consumer must not run concurrently or Feishu will load-balance events between them.
+_Avoid_: A second dedicated bridge app, storing the app secret on disk, first-DM pairing, concurrent event-consumer sharing
+
+
