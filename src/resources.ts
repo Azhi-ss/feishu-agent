@@ -15,6 +15,7 @@ import { settingsManagerFor } from "./settings.js";
 import { corePolicyExtension } from "./core-extension.js";
 import { startupBannerExtension } from "./startup-banner.js";
 import { findSkillExtension } from "./find-skill.js";
+import { remoteBridgeExtension } from "./remote-bridge.js";
 import type { SkillsStatus } from "./tui-status.js";
 import { DEFAULT_SYSTEM } from "./init.js";
 
@@ -96,16 +97,18 @@ export class FeishuResourceLoader implements ResourceLoader {
           { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic, this) },
           { name: "feishu-startup-banner", hidden: true, factory: startupBannerExtension() },
           { name: "feishu-find-skill", hidden: true, factory: findSkillExtension(this.agentHome) },
+          { name: "feishu-remote-bridge", hidden: true, factory: remoteBridgeExtension() },
         ],
       });
     }
     await withCompatibilityHome(process.env.HOME!, this.agentHome, () => this.extensionLoader!.reload());
     this.extensions = this.extensionLoader.getExtensions();
     for (const extension of this.extensions.extensions) {
-      if (extension.path === "<inline:feishu-core-policy>" || extension.path === "<inline:feishu-startup-banner>" || extension.path === "<inline:feishu-find-skill>") continue;
+      if (extension.path === "<inline:feishu-core-policy>" || extension.path === "<inline:feishu-startup-banner>" || extension.path === "<inline:feishu-find-skill>" || extension.path === "<inline:feishu-remote-bridge>") continue;
       for (const reserved of CORE_TOOLS) if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);
       if (extension.commands.delete("feishu-resume")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command feishu-resume.`);
       if (extension.commands.delete("find-skill")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command find-skill.`);
+      if (extension.commands.delete("remote")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command remote.`);
     }
 
     const packageResources = new DefaultResourceLoader({
