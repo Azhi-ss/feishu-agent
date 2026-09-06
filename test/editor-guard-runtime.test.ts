@@ -115,6 +115,8 @@ test("host-owned commands remain core-owned after package command collisions", a
 });
 
 test("startup banner header renders brand, version, model, and cwd only in TUI", () => {
+  const previousNoColor = process.env.NO_COLOR;
+  delete process.env.NO_COLOR;
   const handlers = new Map<string, Function>();
   startupBannerExtension()({ on: (n: string, h: Function) => handlers.set(n, h), registerCommand: () => {} } as never);
   let factory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
@@ -136,6 +138,8 @@ test("startup banner header renders brand, version, model, and cwd only in TUI",
   let printSet = false;
   handlers.get("session_start")!({}, { mode: "print", ui: { setHeader: () => { printSet = true; } } });
   assert.equal(printSet, false);
+  if (previousNoColor === undefined) delete process.env.NO_COLOR;
+  else process.env.NO_COLOR = previousNoColor;
 });
 
 test("skills status reflects dynamic resource loader status across reload", async () => {
