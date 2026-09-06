@@ -11,6 +11,8 @@ import {
   REMOTE_LOOPBACK_ENV,
   resolveRemoteCredentials,
   type RemoteInboundEvent,
+  type FeishuGatewaySdk,
+  FeishuGateway,
 } from "../src/remote-gateway.js";
 
 function inbound(overrides: Partial<RemoteInboundEvent>): RemoteInboundEvent {
@@ -87,7 +89,109 @@ test("createGatewayFromEnv selects the loopback gateway only via env injection",
 
   const missing = createGatewayFromEnv({});
   assert.ok("error" in missing);
-  assert.match(missing.error, new RegExp(REMOTE_LOOPBACK_ENV));
+  assert.match(missing.error, /lark-cli credentials/);
+});
+
+test("createGatewayFromEnv selects the production gateway with credentials and secret", () => {
+  const created = createGatewayFromEnv({ FEISHU_REMOTE_APP_SECRET: "secret-not-returned" }, { appId: "cli_app", ownerOpenId: "ou_owner" });
+  assert.ok("gateway" in created);
+  assert.equal(created.transport, "feishu-sdk");
+});
+
+test("FeishuGateway maps WS events and Card Kit operations without exposing the secret", async () => {
+  const calls: Array<{ operation: string; payload?: unknown }> = [];
+  let receivedSecret = "";
+  let handlers: Record<string, (event: unknown) => unknown> = {};
+  let wsOptions: { appId: string; appSecret: string; domain: "feishu" | "lark"; onReconnecting: () => void; onReconnected: () => void } | undefined;
+  const client = {
+    im: { v1: { message: { create: async (payload: unknown) => {
+      calls.push({ operation: "send", payload });
+      return { code: 0, data: { message_id: "om_card-message" } };
+    } } } },
+    cardkit: {
+      v1: {
+        card: {
+          create: async (payload: unknown) => {
+            calls.push({ operation: "card-create", payload });
+            return { code: 0, data: { card_id: "card-1" } };
+          },
+          settings: async (payload: unknown) => {
+            calls.push({ operation: "card-settings", payload });
+            return { code: 0 };
+          },
+        },
+        cardElement: {
+          content: async (payload: unknown) => {
+            calls.push({ operation: "card-content", payload });
+            return { code: 0 };
+          },
+        },
+      },
+    },
+  };
+  const sdk: FeishuGatewaySdk = {
+    createClient: (params) => {
+      receivedSecret = params.appSecret;
+      calls.push({ operation: "client" });
+      return client;
+    },
+    createDispatcher: () => ({ register: (registered) => {
+      handlers = registered;
+      return undefined;
+    } }),
+    createWsClient: (options) => {
+      wsOptions = options;
+      return {
+        start: async () => { options.onReady(); },
+        close: () => calls.push({ operation: "ws-close" }),
+      };
+    },
+  };
+  const gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "lark" }, "secret-must-stay-in-memory", sdk);
+  const received: RemoteInboundEvent[] = [];
+  const errors: Error[] = [];
+  const recovered: true[] = [];
+
+  await gateway.start((event) => received.push(event), (error) => errors.push(error), () => recovered.push(true));
+  assert.equal(wsOptions?.domain, "lark");
+  assert.equal(wsOptions?.appSecret, "secret-must-stay-in-memory");
+  await handlers["im.message.receive_v1"]?.({
+    sender: { sender_id: { open_id: "ou_owner" } },
+    message: { message_id: "om_1", chat_id: "oc_1", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text: "hello from phone" }) },
+  });
+  assert.deepEqual(received, [{ ownerOpenId: "ou_owner", chatId: "oc_1", chatType: "p2p", messageId: "om_1", messageType: "text", text: "hello from phone" }]);
+
+  await gateway.sendMessage("oc_1", "plain reply");
+  const cardId = await gateway.openStreamCard("oc_1");
+  await gateway.setStatusLine(cardId, "🛠️ Running bash");
+  await gateway.appendStreamText(cardId, "partial reply", 1, "uuid-1");
+  await gateway.closeStreamCard(cardId, "complete reply");
+  assert.equal(receivedSecret, "secret-must-stay-in-memory");
+  assert.deepEqual(calls.map(({ operation }) => operation), ["client", "send", "card-create", "send", "card-content", "card-content", "card-content", "card-settings"]);
+  wsOptions?.onReconnecting();
+  wsOptions?.onReconnected();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /reconnect/i);
+  assert.deepEqual(recovered, [true]);
+  await gateway.close();
+  assert.equal(calls.at(-1)?.operation, "ws-close");
+});
+
+test("FeishuGateway rejects a hard initial WS failure without leaking the secret", async () => {
+  const sdk: FeishuGatewaySdk = {
+    createClient: () => ({}) as never,
+    createDispatcher: () => ({ register: () => undefined }),
+    createWsClient: (options) => ({
+      start: async () => { options.onError(new Error("connect failed: secret-must-stay-in-memory")); },
+      close: () => undefined,
+    }),
+  };
+  const gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk);
+  await assert.rejects(gateway.start(() => undefined, () => undefined), (error: Error) => {
+    assert.match(error.message, /connect failed/);
+    assert.doesNotMatch(error.message, /secret-must-stay-in-memory/);
+    return true;
+  });
 });
 
 test("loopback gateway polls events, sends messages, and closes with a recorded disconnect", async () => {

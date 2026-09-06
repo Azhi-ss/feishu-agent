@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.4",
+    "@larksuiteoapi/node-sdk": "1.73.3",
     "@mem0/pi-agent-plugin": "0.1.5",
     "mem0ai": "3.0.8"
   },

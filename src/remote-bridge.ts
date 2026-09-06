@@ -196,7 +196,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
         notify(ctx, MISSING_SECRET, "error");
         return;
       }
-      const created = createGatewayFromEnv();
+      const created = createGatewayFromEnv(process.env, resolved.credentials);
       if ("error" in created) {
         setState("error", ctx, created.error);
         notify(ctx, created.error, "error");
