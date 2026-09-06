@@ -34,6 +34,11 @@ interface ActiveCard {
   open: Promise<StreamCardSession | undefined>;
 }
 
+function isAbortWord(text: string): boolean {
+  const command = text.trim().toLowerCase();
+  return command === "stop" || command === "abort" || command === "/stop" || command === "/abort";
+}
+
 function lastAssistantText(messages: Array<{ role?: string; content?: unknown }>): string | undefined {
   const last = [...messages].reverse().find((message) => message.role === "assistant");
   if (!last) return undefined;
@@ -121,9 +126,24 @@ export function remoteBridgeExtension(): ExtensionFactory {
       activeCard = beginCard(next.chatId);
     }
 
+    function acknowledge(chatId: string, text: string): void {
+      void gateway?.sendMessage(chatId, text).catch(() => { /* acknowledgements are best-effort */ });
+    }
+
+    function abortCurrentTurn(chatId: string): void {
+      acknowledge(chatId, "Remote bridge: stop requested; the current turn will be interrupted.");
+      latestCtx?.abort();
+    }
+
     function deliver(next: QueuedMessage): void {
+      if (isAbortWord(next.text)) {
+        if (busy()) abortCurrentTurn(next.chatId);
+        else acknowledge(next.chatId, "Remote bridge: no turn is running.");
+        return;
+      }
       if (busy()) {
         queue.push(next);
+        acknowledge(next.chatId, `Remote bridge: queued (position ${queue.length}). Send stop to interrupt the current turn.`);
         return;
       }
       submit(next);

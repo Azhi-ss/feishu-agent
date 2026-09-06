@@ -38,7 +38,7 @@ interface InboundEvent {
 interface FeishuStats {
   polls: number;
   pollTimes: number[];
-  sends: Array<{ chatId: string; text: string }>;
+  sends: Array<{ chatId: string; text: string; at: number }>;
   closes: number[];
   cards: {
     opened: Array<{ chatId: string; cardId: string; at: number }>;
@@ -51,7 +51,7 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
   const state = {
     pending: [] as InboundEvent[],
     waiters: [] as Array<(events: InboundEvent[]) => void>,
-    sends: [] as Array<{ chatId: string; text: string }>,
+    sends: [] as Array<{ chatId: string; text: string; at: number }>,
     closes: [] as number[],
     opened: [] as Array<{ chatId: string; cardId: string; at: number }>,
     appends: [] as Array<{ cardId: string; text: string; sequence: number; uuid: string; at: number }>,
@@ -89,7 +89,7 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
     let body = "";
     request.on("data", (chunk) => body += chunk);
     request.on("end", () => {
-      if (request.url === "/send-message") { state.sends.push(JSON.parse(body)); response.writeHead(200).end(); }
+      if (request.url === "/send-message") { state.sends.push({ ...(JSON.parse(body) as { chatId: string; text: string }), at: Date.now() }); response.writeHead(200).end(); }
       else if (request.url === "/open-stream-card") {
         const { chatId } = JSON.parse(body) as { chatId: string };
         const cardId = `card-${state.opened.length + 1}`;
@@ -324,6 +324,50 @@ test("FEISHU_REMOTE=1 autostarts and a message arriving during a busy turn is qu
     assert.equal(replies.length, 2, JSON.stringify(stats.cards.closes));
     assert.match(replies[0], /SLOW-phone-1/);
     assert.match(replies[1], /followup-2/);
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("FEISHU_REMOTE=1 queues busy phone messages with acknowledgements, aborts on stop, and drains the queue in order", async () => {
+  const slowModel: ModelResponder = (lastUser) => ({
+    delayMs: lastUser.includes("SLOW") ? 4000 : 0,
+    sse: sse(`PTY-PONG:${lastUser}`),
+  });
+  const f = await fixture(slowModel, [
+    { delayMs: 400, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "slow-1", messageType: "text", text: "SLOW-phone-1" } },
+    { delayMs: 650, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "fast-2", messageType: "text", text: "followup-2" } },
+    { delayMs: 700, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "fast-3", messageType: "text", text: "followup-3" } },
+    { delayMs: 800, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "stop-4", messageType: "text", text: "stop" } },
+  ]);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "SLOW-phone-1", send: "" },
+      { wait: "PTY-PONG:followup-3", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.doesNotMatch(result.output, /Agent is already processing/);
+    assert.doesNotMatch(result.output, /PTY-PONG:SLOW-phone-1/, "stop must interrupt the slow turn before it replies");
+    const stats = await f.feishu.stats();
+    const acknowledgements = stats.sends.filter((send) => !send.text.startsWith("PTY-PONG:"));
+    const ackTexts = acknowledgements.map((send) => send.text);
+    assert.ok(ackTexts.some((text) => /queued.*position 1.*stop/i.test(text)), JSON.stringify(ackTexts));
+    assert.ok(ackTexts.some((text) => /queued.*position 2.*stop/i.test(text)), JSON.stringify(ackTexts));
+    assert.ok(ackTexts.some((text) => /interrupt|stopp/i.test(text)), JSON.stringify(ackTexts));
+    const replies = stats.cards.closes.map((card) => card.text).filter((text) => text.startsWith("PTY-PONG:"));
+    assert.deepEqual(replies, ["PTY-PONG:followup-2", "PTY-PONG:followup-3"]);
+    // Busy acknowledgements are immediate: they are sent while the current turn is still
+    // running, so every ack lands before the first queued reply settles.
+    const firstReplyAt = Math.min(...stats.cards.closes.filter((card) => card.text.startsWith("PTY-PONG:")).map((card) => card.at));
+    assert.ok(acknowledgements.every((send) => send.at < firstReplyAt), JSON.stringify({ acks: acknowledgements, firstReplyAt }));
+
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    for (const session of f.sessionFiles()) assert.doesNotMatch(session, new RegExp(SECRET), "app secret must not reach session files");
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET), "app secret must not reach the loopback");
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);
