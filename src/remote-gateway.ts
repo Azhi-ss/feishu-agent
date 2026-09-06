@@ -84,8 +84,8 @@ export interface FeishuGatewaySdk {
 }
 
 export class FeishuGateway implements RemoteGateway {
-  private readonly clients = new Map<string, FeishuClient>();
   private readonly sequences = new Map<string, number>();
+  private clientCache: FeishuClient | undefined;
   private ws: FeishuWsClient | undefined;
   #appSecret: string | undefined;
   private closed = false;
@@ -272,7 +272,7 @@ export class FeishuGateway implements RemoteGateway {
     this.closed = true;
     const ws = this.ws;
     this.ws = undefined;
-    this.clients.clear();
+    this.clientCache = undefined;
     this.sequences.clear();
     this.#appSecret = undefined;
     ws?.close({ force: true });
@@ -292,11 +292,8 @@ export class FeishuGateway implements RemoteGateway {
   private client(): FeishuClient {
     const appSecret = this.requireSecret();
     const domain = this.credentials.brand === "lark" ? "lark" : "feishu";
-    const existing = this.clients.get(domain);
-    if (existing) return existing;
-    const client = this.sdk.createClient({ appId: this.credentials.appId, appSecret, domain });
-    this.clients.set(domain, client);
-    return client;
+    this.clientCache ??= this.sdk.createClient({ appId: this.credentials.appId, appSecret, domain });
+    return this.clientCache;
   }
 }
 
