@@ -48,6 +48,18 @@ npm run build
 npm link          # exposes the `feishu` binary (or run `node dist/src/cli.js` directly)
 ```
 
+### Optional: install the Host Agent bridge Skill
+
+The repository also contains `skills/feishu-control/`, a host-side bridge that lets another Pi-compatible Agent delegate work to `feishu`. It is **not** a Feishu Runtime Skill: do not put it under `~/.feishu-agent/skills/` and do not expect `feishu init` to install it.
+
+After `feishu` is on `PATH`, install the bridge into a Pi host Agent:
+
+```bash
+npx skills add Azhi-ss/feishu-agent --skill feishu-control --global --agent pi --copy
+```
+
+The installer copies both `SKILL.md` and `feishu-send` into the host Agent's Skill directory. Then use `/skill:feishu-control <task>` or explicitly ask the Host Agent to use Feishu Agent. Review the Skill before accepting the install; it runs `feishu` with the current user's permissions.
+
 ## Initialize
 
 ```bash
@@ -67,7 +79,7 @@ feishu --session <id>     # resume an exact session in this Feishu Project
 feishu --lark-profile finance -p "task"
 ```
 
-In Interactive mode, `/find-skill <query>` searches the public Skill index; selecting a result shows its source, install count, declared license, and private target path before confirmation. You can also use `/find-skill install <owner/repo@skill-name>` for an explicit result. Installation writes only to `~/.feishu-agent/skills/`—never the real HOME's ordinary Pi global directories—and Print mode searches without waiting for install confirmation.
+In Interactive mode, `/find-skill <query>` searches the public Skill index; selecting a result shows its source, install count, declared license, and private target path before confirmation. You can also use `/find-skill install <owner/repo@skill-name>` for an explicit result. Installation writes only to `~/.feishu-agent/skills/`—never the real HOME's ordinary Pi global directories—and Print mode searches without waiting for install confirmation. `/remote [start|stop|status]` manages the Feishu Remote Bridge to control the active session from mobile Feishu (see [docs/remote-bridge.md](docs/remote-bridge.md)).
 
 Normal Interactive exit rewrites Pi's generic resume line to `To resume this Feishu session: feishu --session <id>`; copy that command to resume the exact session. Use `feishu -c` for the latest session or `feishu -r` to choose one. If `feishu` is not on PATH, set `FEISHU_RESUME_COMMAND` to the full executable path. Do not resume Feishu sessions through ordinary `pi --session-dir ... --session ...`, because that bypasses the Feishu Runtime boundary.
 

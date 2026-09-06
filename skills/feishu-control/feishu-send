@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# feishu-send — delegate one task to the Feishu Agent (feishu -p) and return its answer.
+# stdout = final assistant text; stderr = non-fatal warnings / errors; exit code passthrough.
+set -uo pipefail
+
+usage() {
+  echo "Usage: feishu-send [--profile <lark-profile>] <message>" >&2
+  exit 2
+}
+
+profile=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile) [[ $# -ge 2 ]] || usage; profile="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    -*) echo "Unknown option: $1" >&2; usage ;;
+    *) break ;;
+  esac
+done
+
+message="$*"
+[[ -n "$message" ]] || usage
+
+timeout_s="${FEISHU_CONTROL_TIMEOUT:-300}"
+# Run in the caller's current project directory by default (Feishu Project = current Git root),
+# so the Feishu Agent sees this project's .feishu-agent resources. Set FEISHU_CONTROL_CWD to force
+# a fixed cross-project scope (e.g. $HOME/feishu-workspace for consolidated Feishu memory).
+workdir="${FEISHU_CONTROL_CWD:-$PWD}"
+
+if ! command -v feishu >/dev/null 2>&1; then
+  echo "feishu-send: 'feishu' not on PATH. Fix: cd /home/dministrator/tools/feishu-agent && npm link" >&2
+  exit 127
+fi
+
+args=()
+[[ -n "$profile" ]] && args=(--lark-profile "$profile")
+args+=(-p "$message")
+
+cd "$workdir" || exit 1
+status=0
+timeout -k 10 "$timeout_s" feishu "${args[@]}" || status=$?
+
+if [[ $status -eq 124 ]]; then
+  echo "feishu-send: timed out after ${timeout_s}s (partial work may have completed; sessions in ~/.feishu-agent/sessions/)." >&2
+fi
+exit "$status"

@@ -48,6 +48,18 @@ npm run build
 npm link          # 得到 `feishu` 命令（或直接用 node dist/src/cli.js 运行）
 ```
 
+### 可选：给 Host Agent 安装委派 Skill
+
+仓库同时包含 `skills/feishu-control/`，用于让另一个兼容 Pi 的 Host Agent 把任务委派给 `feishu`。它是 **Host Agent 侧的桥接 Skill**，不是 Feishu Runtime 内部 Skill：不要把它放到 `~/.feishu-agent/skills/`，也不要让 `feishu init` 自动安装它。
+
+确认 `feishu` 已经在 `PATH` 中后，可以把桥接 Skill 安装到 Pi Host Agent：
+
+```bash
+npx skills add Azhi-ss/feishu-agent --skill feishu-control --global --agent pi --copy
+```
+
+安装器会同时复制 `SKILL.md` 和 `feishu-send`。安装后可以使用 `/skill:feishu-control <任务>`，或明确要求 Host Agent 使用 Feishu Agent。安装前请先审阅 Skill；它会以当前用户权限运行 `feishu`。
+
 ## 初始化
 
 ```bash
@@ -67,7 +79,7 @@ feishu --session <id>     # 精确恢复当前 Feishu Project 中的某个会话
 feishu --lark-profile finance -p "任务"
 ```
 
-交互式会话中可用 `/find-skill <关键词>` 搜索公开 Skill 目录；选中后会先显示来源、安装量、许可证和目标路径，再确认是否安装。也可用 `/find-skill install <owner/repo@skill-name>` 直接指定结果。安装只写入 `~/.feishu-agent/skills/`，不会调用真实 HOME 下的普通 Pi 全局安装；Print 模式只搜索，不等待安装确认。
+交互式会话中可用 `/find-skill <关键词>` 搜索公开 Skill 目录；选中后会先显示来源、安装量、许可证和目标路径，再确认是否安装。也可用 `/find-skill install <owner/repo@skill-name>` 直接指定结果。安装只写入 `~/.feishu-agent/skills/`，不会调用真实 HOME 下的普通 Pi 全局安装；Print 模式只搜索，不等待安装确认。`/remote [start|stop|status]` 管理飞书远程桥接，支持通过手机端飞书私聊直接驱动当前终端会话（参见 [docs/remote-bridge.md](docs/remote-bridge.md)）。
 
 交互式正常退出时，会把 Pi 的通用恢复提示改写为 `To resume this Feishu session: feishu --session <id>`；复制该命令即可精确恢复对应会话。最新会话用 `feishu -c`，手动选择用 `feishu -r`。如果 `feishu` 不在 PATH 中，可用 `FEISHU_RESUME_COMMAND` 指定完整可执行路径。不要用普通 `pi --session-dir ... --session ...` 恢复 Feishu 会话——那会绕过 Feishu Runtime 边界。
 

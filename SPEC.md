@@ -148,6 +148,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
   6. `<project>/.feishu-agent/AGENTS.md`；
   7. `<project>/AGENTS.md`。
 - 不加载 `.agents/skills`、`.pi/skills`、普通 Pi Prompts/Themes/Extensions、Codex/Claude Skills 或其他 Agent Home。
+- 仓库根目录的 `skills/feishu-control/` 是面向宿主 Agent 分发的桥接资源，不属于 Feishu Runtime；ResourceLoader 不自动发现它，`feishu init` 也不得把它安装到宿主 Agent 目录或 `~/.feishu-agent/skills/`。
 - 项目 Feishu 资源和根 `AGENTS.md` 自动加载，不走 Pi 项目信任提示。
 - 全局 `SYSTEM.md` 是基础身份，项目说明和 Extension 只能追加，不能替换。
 
@@ -280,7 +281,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu -r`
 - `feishu --session <id>`
 - `feishu --lark-profile <profile>`
-- 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`
+- 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`、`/remote [start|stop|status]`
 
 CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/find-skill` 属于 Runtime 内的交互命令，不新增顶层 `feishu` 参数。
 
