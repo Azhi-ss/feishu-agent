@@ -67,6 +67,8 @@ function lastAssistantText(messages: Array<{ role?: string; content?: unknown }>
 export function remoteBridgeExtension(): ExtensionFactory {
   return (pi: ExtensionAPI) => {
     let gateway: RemoteGateway | undefined;
+    let pendingGateway: RemoteGateway | undefined;
+    let generation = 0;
     let transport: string | undefined;
     let status: RemoteStatus = "off";
     let credentials: RemoteCredentials | undefined;
@@ -80,6 +82,10 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let reportedCardError = false;
     let lockedAppId: string | undefined;
     const dedup = new MessageDedup();
+
+    function isStaleRunner(error: unknown): boolean {
+      return error instanceof Error && error.message.includes("stale after session");
+    }
 
     function dropLock(): void {
       if (!lockedAppId) return;
@@ -149,6 +155,11 @@ export function remoteBridgeExtension(): ExtensionFactory {
         pi.sendUserMessage(next.text, deliverAs ? { deliverAs } : undefined);
       } catch (error) {
         activeTurn = undefined;
+        if (isStaleRunner(error)) {
+          acknowledge(next.chatId, "Remote bridge: this session was replaced. Run /remote start again.");
+          void stop();
+          return;
+        }
         setState("error", latestCtx, `Remote bridge could not start the turn: ${error instanceof Error ? error.message : String(error)}`);
         notify(latestCtx, lastError!, "error");
         return;
@@ -194,8 +205,8 @@ export function remoteBridgeExtension(): ExtensionFactory {
     }
 
     async function start(ctx: ExtensionContext): Promise<void> {
-      if (gateway) {
-        notify(ctx, "Remote bridge is already connected.");
+      if (gateway || pendingGateway) {
+        notify(ctx, gateway ? "Remote bridge is already connected." : "Remote bridge is already connecting.");
         return;
       }
       const resolved = resolveRemoteCredentials(process.env.HOME ?? "");
@@ -226,26 +237,40 @@ export function remoteBridgeExtension(): ExtensionFactory {
         notify(ctx, created.error, "error");
         return;
       }
+      const epoch = generation;
       setState("connecting", ctx);
       reportedPollError = false;
       const candidate = created.gateway;
+      pendingGateway = candidate;
       try {
         await candidate.start(onInbound, (error) => {
+          if (generation !== epoch) return;
           if (reportedPollError) return; // warn once per outage; recovery re-arms the latch
           reportedPollError = true;
           setState("error", undefined, `Remote bridge lost the gateway connection: ${error.message}`);
           notify(latestCtx, `Remote bridge connection interrupted; reconnecting: ${error.message}`, "warning");
         }, () => {
+          if (generation !== epoch) return;
           reportedPollError = false;
           setState("connected");
           notify(latestCtx, "Remote bridge reconnected.", "info");
         });
       } catch (error) {
+        if (pendingGateway === candidate) pendingGateway = undefined;
+        if (generation !== epoch) return;
         dropLock();
         setState("error", ctx, `Remote bridge could not connect: ${error instanceof Error ? error.message : String(error)}`);
         notify(ctx, lastError!, "error");
         return;
       }
+      if (generation !== epoch || pendingGateway !== candidate) {
+        if (pendingGateway === candidate) pendingGateway = undefined;
+        await candidate.close().catch(() => {});
+        if (generation !== epoch) return;
+        dropLock();
+        return;
+      }
+      pendingGateway = undefined;
       gateway = candidate;
       transport = created.transport;
       setState("connected", ctx);
@@ -253,9 +278,11 @@ export function remoteBridgeExtension(): ExtensionFactory {
     }
 
     async function stop(paintCtx?: ExtensionContext): Promise<void> {
-      const candidate = gateway;
+      generation += 1;
+      const candidate = gateway ?? pendingGateway;
       const card = activeCard;
       gateway = undefined;
+      pendingGateway = undefined;
       transport = undefined;
       activeTurn = undefined;
       activeCard = undefined;
@@ -277,12 +304,10 @@ export function remoteBridgeExtension(): ExtensionFactory {
     pi.on("session_start", (_event, ctx) => {
       latestCtx = ctx;
       paint(ctx);
-      if (ctx.mode === "tui" && process.env[REMOTE_AUTOSTART_ENV] === "1" && !gateway) void start(ctx);
+      if (ctx.mode === "tui" && process.env[REMOTE_AUTOSTART_ENV] === "1" && !gateway && !pendingGateway) void start(ctx);
     });
 
-    pi.on("session_shutdown", (_event) => {
-      void stop();
-    });
+    pi.on("session_shutdown", () => stop());
 
     pi.on("message_update", (event) => {
       const card = activeCard;
@@ -340,7 +365,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
             await start(ctx);
             break;
           case "stop":
-            if (!gateway) notify(ctx, "Remote bridge is not running.");
+            if (!gateway && !pendingGateway && status !== "connecting") notify(ctx, "Remote bridge is not running.");
             else {
               await stop(ctx);
               notify(ctx, "Remote bridge stopped.");

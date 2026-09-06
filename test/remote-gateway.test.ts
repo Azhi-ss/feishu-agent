@@ -218,6 +218,22 @@ test("FeishuGateway rejects a hard initial WS failure without leaking the secret
   });
 });
 
+test("FeishuGateway close aborts an in-flight handshake so start() does not hang", async () => {
+  const sdk: FeishuGatewaySdk = {
+    createClient: () => ({}) as never,
+    createDispatcher: () => ({ register: () => undefined }),
+    createWsClient: () => ({
+      start: async () => { /* stay connecting until close() */ },
+      close: () => undefined,
+    }),
+  };
+  const gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk);
+  const started = gateway.start(() => undefined, () => undefined);
+  await new Promise((done) => setImmediate(done));
+  await gateway.close();
+  await assert.rejects(started, /Remote gateway closed/);
+});
+
 test("loopback gateway polls events, sends messages, and closes with a recorded disconnect", async () => {
   const state = { pending: [] as RemoteInboundEvent[], waiters: [] as Array<(events: RemoteInboundEvent[]) => void>, sends: [] as Array<{ chatId: string; text: string }>, closes: 0, polls: 0 };
   const server = createServer((request, response) => {

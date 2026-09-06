@@ -91,6 +91,7 @@ export class FeishuGateway implements RemoteGateway {
   private ws: FeishuWsClient | undefined;
   #appSecret: string | undefined;
   private closed = false;
+  private abortHandshake: ((error: Error) => void) | undefined;
 
   constructor(
     private readonly credentials: RemoteCredentials,
@@ -131,11 +132,13 @@ export class FeishuGateway implements RemoteGateway {
     const finish = (resolve: () => void, reject: (error: Error) => void, error?: Error) => {
       if (settled) return;
       settled = true;
+      this.abortHandshake = undefined;
       if (timer) clearTimeout(timer);
       if (error) reject(error); else resolve();
     };
 
     const handshake = new Promise<void>((resolve, reject) => {
+      this.abortHandshake = (error) => finish(resolve, reject, error);
       timer = setTimeout(() => {
         this.closed = true;
         ws?.close({ force: true });
@@ -272,6 +275,9 @@ export class FeishuGateway implements RemoteGateway {
 
   async close(): Promise<void> {
     this.closed = true;
+    const abort = this.abortHandshake;
+    this.abortHandshake = undefined;
+    abort?.(new Error("Remote gateway closed"));
     const ws = this.ws;
     this.ws = undefined;
     this.clientCache = undefined;

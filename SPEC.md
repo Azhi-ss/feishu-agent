@@ -214,6 +214,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 制品只做传输：出站 WebSocket、Card Kit 流式卡片、`/remote`、主人一对一注入。不带官方 Skills、高风险批准、SYSTEM 身份或 Mem0。
 - 身份：先读 `~/.lark-cli/config.json` 再读 XDG `lark-cli` 配置（零网络）。文件存在但无效或缺少 app/owner 时失败，不回退环境变量。两个路径都不存在时允许 `FEISHU_REMOTE_APP_ID` 与 `FEISHU_REMOTE_OWNER_OPEN_ID`。App secret 只来自 `FEISHU_REMOTE_APP_SECRET`。
 - `/remote start` 在建连前获取 `$HOME/.cache/feishu-remote/<appId>.lock`（HOME 取进程环境）。活进程占用则失败并指出 pid；死 pid 可回收。`/remote stop` 与会话关闭释放本进程的锁。
+- `/new`、`/resume`、`/fork`、`/reload` 等会话替换必须立刻作废尚未完成的 `start()`：不得把 gateway 交给已失效的 Extension runner，也不得用过期 `pi.sendUserMessage` 注入。新会话需要重新 `/remote start` 或 `FEISHU_REMOTE=1` 自动启动。
 - TUI 状态由包直接调用 Pi `setStatus`，文案保持 `remote:<status>`。核心不为 Remote 增加状态插槽。
 - 运输保持 ADR-0001：进程内官方 SDK `WSClient`；不得与 `lark-cli event consume` 同时占用同一应用。本里程碑不 npm 发布。
 
@@ -395,6 +396,7 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
     - 同一临时 HOME、同一 app id 的两个会话先后 `/remote start`：第二个失败并提到占用 pid。
     - 临时 HOME 里预先写入死 pid 锁后，`/remote start` 仍能连上。
     - 同一把锁被活进程占用时，`/remote start` 失败并提到该 pid。
+    - 握手未完成时 `/new`：不得出现 stale-ctx 报错；手机消息不得打进已替换的会话。
     - 无 `lark-cli` 配置时环境变量身份可用；坏配置不回退环境变量。
     - 允许名单包装保留 `/remote`，其他包装同名命令被剥掉。
 

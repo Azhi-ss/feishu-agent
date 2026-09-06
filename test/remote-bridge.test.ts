@@ -49,7 +49,7 @@ interface FeishuStats {
   };
 }
 
-async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats> }> {
+async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats> }> {
   const state = {
     pending: [] as InboundEvent[],
     waiters: [] as Array<(events: InboundEvent[]) => void>,
@@ -84,14 +84,26 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(events));
       };
-      if (state.pending.length) return flush(state.pending.splice(0));
-      const waiter = (events: InboundEvent[]) => flush(events);
-      state.waiters.push(waiter);
-      setTimeout(() => {
-        const index = state.waiters.indexOf(waiter);
-        if (index >= 0) state.waiters.splice(index, 1);
-        flush([]);
-      }, 2000).unref();
+      const waitOrFlush = () => {
+        if (state.pending.length) return flush(state.pending.splice(0));
+        const waiter = (events: InboundEvent[]) => flush(events);
+        state.waiters.push(waiter);
+        setTimeout(() => {
+          const index = state.waiters.indexOf(waiter);
+          if (index >= 0) state.waiters.splice(index, 1);
+          flush([]);
+        }, 2000).unref();
+      };
+      if (options.holdFirstPollUntil && state.polls === 1 && !existsSync(options.holdFirstPollUntil)) {
+        const timer = setInterval(() => {
+          if (!existsSync(options.holdFirstPollUntil!)) return;
+          clearInterval(timer);
+          waitOrFlush();
+        }, 50);
+        timer.unref();
+        return;
+      }
+      waitOrFlush();
       return;
     }
     let body = "";
@@ -211,7 +223,7 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((done) => server.close(() => done()));
 }
 
-async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent }>, loopbackOptions: { failPollsAfterFirst?: number; cardOpenDelayMs?: number } = {}) {
+async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent }>, loopbackOptions: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "feishu-remote-bridge-"));
   const home = join(root, "home");
   const project = join(root, "project");
@@ -712,6 +724,39 @@ function plantLock(home: string, pid: number): void {
   mkdirSync(join(home, ".cache", "feishu-remote"), { recursive: true });
   writeFileSync(lockFile(home), `${pid}\n`);
 }
+
+test("replacing the session while the bridge is still connecting does not inject on a stale runner", async () => {
+  const holdHandshake = join(mkdtempSync(join(tmpdir(), "feishu-remote-hold-")), "release-handshake");
+  const afterReplace = join(dirname(holdHandshake), "after-replace");
+  const f = await fixture(echoModel, [
+    { delayMs: 0, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "after-new-1", messageType: "text", text: "after-new" } },
+  ], { holdFirstPollUntil: holdHandshake });
+  try {
+    const resultP = runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "/remote start\r" },
+      { wait: "remote:connecting", send: "/new\r" },
+      { wait: "New session started", send: "" },
+      { waitFile: afterReplace, send: "/quit\r" },
+    ]);
+    let mid: FeishuStats | undefined;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      mid = await f.feishu.stats();
+      if (mid.closes.length >= 1) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+    assert.ok((mid?.closes.length ?? 0) >= 1, "session replacement must disconnect the in-flight handshake before the runner is invalidated");
+    assert.equal(mid?.cards.opened.length ?? 0, 0);
+    writeFileSync(afterReplace, "go\n");
+    const result = await resultP;
+    assert.equal(result.code, 0, result.output);
+    assert.doesNotMatch(result.output, /stale after session/);
+    assert.doesNotMatch(result.output, /Remote bridge could not start the turn/);
+    assert.doesNotMatch(result.output, /PTY-PONG:after-new/, "a phone message must not land in the replaced session");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
 
 test("a stale lock from a dead process is reclaimed so /remote start can connect", async () => {
   const f = await fixture(echoModel, []);
