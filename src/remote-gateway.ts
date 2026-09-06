@@ -19,10 +19,12 @@ export interface RemoteInboundEvent {
 }
 
 export interface RemoteGateway {
-  start(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void): Promise<void>;
+  start(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void, onPollRecovered?: () => void): Promise<void>;
   sendMessage(chatId: string, text: string): Promise<void>;
   /** Open a streaming card in the chat; resolves with the card id. */
   openStreamCard(chatId: string): Promise<string>;
+  /** Update the card's transient status area; text is empty to clear it. */
+  setStatusLine(cardId: string, text: string): Promise<void>;
   /** Append a complete-content snapshot. sequence is monotonic per card; uuid unique per write. */
   appendStreamText(cardId: string, text: string, sequence: number, uuid: string): Promise<void>;
   /** Finalize the card with the complete reply (one envelope; the bridge shards over-long finals). */
@@ -104,77 +106,68 @@ export class LoopbackGateway implements RemoteGateway {
 
   constructor(private readonly baseUrl: string) {}
 
-  async start(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void): Promise<void> {
+  async start(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void, onPollRecovered?: () => void): Promise<void> {
     this.stopped = false;
-    await this.pollOnce(onEvent, onPollError);
-    void this.pollLoop(onEvent, onPollError);
+    // The FIRST poll is the connect handshake: a failure here throws to start()
+    // (hard connect failure) and must NOT fire the reconnect error callback —
+    // no retry loop is running yet. Only pollLoop reports transient errors.
+    for (const event of await this.fetchEvents()) onEvent(event);
+    void this.pollLoop(onEvent, onPollError, onPollRecovered);
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/send-message`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chatId, text }),
-    });
-    if (!response.ok) throw new Error(`loopback send failed: HTTP ${response.status}`);
+    await this.post("send-message", { chatId, text }, "loopback send failed");
   }
 
   async openStreamCard(chatId: string): Promise<string> {
-    const response = await fetch(`${this.baseUrl}/open-stream-card`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chatId }),
-    });
-    if (!response.ok) throw new Error(`loopback card open failed: HTTP ${response.status}`);
+    const response = await this.post("open-stream-card", { chatId }, "loopback card open failed");
     const data = (await response.json()) as { cardId?: string };
     if (!data.cardId) throw new Error("loopback card open failed: no card id");
     return data.cardId;
   }
 
+  async setStatusLine(cardId: string, text: string): Promise<void> {
+    await this.post("set-status-line", { cardId, text }, "loopback card status failed");
+  }
+
   async appendStreamText(cardId: string, text: string, sequence: number, uuid: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/append-stream-text`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cardId, text, sequence, uuid }),
-    });
-    if (!response.ok) throw new Error(`loopback card append failed: HTTP ${response.status}`);
+    await this.post("append-stream-text", { cardId, text, sequence, uuid }, "loopback card append failed");
   }
 
   async closeStreamCard(cardId: string, finalText: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/close-stream-card`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cardId, text: finalText }),
-    });
-    if (!response.ok) throw new Error(`loopback card close failed: HTTP ${response.status}`);
+    await this.post("close-stream-card", { cardId, text: finalText }, "loopback card close failed");
   }
 
   async close(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
     this.controller?.abort();
-    try {
-      await fetch(`${this.baseUrl}/disconnect`, { method: "POST" });
-    } catch { /* teardown is best-effort */ }
+    try { await this.post("disconnect", {}, "loopback disconnect failed"); }
+    catch { /* teardown is best-effort */ }
   }
 
-  private async pollOnce(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void): Promise<void> {
-    try {
-      for (const event of await this.fetchEvents()) onEvent(event);
-    } catch (error) {
-      if (this.stopped) return;
-      const failure = error instanceof Error ? error : new Error(String(error));
-      onPollError(failure);
-      throw failure;
-    }
+  private async post(path: string, body: unknown, failure: string): Promise<Response> {
+    const response = await fetch(`${this.baseUrl}/${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`${failure}: HTTP ${response.status}`);
+    return response;
   }
 
-  private async pollLoop(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void): Promise<void> {
+  private async pollLoop(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void, onPollRecovered?: () => void): Promise<void> {
+    let recovering = false;
     while (!this.stopped) {
       try {
         for (const event of await this.fetchEvents()) onEvent(event);
+        if (recovering) {
+          recovering = false;
+          onPollRecovered?.();
+        }
       } catch (error) {
         if (this.stopped) return;
+        recovering = true;
         onPollError(error instanceof Error ? error : new Error(String(error)));
         await new Promise((done) => setTimeout(done, 1000));
       }

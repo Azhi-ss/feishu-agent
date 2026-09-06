@@ -80,6 +80,7 @@ export function shardText(text: string, limit = STREAM_CARD_TEXT_LIMIT_BYTES): s
 
 export interface StreamCardOps {
   append(cardId: string, text: string, sequence: number, uuid: string): Promise<void>;
+  setStatus(cardId: string, text: string): Promise<void>;
   closeCard(cardId: string, finalText: string): Promise<void>;
 }
 
@@ -89,6 +90,7 @@ export class StreamCardSession {
   private sentText = "";
   private writingText: string | undefined;
   private pendingText: string | undefined;
+  private statusText = "";
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private lastFlushAt = 0;
   private sequence = 0;
@@ -124,17 +126,39 @@ export class StreamCardSession {
     void this.flush();
   }
 
+  /** Update the transient status area; an empty string clears it. */
+  setStatus(text: string): void {
+    if (this.closed || text === this.statusText) return;
+    this.statusText = text;
+    this.enqueueStatus(text);
+  }
+
   /** Authoritative close: delivers the complete final text even if stream writes failed. */
   async finalize(finalText: string): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     this.clearTimer();
+    if (this.statusText) {
+      // Strip the status strip before the final close so it never reaches the finalized reply.
+      this.statusText = "";
+      this.enqueueStatus("");
+    }
     await this.queue;
     try {
       await this.ops.closeCard(this.cardId, finalText);
     } catch (error) {
       this.onWriteError(error);
     }
+  }
+
+  private enqueueStatus(text: string): void {
+    this.queue = this.queue.then(async () => {
+      try {
+        await this.ops.setStatus(this.cardId, text);
+      } catch (error) {
+        this.onWriteError(error); // status writes are best-effort
+      }
+    });
   }
 
   private clearTimer(): void {

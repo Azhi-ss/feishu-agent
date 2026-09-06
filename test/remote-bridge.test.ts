@@ -42,18 +42,20 @@ interface FeishuStats {
   closes: number[];
   cards: {
     opened: Array<{ chatId: string; cardId: string; at: number }>;
+    statuses: Array<{ cardId: string; text: string; at: number }>;
     appends: Array<{ cardId: string; text: string; sequence: number; uuid: string; at: number }>;
     closes: Array<{ cardId: string; text: string; at: number }>;
   };
 }
 
-async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent }>): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats> }> {
+async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats> }> {
   const state = {
     pending: [] as InboundEvent[],
     waiters: [] as Array<(events: InboundEvent[]) => void>,
     sends: [] as Array<{ chatId: string; text: string; at: number }>,
     closes: [] as number[],
     opened: [] as Array<{ chatId: string; cardId: string; at: number }>,
+    statuses: [] as Array<{ cardId: string; text: string; at: number }>,
     appends: [] as Array<{ cardId: string; text: string; sequence: number; uuid: string; at: number }>,
     cardCloses: [] as Array<{ cardId: string; text: string; at: number }>,
     polls: 0,
@@ -64,6 +66,11 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
     if (request.url === "/events") {
       state.polls++;
       state.pollTimes.push(Date.now());
+      if (state.polls > 1 && (options.failPollsAfterFirst ?? 0) > 0) {
+        options.failPollsAfterFirst!--;
+        response.destroy();
+        return;
+      }
       if (!state.scripted) {
         state.scripted = true;
         for (const step of script) setTimeout(() => {
@@ -94,8 +101,19 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
         const { chatId } = JSON.parse(body) as { chatId: string };
         const cardId = `card-${state.opened.length + 1}`;
         state.opened.push({ chatId, cardId, at: Date.now() });
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ cardId }));
+        // The status strip is a property of the (about-to-exist) card; record it
+        // after opening even when status updates arrive before the open resolves.
+        const respond = () => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ cardId }));
+        };
+        if (options.cardOpenDelayMs) setTimeout(respond, options.cardOpenDelayMs).unref();
+        else respond();
+      }
+      else if (request.url === "/set-status-line") {
+        const { cardId, text } = JSON.parse(body) as { cardId: string; text: string };
+        state.statuses.push({ cardId, text, at: Date.now() });
+        response.writeHead(200).end();
       }
       else if (request.url === "/append-stream-text") {
         const { cardId, text, sequence, uuid } = JSON.parse(body) as { cardId: string; text: string; sequence: number; uuid: string };
@@ -108,7 +126,7 @@ async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEve
         response.writeHead(200).end();
       }
       else if (request.url === "/disconnect") { state.closes.push(Date.now()); response.writeHead(200).end(); }
-      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, sends: state.sends, closes: state.closes, cards: { opened: state.opened, appends: state.appends, closes: state.cardCloses } })); }
+      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, sends: state.sends, closes: state.closes, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
       else response.writeHead(404).end();
     });
   });
@@ -192,14 +210,14 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((done) => server.close(() => done()));
 }
 
-async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent }>) {
+async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent }>, loopbackOptions: { failPollsAfterFirst?: number; cardOpenDelayMs?: number } = {}) {
   const root = mkdtempSync(join(tmpdir(), "feishu-remote-bridge-"));
   const home = join(root, "home");
   const project = join(root, "project");
   const bin = join(root, "bin");
   const larkTrace = join(root, "lark.log");
   const model = await modelServer(responder);
-  const feishu = await feishuLoopback(script);
+  const feishu = await feishuLoopback(script, loopbackOptions);
   for (const path of [join(home, ".pi", "agent"), join(home, ".feishu-agent"), join(home, ".lark-cli"), project, bin]) mkdirSync(path, { recursive: true });
   writeFileSync(join(home, ".pi", "agent", "auth.json"), JSON.stringify({ fake: { type: "api_key", key: "fake-key" } }));
   writeFileSync(join(home, ".pi", "agent", "models.json"), JSON.stringify({ providers: { fake: { baseUrl: model.modelUrl, api: "openai-completions", models: [{ id: "fake-model", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 256 }] } } }));
@@ -368,6 +386,145 @@ test("FEISHU_REMOTE=1 queues busy phone messages with acknowledgements, aborts o
     assert.doesNotMatch(result.output, new RegExp(SECRET));
     for (const session of f.sessionFiles()) assert.doesNotMatch(session, new RegExp(SECRET), "app secret must not reach session files");
     assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET), "app secret must not reach the loopback");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("non-text inbound messages (images/files/stickers) receive a v1 acknowledgement without starting a turn", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 50, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "image-1", messageType: "image", text: "" } },
+    { delayMs: 150, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "file-2", messageType: "file", text: "" } },
+    { delayMs: 250, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "sticker-3", messageType: "sticker", text: "" } },
+  ]);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "/remote status\r" },
+      { wait: "app cli_fake_bridge", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened.length, 0, "unsupported inbound content must not start an agent turn");
+    assert.ok(stats.sends.some((send) => /unsupported.*image.*v1/i.test(send.text)), JSON.stringify(stats.sends));
+    assert.ok(stats.sends.some((send) => /unsupported.*file.*v1/i.test(send.text)), JSON.stringify(stats.sends));
+    assert.ok(stats.sends.some((send) => /unsupported.*sticker.*v1/i.test(send.text)), JSON.stringify(stats.sends));
+    assert.doesNotMatch(result.output, /Agent is already processing/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET), "app secret must not reach the loopback");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("tool execution shows a transient friendly status — even when the card is still opening — and clears it before finalizing", async () => {
+  const toolResponses = [
+    `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "status-tool-1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf RAW_TOOL_OUTPUT_SHOULD_STAY_LOCAL" }) } }] }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`,
+    sse("TOOL-STATUS-DONE"),
+  ];
+  const f = await fixture(() => ({ sse: toolResponses.shift() ?? sse("NO-RESPONSE") }), [
+    { delayMs: 100, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "status-1", messageType: "text", text: "run-tool" } },
+  ], { cardOpenDelayMs: 150 });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "TOOL-STATUS-DONE", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    const cardId = stats.cards.opened[0]?.cardId;
+    const cardStatuses = stats.cards.statuses.filter((status) => status.cardId === cardId);
+    const statusTexts = cardStatuses.map((status) => status.text);
+    assert.ok(statusTexts.some((text) => /command|bash/i.test(text) && /[\u{1F300}-\u{1FAFF}]/u.test(text)), `tool status must land on the card even while it was still opening: ${JSON.stringify(statusTexts)}`);
+    assert.ok(statusTexts.includes(""), "the status line is cleared before the card finalizes");
+    assert.doesNotMatch(JSON.stringify(stats), /RAW_TOOL_OUTPUT_SHOULD_STAY_LOCAL/);
+    assert.equal(stats.cards.closes[0]?.text, "TOOL-STATUS-DONE", "the finalized reply has no status line");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("reasoning before the answer keeps the tool status until visible assistant text actually starts", async () => {
+  const stream: Array<{ line: string; delayMs: number }> = [
+    { line: sseDelta({ reasoning_content: "THOUGHT-1" }), delayMs: 100 },
+    { line: sseDelta({ reasoning_content: "THOUGHT-2" }), delayMs: 250 },
+    { line: sseDelta({ reasoning_content: "THOUGHT-3" }), delayMs: 400 },
+    { line: sseDelta({ content: "VISIBLE-ANSWER" }), delayMs: 550 },
+    { line: sseDone(), delayMs: 10 },
+  ];
+  let toolCallSent = false;
+  const toolFirst: ModelResponder = () => {
+    if (!toolCallSent) {
+      toolCallSent = true;
+      return { sse: `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "reason-tool-1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "true" }) } }] }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n` };
+    }
+    return { stream };
+  };
+  const f = await fixture(toolFirst, [
+    { delayMs: 100, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "reason-status-1", messageType: "text", text: "TOOL-FIRST" } },
+  ]);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "VISIBLE-ANSWER", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    const firstAppendAt = Math.min(...stats.cards.appends.map((append) => append.at));
+    const cleared = stats.cards.statuses.filter((status) => status.text === "");
+    assert.ok(cleared.length, "the status line is cleared eventually");
+    for (const clear of cleared) assert.ok(firstAppendAt - clear.at < 200, `status must clear when visible text starts, not at message_start: clear=${clear.at} firstAppend=${firstAppendAt}`);
+    assert.doesNotMatch(JSON.stringify(stats.cards.appends), /THOUGHT-/, "reasoning never reaches the card");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a sustained gateway outage reconnects once, resumes phone delivery, and reports a single recovery", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 5500, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "reconnect-1", messageType: "text", text: "after-reconnect" } },
+  ], { failPollsAfterFirst: 3 });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "PTY-PONG:after-reconnect", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Remote bridge reconnected/);
+    assert.ok((result.output.match(/connection interrupted/g) ?? []).length === 1, `a sustained outage warns once: ${result.output.match(/connection interrupted/g)?.length ?? 0} warnings`);
+    const stats = await f.feishu.stats();
+    assert.ok(stats.polls >= 5, JSON.stringify(stats));
+    assert.equal(stats.cards.closes[0]?.text, "PTY-PONG:after-reconnect");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a hard gateway connection failure warns without a false reconnecting notice and without disabling local work", async () => {
+  const f = await fixture(echoModel, []);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: "http://127.0.0.1:1" }), [
+      { wait: "fake-model", send: "/remote start\r" },
+      { wait: "Remote bridge could not connect", send: "local-work-still-works\r" },
+      { wait: "PTY-PONG:local-work-still-works", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Remote bridge could not connect/);
+    assert.doesNotMatch(result.output, /reconnect/i, "initial-connect failure never runs the retry loop and must not claim to be reconnecting");
+    assert.match(result.output, /PTY-PONG:local-work-still-works/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET), "app secret must not reach TUI output");
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);

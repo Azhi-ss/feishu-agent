@@ -30,8 +30,23 @@ interface QueuedMessage {
 }
 
 interface ActiveCard {
-  session: StreamCardSession | undefined;
   open: Promise<StreamCardSession | undefined>;
+}
+
+function toolStatusLine(toolName: string): string {
+  return `\u{1F6E0}\uFE0F Running ${toolName}`;
+}
+
+/** Latest tool-call name in an assistant message content (the tool signal that reaches extensions during a streamed turn), if any. */
+function assistantToolName(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  for (const part of content) {
+    if (part && typeof part === "object" && (part as { type?: string }).type === "toolCall") {
+      const name = (part as { name?: unknown }).name;
+      if (typeof name === "string" && name) return name;
+    }
+  }
+  return undefined;
 }
 
 function isAbortWord(text: string): boolean {
@@ -87,13 +102,14 @@ export function remoteBridgeExtension(): ExtensionFactory {
     function beginCard(chatId: string): ActiveCard | undefined {
       const gw = gateway;
       if (!gw) return undefined;
-      const card: ActiveCard = { session: undefined, open: Promise.resolve(undefined) };
+      const card: ActiveCard = { open: Promise.resolve(undefined) };
       card.open = gw.openStreamCard(chatId).then(
         (cardId) => {
           const session = new StreamCardSession(
             cardId,
             {
               append: (id, text, sequence, uuid) => gw.appendStreamText(id, text, sequence, uuid),
+              setStatus: (id, text) => gw.setStatusLine(id, text),
               closeCard: (id, text) => gw.closeStreamCard(id, text),
             },
             (error) => {
@@ -102,7 +118,6 @@ export function remoteBridgeExtension(): ExtensionFactory {
               notify(latestCtx, `Remote bridge card write failed (the final reply is still delivered): ${error instanceof Error ? error.message : String(error)}`, "warning");
             },
           );
-          card.session = session;
           return session;
         },
         (error) => {
@@ -149,10 +164,17 @@ export function remoteBridgeExtension(): ExtensionFactory {
       submit(next);
     }
 
+    function unsupportedMessageType(messageType: string): string {
+      return `Remote bridge: unsupported ${messageType || "message type"} messages in v1. Send text instead.`;
+    }
+
     function onInbound(event: RemoteInboundEvent): void {
       if (!credentials || !authorizeInbound(event, credentials.ownerOpenId)) return;
       if (!dedup.claim(event.messageId)) return;
-      if (event.messageType !== "text") return; // v1: text-only, handled gracefully in a later slice
+      if (event.messageType !== "text") {
+        acknowledge(event.chatId, unsupportedMessageType(event.messageType));
+        return;
+      }
       deliver({ chatId: event.chatId, text: event.text });
     }
 
@@ -185,10 +207,14 @@ export function remoteBridgeExtension(): ExtensionFactory {
       const candidate = created.gateway;
       try {
         await candidate.start(onInbound, (error) => {
-          if (reportedPollError) return;
+          if (reportedPollError) return; // warn once per outage; recovery re-arms the latch
           reportedPollError = true;
           setState("error", undefined, `Remote bridge lost the gateway connection: ${error.message}`);
-          notify(latestCtx, lastError!, "warning");
+          notify(latestCtx, `Remote bridge connection interrupted; reconnecting: ${error.message}`, "warning");
+        }, () => {
+          reportedPollError = false;
+          setState("connected");
+          notify(latestCtx, "Remote bridge reconnected.", "info");
         });
       } catch (error) {
         setState("error", ctx, `Remote bridge could not connect: ${error instanceof Error ? error.message : String(error)}`);
@@ -234,9 +260,20 @@ export function remoteBridgeExtension(): ExtensionFactory {
 
     pi.on("message_update", (event) => {
       const card = activeCard;
-      if (!card?.session) return;
+      if (!card) return;
       if ((event.message as { role?: string }).role !== "assistant") return;
-      card.session.update(visibleAssistantText((event.message as { content?: unknown }).content));
+      const content = (event.message as { content?: unknown }).content;
+      const tool = assistantToolName(content);
+      const text = visibleAssistantText(content);
+      // Route through the open promise: updates/status that fire while the card-open
+      // REST call is still in flight must not be dropped. Snapshots are cumulative
+      // and StreamCardSession coalesces, so the resolved session catches up.
+      void card.open.then((session) => {
+        if (!session) return;
+        if (text) session.setStatus(""); // the status strip clears when visible assistant text actually starts
+        else if (tool) session.setStatus(toolStatusLine(tool)); // toolCall content part = a tool is running
+        session.update(text);
+      });
     });
 
     pi.on("agent_end", async (event) => {
