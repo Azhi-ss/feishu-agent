@@ -58,6 +58,18 @@ function waitForPane(session: string, pattern: RegExp | string, timeoutMs = 25_0
   throw new Error(`Timeout waiting for [${pattern}] in tmux pane. Current content:\n${capturePane(session)}`);
 }
 
+function waitForIdle(session: string, timeoutMs = 35_000): string {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const pane = capturePane(session);
+    if (!pane.includes("Working...") && !pane.includes("Thinking...") && pane.includes("remote:connected")) {
+      return pane;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+  }
+  return capturePane(session);
+}
+
 const secret = resolveSecret();
 const creds = resolveRemoteCredentials(homedir());
 const canRunLiveE2E = Boolean(secret && !("error" in creds) && existsSync(cliPath));
@@ -65,6 +77,7 @@ const canRunLiveE2E = Boolean(secret && !("error" in creds) && existsSync(cliPat
 test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunLiveE2E ? "Skipped: FEISHU_REMOTE_APP_SECRET or lark-cli credentials not available" : false }, async (t) => {
   const sessionName = `feishu-live-e2e-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const chatId = resolveBotChatId();
+  let firstCardMessageId = "";
 
   // Teardown guard: ensure tmux session is killed on test exit
   t.after(() => {
@@ -111,7 +124,6 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
     // Verify Feishu chat receives the bot's interactive card reply
     const startWait = Date.now();
     let gotInteractiveCard = false;
-    let cardMessageId = "";
     while (Date.now() - startWait < 45_000) {
       try {
         const listRes = execFileSync("lark-cli", [
@@ -126,19 +138,21 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
         const botCard = messages.find((m) => m.sender?.sender_type === "app" && m.msg_type === "interactive");
         if (botCard?.message_id) {
           gotInteractiveCard = true;
-          cardMessageId = botCard.message_id;
+          firstCardMessageId = botCard.message_id;
           break;
         }
       } catch {}
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
     }
+    // Wait until agent finishes the turn and returns to idle
+    waitForIdle(sessionName);
     assert.equal(gotInteractiveCard, true, `Bot must reply with an interactive card message in chat ${chatId}`);
-    assert.ok(cardMessageId.startsWith("om_"), `Card message ID must be valid: ${cardMessageId}`);
+    assert.ok(firstCardMessageId.startsWith("om_"), `Card message ID must be valid: ${firstCardMessageId}`);
   });
 
   await t.test("3. Tool execution turn runs locally and delivers finalized card", () => {
     const nonce = `tool-${Date.now()}`;
-    const testPrompt = `E2E-TOOL-${nonce}: 请使用 bash 工具执行 echo E2E_TOOL_PASSED 并简要回复`;
+    const testPrompt = `E2E-TOOL-${nonce}: 请只使用 bash 工具执行 echo E2E_TOOL_PASSED 并简短汇报`;
 
     const sendRes = execFileSync("lark-cli", [
       "im", "+messages-send",
@@ -152,9 +166,10 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
     const pane = waitForPane(sessionName, nonce, 25_000);
     assert.match(pane, new RegExp(nonce));
 
-    // Verify card reply arrives in chat
+    // Verify a new card reply arrives in chat (different from the first card)
     const startWait = Date.now();
     let gotReply = false;
+    let toolCardMessageId = "";
     while (Date.now() - startWait < 45_000) {
       try {
         const listRes = execFileSync("lark-cli", [
@@ -162,21 +177,27 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
           "--chat-id", chatId,
           "--as", "user",
           "--json",
-          "--page-size", "3"
+          "--page-size", "5"
         ], { encoding: "utf8", timeout: 15_000 });
         const listJson = JSON.parse(listRes);
-        const messages: Array<{ sender?: { sender_type?: string }; msg_type?: string }> = listJson.data?.messages ?? [];
-        if (messages.some((m) => m.sender?.sender_type === "app" && m.msg_type === "interactive")) {
+        const messages: Array<{ sender?: { sender_type?: string }; msg_type?: string; message_id?: string }> = listJson.data?.messages ?? [];
+        const botCard = messages.find((m) => m.sender?.sender_type === "app" && m.msg_type === "interactive" && m.message_id !== firstCardMessageId);
+        if (botCard?.message_id) {
           gotReply = true;
+          toolCardMessageId = botCard.message_id;
           break;
         }
       } catch {}
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
     }
+    // Wait until agent finishes the tool turn and returns to idle
+    waitForIdle(sessionName);
     assert.equal(gotReply, true, "Bot must deliver reply for tool turn");
+    assert.ok(toolCardMessageId.startsWith("om_"));
   });
 
   await t.test("4. /remote stop disconnects the bridge and reflects in TUI", () => {
+    waitForIdle(sessionName);
     // Send /remote stop in tmux TUI
     execFileSync("tmux", ["send-keys", "-t", sessionName, "/remote stop", "Enter"]);
 
