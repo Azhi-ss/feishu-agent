@@ -19,6 +19,7 @@ import {
   type RemoteGateway,
   type RemoteInboundEvent,
 } from "./remote-gateway.js";
+import { acquireRemoteLock, releaseRemoteLock } from "./remote-lock.js";
 import { shardText, StreamCardSession, visibleAssistantText } from "./stream-card.js";
 import { setRemoteStatus, type RemoteStatus } from "./tui-status.js";
 
@@ -75,7 +76,14 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let lastError: string | undefined;
     let reportedPollError = false;
     let reportedCardError = false;
+    let lockedAppId: string | undefined;
     const dedup = new MessageDedup();
+
+    function dropLock(): void {
+      if (!lockedAppId) return;
+      releaseRemoteLock(process.env.HOME ?? "", lockedAppId);
+      lockedAppId = undefined;
+    }
 
     function paint(ctx: ExtensionContext | undefined): void {
       try {
@@ -196,8 +204,16 @@ export function remoteBridgeExtension(): ExtensionFactory {
         notify(ctx, MISSING_SECRET, "error");
         return;
       }
+      const lock = acquireRemoteLock(process.env.HOME ?? "", credentials.appId);
+      if (!lock.ok) {
+        setState("error", ctx, lock.error);
+        notify(ctx, lock.error, "error");
+        return;
+      }
+      lockedAppId = credentials.appId;
       const created = createGatewayFromEnv(process.env, resolved.credentials);
       if ("error" in created) {
+        dropLock();
         setState("error", ctx, created.error);
         notify(ctx, created.error, "error");
         return;
@@ -217,6 +233,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
           notify(latestCtx, "Remote bridge reconnected.", "info");
         });
       } catch (error) {
+        dropLock();
         setState("error", ctx, `Remote bridge could not connect: ${error instanceof Error ? error.message : String(error)}`);
         notify(ctx, lastError!, "error");
         return;
@@ -243,6 +260,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
       const session = await card?.open;
       if (session) await session.finalize("").catch(() => {});
       await candidate?.close();
+      dropLock();
       // No paint on session_shutdown: the captured ctx is stale and the UI is going away.
       status = "off";
       if (paintCtx) paint(paintCtx);

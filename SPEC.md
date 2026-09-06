@@ -197,6 +197,11 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - Extension 可请求自定义 Editor，但 Feishu Command Policy Editor 必须作为最外层提交拦截器。
 - 核心策略应用必须在初始加载和 `/reload` 后都重新执行。
 
+### 9.1. Remote Bridge lock
+
+- `/remote start` 在解析出 app id 之后、建立长连接之前，获取 `$HOME/.cache/feishu-remote/<appId>.lock`（HOME 取进程环境）。
+- 活进程占用则失败并指出 pid；死 pid 可回收。`/remote stop` 与会话关闭释放本进程持有的锁。
+
 ### 9. Tool capability and domain boundary
 
 - 启用 Pi 的基础文件工具与 Bash。
@@ -376,6 +381,10 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
     - 缺少 API Key、无模型、`lark-cli doctor` 失败时输出精确诊断。
     - 重复初始化幂等，不覆盖已有配置。
     - 显式重置选项才改变 Identity、模型或 System Prompt。
+
+14. **Remote Bridge lock**
+    - 临时 HOME 里预先写入死 pid 锁后，`/remote start` 仍能连上。
+    - 同一把锁被活进程占用时，`/remote start` 失败并提到该 pid。
 
 ### Prior art
 

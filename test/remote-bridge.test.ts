@@ -225,7 +225,10 @@ async function fixture(responder: ModelResponder, script: Array<{ delayMs: numbe
   writeFileSync(join(home, ".feishu-agent", "SYSTEM.md"), "You are Feishu Agent.\n");
   writeFileSync(join(home, ".lark-cli", "config.json"), JSON.stringify({ apps: [{ appId: "cli_fake_bridge", brand: "feishu", users: [{ userOpenId: "ou_fake_owner" }] }] }));
   writeFileSync(join(bin, "lark-cli"), `#!/bin/sh\nprintf 'CALL|%s\\n' "$*" >> "${larkTrace}"\ncase "$*" in\n "--version") echo "lark-cli 1.0.0"; exit 0;;\n "skills list --json") echo "[]"; exit 0;;\nesac\necho "FAKE LARK DELETED"; exit 0\n`, { mode: 0o755 });
-  const baseEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, LARK_TRACE: larkTrace, PI_OFFLINE: "1", TERM: "xterm-256color", COLUMNS: "110", LINES: "32" };
+  const baseEnv: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, LARK_TRACE: larkTrace, PI_OFFLINE: "1", TERM: "xterm-256color", COLUMNS: "110", LINES: "32" };
+  delete baseEnv.FEISHU_REMOTE;
+  delete baseEnv.FEISHU_REMOTE_APP_SECRET;
+  delete baseEnv.FEISHU_REMOTE_LOOPBACK_URL;
   return {
     root, home, project, bin, larkTrace, model, feishu,
     env: (extra: NodeJS.ProcessEnv) => ({ ...baseEnv, ...extra }),
@@ -636,6 +639,68 @@ test("over-long final replies are delivered completely (sharded), not truncated"
     assert.equal(stats.sends.length, 1, JSON.stringify(stats.sends));
     assert.ok(Buffer.byteLength(stats.sends[0].text, "utf8") <= STREAM_CARD_TEXT_LIMIT_BYTES);
     assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+const BRIDGE_APP_ID = "cli_fake_bridge";
+
+function lockFile(home: string): string {
+  return join(home, ".cache", "feishu-remote", `${BRIDGE_APP_ID}.lock`);
+}
+
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function deadPid(): Promise<number> {
+  const child = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+  const pid = child.pid;
+  assert.ok(pid);
+  await new Promise((done) => child.once("exit", done));
+  for (let attempt = 0; attempt < 20 && pidIsAlive(pid); attempt++) await new Promise((done) => setTimeout(done, 10));
+  assert.equal(pidIsAlive(pid), false);
+  return pid;
+}
+
+function plantLock(home: string, pid: number): void {
+  mkdirSync(join(home, ".cache", "feishu-remote"), { recursive: true });
+  writeFileSync(lockFile(home), `${pid}\n`);
+}
+
+test("a stale lock from a dead process is reclaimed so /remote start can connect", async () => {
+  const f = await fixture(echoModel, []);
+  try {
+    plantLock(f.home, await deadPid());
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "Remote bridge connected", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Remote bridge connected/);
+    assert.doesNotMatch(result.output, /already running/);
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a live process holding the app lock makes /remote start fail with that pid", async () => {
+  const f = await fixture(echoModel, []);
+  try {
+    plantLock(f.home, process.pid);
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "/remote start\r" },
+      { wait: "already running", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, new RegExp(`already running \\(pid ${process.pid}\\)`));
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);
