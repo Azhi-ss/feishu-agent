@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { feishuRemotePackagePath } from "../src/remote-package.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -126,6 +127,18 @@ function configuredPackages(agentHome: string): string[] {
   return JSON.parse(readFileSync(join(agentHome, "settings.json"), "utf8")).packages ?? [];
 }
 
+function assertRemotePackageInstalledFromCliRoot(agentHome: string): void {
+  const sources = configuredPackages(agentHome).filter((entry): entry is string => typeof entry === "string" && !entry.startsWith("npm:@mem0"));
+  const remote = sources.find((source) => {
+    const resolved = isAbsolute(source) ? source : join(agentHome, source);
+    return existsSync(join(resolved, "package.json"));
+  });
+  assert.ok(remote, `Remote Package source missing: ${JSON.stringify(sources)}`);
+  assert.doesNotMatch(remote, /^\.\//);
+  assert.equal(realpathSync(isAbsolute(remote) ? remote : join(agentHome, remote)), feishuRemotePackagePath());
+  assert.equal(existsSync(join(agentHome, "npm", "node_modules", "@azhi-ss", "feishu-remote")), false);
+}
+
 function installs(path: string): string[] {
   return lines(path).filter((line) => line.includes("|install "));
 }
@@ -135,6 +148,7 @@ function assertCompleteSummary(output: string, home: string, identity: string, m
   assert.match(output, new RegExp(`Memory Identity: feishu:${identity}`));
   assert.match(output, new RegExp(`Model: fake/${model}`));
   assert.match(output, /Mem0 Package: ready/);
+  assert.match(output, /Remote Package: ready/);
   assert.match(output, /Official Skills: lark-cli 9\.9\.9/);
   assert.match(output, /Lark doctor: passed/);
   assert.match(output, /Memory: available/);
@@ -149,6 +163,7 @@ test("fresh HOME one-command init is immediately Print-ready, idempotent, isolat
     assertCompleteSummary(first.stdout, f.agentHome, "alice", "fake-model");
     assert.doesNotMatch(first.stdout + first.stderr, new RegExp(f.secret));
     assert.equal(configuredPackages(f.agentHome).filter((entry) => entry === MEM0_PACKAGE).length, 1);
+    assertRemotePackageInstalledFromCliRoot(f.agentHome);
     assert(lines(f.npmLog).every((line) => line.startsWith("false|")));
     assert(lines(f.larkLog).every((line) => line.startsWith("false|")));
 
@@ -207,6 +222,18 @@ test("official Skill sync failure continues with a successful prior cache warnin
     assertCompleteSummary(fallback.stdout, f.agentHome, "alice", "fake-model");
     assert.match(fallback.stderr, /Startup Warning: Official Skills for lark-cli 9\.9\.9 unavailable; using lark-cli 9\.9\.8\./);
     assert.equal(lines(f.larkLog).filter((line) => line.endsWith("|skills list --json")).length, 2);
+  } finally { f.close(); }
+});
+
+test("init keeps an existing npm Feishu Remote Package source", async () => {
+  const f = await fixture();
+  try {
+    mkdirSync(f.agentHome, { recursive: true });
+    writeFileSync(join(f.agentHome, "settings.json"), JSON.stringify({ packages: ["npm:@azhi-ss/feishu-remote"] }));
+    const result = await run(f.project, f.env, ["init", "--identity", "alice", "--model", "fake/fake-model"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert(configuredPackages(f.agentHome).includes("npm:@azhi-ss/feishu-remote"));
+    assert.equal(configuredPackages(f.agentHome).filter((entry) => typeof entry === "string" && entry.includes("packages/feishu-remote")).length, 0);
   } finally { f.close(); }
 });
 

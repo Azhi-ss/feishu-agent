@@ -1,15 +1,29 @@
 # Feishu Remote Bridge: one-time setup and usage
 
-The Feishu Remote Bridge mirrors the active interactive `feishu` session to the
-owner's 1-on-1 Feishu chat (see ADR
-[`0001-remote-bridge-transport.md`](adr/0001-remote-bridge-transport.md)). Normal
-startup never opens a network connection: the bridge is activated explicitly.
+The Feishu Remote Bridge is provided by the `@azhi-ss/feishu-remote` workspace
+package. It mirrors the active host session (Feishu Agent, or ordinary Pi after
+`pi install`) to the owner's 1-on-1 Feishu chat (see ADR
+[`0001-remote-bridge-transport.md`](adr/0001-remote-bridge-transport.md)). The
+package is transport only: Skills, Mem0, and high-risk approval stay with the
+host. `feishu init` installs the package from this repo's workspace path.
+Ordinary Pi does not auto-install it.
+
+```bash
+feishu init    # installs @azhi-ss/feishu-remote from the CLI install root (absolute path)
+pi install /absolute/path/to/feishu-agent/packages/feishu-remote   # optional, ordinary Pi
+```
+
+Normal startup never opens a network connection: the bridge is activated
+explicitly. Two local sessions cannot share the same bot app: `/remote start`
+takes `$HOME/.cache/feishu-remote/<appId>.lock`.
 
 ## One-time setup
 
-The bridge reuses the same self-built bot app as `lark-cli`; its app id and the
-owner `open_id` are read from the on-disk `lark-cli` config. Only the app secret
-needs supplying:
+The bridge reuses the same self-built bot app as `lark-cli` when that config
+exists. The app id and owner `open_id` come from the on-disk `lark-cli` config,
+or from `FEISHU_REMOTE_APP_ID` and `FEISHU_REMOTE_OWNER_OPEN_ID` if no config
+file is present. A broken config does not fall back to env. Only the app secret
+needs supplying when `lark-cli` is already logged in:
 
 1. Open the Feishu developer console, find the bot app, and **view** (do not
    reset — resetting invalidates `lark-cli`'s stored secret) its App Secret.

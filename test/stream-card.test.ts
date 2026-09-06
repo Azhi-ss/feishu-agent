@@ -8,7 +8,7 @@ import {
   STREAM_SIGNIFICANT_DELTA_CHARS,
   STREAM_UPDATE_THROTTLE_MS,
   visibleAssistantText,
-} from "../src/stream-card.js";
+} from "../packages/feishu-remote/extensions/stream-card.js";
 
 test("the first visible text always flushes", () => {
   assert.equal(shouldFlushStreamUpdate("", "hello", 0), true);

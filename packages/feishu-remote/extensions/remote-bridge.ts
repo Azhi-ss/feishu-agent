@@ -19,8 +19,11 @@ import {
   type RemoteGateway,
   type RemoteInboundEvent,
 } from "./remote-gateway.js";
+import { acquireRemoteLock, releaseRemoteLock } from "./remote-lock.js";
 import { shardText, StreamCardSession, visibleAssistantText } from "./stream-card.js";
-import { setRemoteStatus, type RemoteStatus } from "./tui-status.js";
+
+type RemoteStatus = "off" | "connecting" | "connected" | "error";
+const REMOTE_STATUS_KEY = "feishu-3-remote";
 
 const MISSING_SECRET = `Remote bridge needs an app secret: set ${REMOTE_SECRET_ENV} to the existing bot app's secret (view it in the Feishu developer console — do not reset it), then run /remote start.`;
 
@@ -75,12 +78,24 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let lastError: string | undefined;
     let reportedPollError = false;
     let reportedCardError = false;
+    let lockedAppId: string | undefined;
     const dedup = new MessageDedup();
 
     function paint(ctx: ExtensionContext | undefined): void {
       try {
-        if (ctx?.mode === "tui") setRemoteStatus(ctx, status);
+        if (ctx?.mode !== "tui") return;
+        const ui = ctx.ui as { setStatus?: (key: string, text: string | undefined) => void; theme?: { fg(color: string, text: string): string } };
+        if (!ui.setStatus) return;
+        const color = status === "connected" ? "success" : status === "error" ? "warning" : "muted";
+        const label = `│ → remote:${status}`;
+        ui.setStatus(REMOTE_STATUS_KEY, process.env.NO_COLOR ? label : ui.theme?.fg?.(color, label) ?? label);
       } catch { /* stale ctx during shutdown */ }
+    }
+
+    function dropLock(): void {
+      if (!lockedAppId) return;
+      releaseRemoteLock(process.env.HOME ?? "", lockedAppId);
+      lockedAppId = undefined;
     }
 
     function notify(ctx: ExtensionContext | undefined, message: string, type: "info" | "warning" | "error" = "info"): void {
@@ -190,14 +205,23 @@ export function remoteBridgeExtension(): ExtensionFactory {
         return;
       }
       credentials = resolved.credentials;
+      const lock = acquireRemoteLock(process.env.HOME ?? "", credentials.appId);
+      if (!lock.ok) {
+        setState("error", ctx, lock.error);
+        notify(ctx, lock.error, "error");
+        return;
+      }
+      lockedAppId = credentials.appId;
       secret = process.env[REMOTE_SECRET_ENV];
       if (!secret) {
+        dropLock();
         setState("error", ctx, MISSING_SECRET);
         notify(ctx, MISSING_SECRET, "error");
         return;
       }
       const created = createGatewayFromEnv(process.env, resolved.credentials);
       if ("error" in created) {
+        dropLock();
         setState("error", ctx, created.error);
         notify(ctx, created.error, "error");
         return;
@@ -217,6 +241,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
           notify(latestCtx, "Remote bridge reconnected.", "info");
         });
       } catch (error) {
+        dropLock();
         setState("error", ctx, `Remote bridge could not connect: ${error instanceof Error ? error.message : String(error)}`);
         notify(ctx, lastError!, "error");
         return;
@@ -243,6 +268,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
       const session = await card?.open;
       if (session) await session.finalize("").catch(() => {});
       await candidate?.close();
+      dropLock();
       // No paint on session_shutdown: the captured ctx is stale and the UI is going away.
       status = "off";
       if (paintCtx) paint(paintCtx);

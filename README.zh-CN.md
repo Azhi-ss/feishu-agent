@@ -66,7 +66,7 @@ npx skills add Azhi-ss/feishu-agent --skill feishu-control --global --agent pi -
 MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
 ```
 
-初始化会在 `~/.feishu-agent/` 下创建私有状态和 4 个内置 Feishu Skills；首次初始化需要显式选择一个已认证的飞书模型；保存一个仅 Feishu 使用的思考等级偏好；验证 Mem0 连通性但不打印密钥；安装未加修改的 Mem0 包；同步官方 `lark-cli` Skills；并在所选 profile 下运行 `lark-cli doctor`。重复运行只补齐缺失状态，不会覆盖身份、模型、自定义 `SYSTEM.md` 或已经编辑过的 Skill。需要显式替换时使用 `--reset-identity`、`--reset-model`、`--reset-system`。
+初始化会在 `~/.feishu-agent/` 下创建私有状态和 4 个内置 Feishu Skills；首次初始化需要显式选择一个已认证的飞书模型；保存一个仅 Feishu 使用的思考等级偏好；验证 Mem0 连通性但不打印密钥；安装未加修改的 Mem0 包以及本仓库 workspace 中的 Feishu Remote Package；同步官方 `lark-cli` Skills；并在所选 profile 下运行 `lark-cli doctor`。重复运行只补齐缺失状态，不会覆盖身份、模型、自定义 `SYSTEM.md` 或已经编辑过的 Skill。需要显式替换时使用 `--reset-identity`、`--reset-model`、`--reset-system`。
 
 ## 运行
 
@@ -79,7 +79,7 @@ feishu --session <id>     # 精确恢复当前 Feishu Project 中的某个会话
 feishu --lark-profile finance -p "任务"
 ```
 
-交互式会话中可用 `/find-skill <关键词>` 搜索公开 Skill 目录；选中后会先显示来源、安装量、许可证和目标路径，再确认是否安装。也可用 `/find-skill install <owner/repo@skill-name>` 直接指定结果。安装只写入 `~/.feishu-agent/skills/`，不会调用真实 HOME 下的普通 Pi 全局安装；Print 模式只搜索，不等待安装确认。`/remote [start|stop|status]` 管理飞书远程桥接，支持通过手机端飞书私聊直接驱动当前终端会话（参见 [docs/remote-bridge.md](docs/remote-bridge.md)）。
+交互式会话中可用 `/find-skill <关键词>` 搜索公开 Skill 目录；选中后会先显示来源、安装量、许可证和目标路径，再确认是否安装。也可用 `/find-skill install <owner/repo@skill-name>` 直接指定结果。安装只写入 `~/.feishu-agent/skills/`，不会调用真实 HOME 下的普通 Pi 全局安装；Print 模式只搜索，不等待安装确认。`/remote [start|stop|status]` 由已安装的 Feishu Remote Package（`@azhi-ss/feishu-remote`）提供，用手机飞书私聊驱动当前会话（参见 [docs/remote-bridge.md](docs/remote-bridge.md)）。该包只做传输：普通 Pi 也可以安装，但不会因此获得 Feishu Agent 的 Skills 或策略。
 
 交互式正常退出时，会把 Pi 的通用恢复提示改写为 `To resume this Feishu session: feishu --session <id>`；复制该命令即可精确恢复对应会话。最新会话用 `feishu -c`，手动选择用 `feishu -r`。如果 `feishu` 不在 PATH 中，可用 `FEISHU_RESUME_COMMAND` 指定完整可执行路径。不要用普通 `pi --session-dir ... --session ...` 恢复 Feishu 会话——那会绕过 Feishu Runtime 边界。
 
@@ -96,6 +96,7 @@ Feishu Runtime 会关闭 Pi 内置的启动期网络检查，因此你永远不�
 | 能力 | 来源 | 说明 |
 |---|---|---|
 | 长期记忆 | `@mem0/pi-agent-plugin`（钉版本，由 `feishu init` 自动安装） | 按 Project 语义化捕获用户/助手文本；`MEM0_API_KEY` 只走环境变量 |
+| 远程桥 | `@azhi-ss/feishu-remote`（workspace 包，由 `feishu init` 自动安装） | 手机遥控当前会话；只做传输，不含 Skills / Mem0 / 高风险批准。普通 Pi 可 `pi install` 同一路径 |
 | 核心策略守卫 | 内置（隐藏的 `feishu-core-policy` 扩展） | 高危 `lark-cli --yes` 审批守卫；拦截 `/share` `/import` `/login` `/logout` |
 | Skill 编写引导 | 内置 `feishu-skill-maker` skill | 创建新 Feishu Skill 的规范指引 |
 | Skill 搜索与私有安装 | 内置 `/find-skill` 命令与 `feishu-find-skill` skill | 复用 `skills.sh` 搜索和 `npx skills` staging；最终只写入 `~/.feishu-agent/skills/`，不污染 `~/.agents/skills` 或 `~/.pi/agent/skills` |

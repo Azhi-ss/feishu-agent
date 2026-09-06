@@ -15,6 +15,7 @@ import { dispatchConfig, setPackageResourceEnabled, type PackageResourceType } f
 import { existingIdentity, initializeHome } from "./init.js";
 import { checkReadiness } from "./readiness.js";
 import { CORE_TOOLS, projectKeyFor } from "./policy.js";
+import { feishuRemotePackagePath, isRemotePackageConfigured } from "./remote-package.js";
 
 function projectRoot(cwd: string): string {
   try {
@@ -76,6 +77,7 @@ const HELP = `Usage:
 
 Interactive command:
   /find-skill <query>             Search and install a private Feishu Skill
+  /remote [start|stop|status]     Feishu Remote Bridge (installed package)
 
 Resource Isolation is not an OS sandbox. Installed Feishu Package extensions run with current-user permissions.
 `;
@@ -214,12 +216,15 @@ else {
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source === MEM0_PACKAGE && entry.installedPath)) {
       await manager.installAndPersist(MEM0_PACKAGE);
     }
+    if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && isRemotePackageConfigured(entry, agentHome))) {
+      await manager.installAndPersist(feishuRemotePackagePath());
+    }
     const skills = await syncOfficialSkills(join(agentHome, "official-skills"));
     if (skills.warning) {
       if (!existsSync(join(skills.cacheDir, ".success"))) fail(skills.warning);
       process.stderr.write(`Startup Warning: ${skills.warning}\n`);
     }
-    process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\nModel: ${readiness.model}\nMem0 Package: ready\nOfficial Skills: ${skills.version}\nLark doctor: ${readiness.doctor}\nMemory: ${readiness.memory}\n`);
+    process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\nModel: ${readiness.model}\nMem0 Package: ready\nRemote Package: ready\nOfficial Skills: ${skills.version}\nLark doctor: ${readiness.doctor}\nMemory: ${readiness.memory}\n`);
   }
   else if (args[0] === "skills" && args[1] === "sync") {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");

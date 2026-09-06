@@ -7,18 +7,19 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { projectKeyFor } from "../src/policy.js";
-import { STREAM_CARD_TEXT_LIMIT_BYTES } from "../src/stream-card.js";
+import { packageManager } from "../src/packages.js";
+import { STREAM_CARD_TEXT_LIMIT_BYTES } from "../packages/feishu-remote/extensions/stream-card.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
 const SECRET = "FEISHU-SECRET-supersecret-42";
 
-interface PtyAction { wait: string; send?: string; }
+interface PtyAction { wait?: string; waitFile?: string; send?: string; }
 
-function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[]): Promise<{ code: number | null; output: string }> {
-  const python = `import json,os,pty,select,sys,time\nactions=json.loads(sys.argv[4]); pid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3],*json.loads(sys.argv[5])],os.environ)\nout=b''; checkpoint=0; action=0; resends=0; end=time.time()+60; last_resend=0; last_send=None; last_sent_at=0; stall_resends=0\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n if action<len(actions) and actions[action]['wait'].encode() in out[checkpoint:]:\n  time.sleep(.15); s=actions[action].get('send') or ''\n  if s: os.write(fd,s.encode())\n  last_send=s.encode() if s else None; last_sent_at=time.time(); stall_resends=0\n  checkpoint=len(out); action+=1\n elif action<len(actions) and last_send and stall_resends<1 and time.time()-last_sent_at>5:\n  os.write(fd,last_send); last_sent_at=time.time(); stall_resends=1\n elif action==len(actions) and actions and resends<2 and time.time()-last_resend>2 and actions[-1].get('send'):\n  try: os.write(fd,actions[-1]['send'].encode())\n  except OSError: pass\n  resends+=1; last_resend=time.time()\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if action==len(actions) else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
+function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[], timeoutSec = 60): Promise<{ code: number | null; output: string }> {
+  const python = `import json,os,pty,select,sys,time\nactions=json.loads(sys.argv[4]); timeout=float(sys.argv[6]); pid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3],*json.loads(sys.argv[5])],os.environ)\nout=b''; checkpoint=0; action=0; resends=0; end=time.time()+timeout; last_resend=0; last_send=None; last_sent_at=0; stall_resends=0\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n ready=False\n if action<len(actions):\n  a=actions[action]\n  if a.get('waitFile'): ready=os.path.exists(a['waitFile'])\n  elif a.get('wait') and a['wait'].encode() in out[checkpoint:]: ready=True\n if ready:\n  time.sleep(.15); s=actions[action].get('send') or ''\n  if s: os.write(fd,s.encode())\n  last_send=s.encode() if s else None; last_sent_at=time.time(); stall_resends=0\n  checkpoint=len(out); action+=1\n elif action<len(actions) and last_send and stall_resends<1 and time.time()-last_sent_at>5:\n  os.write(fd,last_send); last_sent_at=time.time(); stall_resends=1\n elif action==len(actions) and actions and resends<2 and time.time()-last_resend>2 and actions[-1].get('send'):\n  try: os.write(fd,actions[-1]['send'].encode())\n  except OSError: pass\n  resends+=1; last_resend=time.time()\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if action==len(actions) else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
   return new Promise((done) => {
-    const child = spawn("python3", ["-c", python, cwd, process.execPath, cli, JSON.stringify(actions), JSON.stringify(args)], { env });
+    const child = spawn("python3", ["-c", python, cwd, process.execPath, cli, JSON.stringify(actions), JSON.stringify(args), String(timeoutSec)], { env });
     let output = "";
     child.stdout.on("data", (chunk) => output += chunk);
     child.stderr.on("data", (chunk) => output += chunk);
@@ -225,7 +226,13 @@ async function fixture(responder: ModelResponder, script: Array<{ delayMs: numbe
   writeFileSync(join(home, ".feishu-agent", "SYSTEM.md"), "You are Feishu Agent.\n");
   writeFileSync(join(home, ".lark-cli", "config.json"), JSON.stringify({ apps: [{ appId: "cli_fake_bridge", brand: "feishu", users: [{ userOpenId: "ou_fake_owner" }] }] }));
   writeFileSync(join(bin, "lark-cli"), `#!/bin/sh\nprintf 'CALL|%s\\n' "$*" >> "${larkTrace}"\ncase "$*" in\n "--version") echo "lark-cli 1.0.0"; exit 0;;\n "skills list --json") echo "[]"; exit 0;;\nesac\necho "FAKE LARK DELETED"; exit 0\n`, { mode: 0o755 });
-  const baseEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, LARK_TRACE: larkTrace, PI_OFFLINE: "1", TERM: "xterm-256color", COLUMNS: "110", LINES: "32" };
+  await packageManager(join(home, ".feishu-agent"), project, projectKeyFor(project)).installAndPersist(resolve(repoRoot, "packages/feishu-remote"));
+  const baseEnv: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, LARK_TRACE: larkTrace, PI_OFFLINE: "1", TERM: "xterm-256color", COLUMNS: "110", LINES: "32" };
+  delete baseEnv.FEISHU_REMOTE;
+  delete baseEnv.FEISHU_REMOTE_APP_SECRET;
+  delete baseEnv.FEISHU_REMOTE_LOOPBACK_URL;
+  delete baseEnv.FEISHU_REMOTE_APP_ID;
+  delete baseEnv.FEISHU_REMOTE_OWNER_OPEN_ID;
   return {
     root, home, project, bin, larkTrace, model, feishu,
     env: (extra: NodeJS.ProcessEnv) => ({ ...baseEnv, ...extra }),
@@ -636,6 +643,40 @@ test("over-long final replies are delivered completely (sharded), not truncated"
     assert.equal(stats.sends.length, 1, JSON.stringify(stats.sends));
     assert.ok(Buffer.byteLength(stats.sends[0].text, "utf8") <= STREAM_CARD_TEXT_LIMIT_BYTES);
     assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a second session cannot start the bridge while the first holds the app lock", async () => {
+  const f = await fixture(echoModel, []);
+  const release = join(f.root, "release-first");
+  try {
+    const first = runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "Remote bridge connected", send: "" },
+      { waitFile: release, send: "/remote stop\r" },
+      { wait: "Remote bridge stopped", send: "/quit\r" },
+    ]);
+    for (let attempt = 0; attempt < 80; attempt++) {
+      if ((await f.feishu.stats()).polls > 0) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+    const blocked = await runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "/remote start\r" },
+      { wait: "already running", send: "/quit\r" },
+    ]);
+    assert.equal(blocked.code, 0, blocked.output);
+    assert.match(blocked.output, /already running \(pid \d+\)/);
+    writeFileSync(release, "go\n");
+    const firstResult = await first;
+    assert.equal(firstResult.code, 0, firstResult.output);
+    const takeover = await runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "/remote start\r" },
+      { wait: "Remote bridge connected", send: "/quit\r" },
+    ]);
+    assert.equal(takeover.code, 0, takeover.output);
+    assert.match(takeover.output, /Remote bridge connected/);
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);

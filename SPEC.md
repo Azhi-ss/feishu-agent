@@ -110,6 +110,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - Interactive 模式组合 `AgentSessionRuntime` 与 Pi `InteractiveMode`；Print 模式使用 Pi 的单次输出 Runner。
 - 首版只支持 Interactive 与 Print；JSON、RPC 不实现。
 - Feishu 核心策略作为最终组合层，在第三方包资源加载后重新施加，防止 Extension 替换核心边界。
+- `/remote` 由已安装的 Feishu Remote Package 提供，不再由 Runtime 内联工厂注册。
 
 ### 2. Agent Home and environment
 
@@ -188,6 +189,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 安装包默认启用 Manifest 声明的 Extensions、Skills、Prompts 和 Themes。
 - `feishu config` 可按资源类型收窄包资源。
 - 普通 Pi 不应发现或列出 Feishu Packages。
+- Feishu Remote Package（`@azhi-ss/feishu-remote`）是本仓库 workspace 子目录中的只传输 Pi 兼容包。`feishu init` 用 CLI 安装根算出的绝对路径自动安装它；普通 Pi 不自动安装。用户已配置该包（本地 path 或 `npm:@azhi-ss/feishu-remote`）时不得改回另一源。本地 path 不复制树。核心包装清单不直接依赖飞书 Node SDK。
 
 ### 8. Core policy precedence
 
@@ -196,6 +198,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - Extension 可追加 System Prompt，但不得替换全局基础身份。
 - Extension 可请求自定义 Editor，但 Feishu Command Policy Editor 必须作为最外层提交拦截器。
 - 核心策略应用必须在初始加载和 `/reload` 后都重新执行。
+- `/remote` 仅允许包装清单名为 `@azhi-ss/feishu-remote` 的扩展注册；其他来源的同名命令删除并警告。该包仍不得替换保留核心工具或 `/find-skill`、`/feishu-resume`。
 
 ### 9. Tool capability and domain boundary
 
@@ -205,6 +208,14 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - Agent 可以检查项目材料或编写辅助代码，但必须直接服务于飞书交付或 `lark-cli` 工作流。
 - 与飞书无关的普通开发请求返回简洁转介，建议使用普通 `pi`。
 - 资源加载隔离不是 OS Sandbox；Bash 仍拥有当前用户权限，这一点必须在文档和启动帮助中明确。
+
+### 9.1. Feishu Remote Package
+
+- 制品只做传输：出站 WebSocket、Card Kit 流式卡片、`/remote`、主人一对一注入。不带官方 Skills、高风险批准、SYSTEM 身份或 Mem0。
+- 身份：先读 `~/.lark-cli/config.json` 再读 XDG `lark-cli` 配置（零网络）。文件存在但无效或缺少 app/owner 时失败，不回退环境变量。两个路径都不存在时允许 `FEISHU_REMOTE_APP_ID` 与 `FEISHU_REMOTE_OWNER_OPEN_ID`。App secret 只来自 `FEISHU_REMOTE_APP_SECRET`。
+- `/remote start` 在建连前获取 `$HOME/.cache/feishu-remote/<appId>.lock`（HOME 取进程环境）。活进程占用则失败并指出 pid；死 pid 可回收。`/remote stop` 与会话关闭释放本进程的锁。
+- TUI 状态由包直接调用 Pi `setStatus`，文案保持 `remote:<status>`。核心不为 Remote 增加状态插槽。
+- 运输保持 ADR-0001：进程内官方 SDK `WSClient`；不得与 `lark-cli event consume` 同时占用同一应用。本里程碑不 npm 发布。
 
 ### 10. Lark identity and profile
 
@@ -255,12 +266,13 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
   3. 要求用户显式输入稳定 Memory Identity；
   4. 检查 `MEM0_API_KEY` 是否存在并验证连接，但不显示值；
   5. 自动安装 `@mem0/pi-agent-plugin`；
-  6. 写入非敏感 Mem0 配置；
-  7. 写入独立 Feishu Settings 和默认模型；
-  8. 强制关闭 Mem0 Telemetry；
-  9. 同步官方 Skills；
-  10. 执行 `lark-cli doctor`；
-  11. 验证至少一个模型凭证可用。
+  6. 自动安装 Feishu Remote Package（CLI 安装根下的绝对路径，禁止依赖用户 cwd 的相对路径）；
+  7. 写入非敏感 Mem0 配置；
+  8. 写入独立 Feishu Settings 和默认模型；
+  9. 强制关闭 Mem0 Telemetry；
+  10. 同步官方 Skills；
+  11. 执行 `lark-cli doctor`；
+  12. 验证至少一个模型凭证可用。
 - 已存在配置不得被静默覆盖；重新执行时显示当前值并只补齐缺失项。
 - 重置 Identity、默认模型或 `SYSTEM.md` 必须使用显式重置选项。
 
@@ -281,7 +293,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu -r`
 - `feishu --session <id>`
 - `feishu --lark-profile <profile>`
-- 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`、`/remote [start|stop|status]`
+- 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`、`/remote [start|stop|status]`（`/remote` 由已安装的 Feishu Remote Package 提供，不是内联核心命令）
 
 CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/find-skill` 属于 Runtime 内的交互命令，不新增顶层 `feishu` 参数。
 
@@ -318,6 +330,7 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
    - `list/remove/update/config` 仅影响 Feishu Settings。
    - 普通 Pi Fixture 看不到 Feishu 包。
    - Manifest 全资源加载和过滤行为与 Pi Package 语义一致。
+   - `feishu init` 把 Feishu Remote Package 以 CLI 安装根绝对路径写入全局包列表；再跑 init 不重复追加；已配置 `npm:@azhi-ss/feishu-remote` 时不改回 path 源。
 
 5. **Compatibility Home**
    - Mem0 模块加载和初始化看到隔离 Home。
@@ -376,6 +389,12 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
     - 缺少 API Key、无模型、`lark-cli doctor` 失败时输出精确诊断。
     - 重复初始化幂等，不覆盖已有配置。
     - 显式重置选项才改变 Identity、模型或 System Prompt。
+
+14. **Remote Bridge package**
+    - Interactive PTY 夹具把 workspace 包绝对路径装进临时 Feishu Agent Home；现有 `/remote` 行为保持。
+    - 同一临时 HOME、同一 app id 的两个会话先后 `/remote start`：第二个失败并提到占用 pid。
+    - 无 `lark-cli` 配置时环境变量身份可用；坏配置不回退环境变量。
+    - 允许名单包装保留 `/remote`，其他包装同名命令被剥掉。
 
 ### Prior art
 

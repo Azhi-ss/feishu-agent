@@ -8,6 +8,8 @@ import * as lark from "@larksuiteoapi/node-sdk";
 export const REMOTE_SECRET_ENV = "FEISHU_REMOTE_APP_SECRET";
 export const REMOTE_AUTOSTART_ENV = "FEISHU_REMOTE";
 export const REMOTE_LOOPBACK_ENV = "FEISHU_REMOTE_LOOPBACK_URL";
+export const REMOTE_APP_ID_ENV = "FEISHU_REMOTE_APP_ID";
+export const REMOTE_OWNER_OPEN_ID_ENV = "FEISHU_REMOTE_OWNER_OPEN_ID";
 
 export interface RemoteInboundEvent {
   ownerOpenId: string;
@@ -336,7 +338,7 @@ function loadFeishuGatewaySdk(): FeishuGatewaySdk {
       domain: params.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu,
       logger: quietLogger,
       loggerLevel: lark.LoggerLevel.fatal,
-      source: "feishu-agent-remote",
+      source: "feishu-remote",
     }) as unknown as FeishuClient,
     createDispatcher: () => new lark.EventDispatcher({ logger: quietLogger, loggerLevel: lark.LoggerLevel.fatal }) as unknown as FeishuDispatcher,
     createWsClient: (options) => new lark.WSClient({
@@ -344,7 +346,7 @@ function loadFeishuGatewaySdk(): FeishuGatewaySdk {
       domain: options.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu,
       logger: quietLogger,
       loggerLevel: lark.LoggerLevel.fatal,
-      source: "feishu-agent-remote",
+      source: "feishu-remote",
     }) as unknown as FeishuWsClient,
   };
 }
@@ -379,7 +381,7 @@ interface LarkConfig {
  * it lives in the keychain behind a {source:"keychain"} reference, so it is
  * supplied separately via REMOTE_SECRET_ENV.
  */
-export function resolveRemoteCredentials(home: string, read: (path: string) => string | undefined = defaultRead): { credentials: RemoteCredentials } | { error: string } {
+export function resolveRemoteCredentials(home: string, read: (path: string) => string | undefined = defaultRead, env: NodeJS.ProcessEnv = process.env): { credentials: RemoteCredentials } | { error: string } {
   const paths = [join(home, ".lark-cli", "config.json"), join(home, ".config", "lark-cli", "config.json")];
   for (const path of paths) {
     const raw = read(path);
@@ -396,7 +398,10 @@ export function resolveRemoteCredentials(home: string, read: (path: string) => s
     if (app.brand === "lark") credentials.brand = "lark";
     return { credentials };
   }
-  return { error: "Remote bridge found no lark-cli config (~/.lark-cli/config.json). Run `lark-cli auth login` first." };
+  const appId = env[REMOTE_APP_ID_ENV];
+  const ownerOpenId = env[REMOTE_OWNER_OPEN_ID_ENV];
+  if (appId && ownerOpenId) return { credentials: { appId, ownerOpenId } };
+  return { error: "Remote bridge found no lark-cli config (~/.lark-cli/config.json). Run `lark-cli auth login` first, or set FEISHU_REMOTE_APP_ID and FEISHU_REMOTE_OWNER_OPEN_ID." };
 }
 
 function defaultRead(path: string): string | undefined {
@@ -410,7 +415,7 @@ function defaultRead(path: string): string | undefined {
 export function createGatewayFromEnv(env: NodeJS.ProcessEnv = process.env, credentials?: RemoteCredentials): { gateway: RemoteGateway; transport: string } | { error: string } {
   const loopback = env[REMOTE_LOOPBACK_ENV];
   if (loopback) return { gateway: new LoopbackGateway(loopback), transport: "loopback" };
-  if (!credentials) return { error: "Remote bridge cannot create the Feishu gateway without lark-cli credentials." };
+  if (!credentials) return { error: "Remote bridge cannot create the Feishu gateway without credentials." };
   const secret = env[REMOTE_SECRET_ENV];
   if (!secret) return { error: `Remote bridge needs ${REMOTE_SECRET_ENV} to use the Feishu SDK gateway.` };
   return { gateway: new FeishuGateway(credentials, secret), transport: "feishu-sdk" };

@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { resolveRemoteCredentials } from "../../src/remote-gateway.js";
+import { resolveRemoteCredentials } from "../../packages/feishu-remote/extensions/remote-gateway.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const cliPath = join(repoRoot, "dist/src/cli.js");
@@ -87,6 +87,7 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
   });
 
   await t.test("1. Startup in tmux with FEISHU_REMOTE=1 connects to real Feishu WebSocket", () => {
+    execFileSync(process.execPath, [cliPath, "install", join(repoRoot, "packages/feishu-remote")], { cwd: repoRoot, stdio: "ignore" });
     execFileSync("tmux", [
       "new-session", "-d", "-s", sessionName,
       "-c", repoRoot,

@@ -1,0 +1,20 @@
+{
+  "name": "@azhi-ss/feishu-remote",
+  "version": "0.1.0",
+  "description": "Feishu Remote Bridge transport for Pi-compatible agents",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions/index.ts"]
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.73.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

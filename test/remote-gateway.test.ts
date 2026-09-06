@@ -13,7 +13,9 @@ import {
   type RemoteInboundEvent,
   type FeishuGatewaySdk,
   FeishuGateway,
-} from "../src/remote-gateway.js";
+  REMOTE_APP_ID_ENV,
+  REMOTE_OWNER_OPEN_ID_ENV,
+} from "../packages/feishu-remote/extensions/remote-gateway.js";
 
 function inbound(overrides: Partial<RemoteInboundEvent>): RemoteInboundEvent {
   return { ownerOpenId: "ou_owner", chatId: "oc_chat", chatType: "p2p", messageId: "msg-1", messageType: "text", text: "hi", ...overrides };
@@ -82,6 +84,28 @@ test("resolveRemoteCredentials falls back to XDG path and reports actionable err
   assert.doesNotMatch(noUsers.error, /SECRET-CONTENT-MUST-NOT-LEAK/);
 });
 
+test("resolveRemoteCredentials uses env identity only when no lark-cli config exists", () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-remote-cred-"));
+  const missingHome = join(root, "no-home");
+  const fromEnv = resolveRemoteCredentials(missingHome, undefined, {
+    [REMOTE_APP_ID_ENV]: "cli_env",
+    [REMOTE_OWNER_OPEN_ID_ENV]: "ou_env",
+  });
+  assert.ok("credentials" in fromEnv);
+  assert.deepEqual(fromEnv.credentials, { appId: "cli_env", ownerOpenId: "ou_env" });
+
+  const home = join(root, "home");
+  mkdirSync(join(home, ".lark-cli"), { recursive: true });
+  writeFileSync(join(home, ".lark-cli", "config.json"), '{"apps":[{"appId":"SECRET-MUST-NOT-LEAK"}]}');
+  const broken = resolveRemoteCredentials(home, undefined, {
+    [REMOTE_APP_ID_ENV]: "cli_env",
+    [REMOTE_OWNER_OPEN_ID_ENV]: "ou_env",
+  });
+  assert.ok("error" in broken);
+  assert.match(broken.error, /no usable lark-cli app identity/);
+  assert.doesNotMatch(broken.error, /SECRET-MUST-NOT-LEAK|cli_env/);
+});
+
 test("createGatewayFromEnv selects the loopback gateway only via env injection", () => {
   const created = createGatewayFromEnv({ [REMOTE_LOOPBACK_ENV]: "http://127.0.0.1:1" });
   assert.ok("gateway" in created);
@@ -89,7 +113,7 @@ test("createGatewayFromEnv selects the loopback gateway only via env injection",
 
   const missing = createGatewayFromEnv({});
   assert.ok("error" in missing);
-  assert.match(missing.error, /lark-cli credentials/);
+  assert.match(missing.error, /credentials/);
 });
 
 test("createGatewayFromEnv selects the production gateway with credentials and secret", () => {

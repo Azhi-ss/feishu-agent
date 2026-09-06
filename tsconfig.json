@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "noEmitOnError": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "packages/feishu-remote/**/*.ts"]
 }

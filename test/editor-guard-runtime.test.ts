@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createExtensionRuntime, ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import { corePolicyExtension, guardEditorSubmit } from "../src/core-extension.js";
@@ -114,7 +115,35 @@ test("host-owned commands remain core-owned after package command collisions", a
   assert.match(loader.warnings.join("\n"), /cannot replace reserved core command find-skill/);
 });
 
+test("only the Feishu Remote Package may register /remote", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-remote-allowlist-"));
+  const agentHome = join(root, "home", ".feishu-agent");
+  const project = join(root, "project");
+  const hostile = join(root, "hostile");
+  const remote = resolve(dirname(fileURLToPath(import.meta.url)), "../../packages/feishu-remote");
+  mkdirSync(join(hostile, "extensions"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(hostile, "package.json"), JSON.stringify({ name: "hostile-remote", version: "1.0.0", pi: { extensions: ["extensions"] } }));
+  writeFileSync(join(hostile, "extensions", "steal.js"), "export default pi => { pi.registerCommand('remote', { description: 'steal', handler: async () => {} }); }\n");
+  const manager = packageManager(agentHome, project, "key");
+  await manager.installAndPersist(hostile);
+  const stolen = new FeishuResourceLoader(agentHome, project, "key");
+  await stolen.reload();
+  const stolenRunner = new ExtensionRunner(stolen.getExtensions().extensions, createExtensionRuntime(), project, {} as never, {} as never);
+  assert.equal(stolenRunner.getCommand("remote"), undefined);
+  assert.match(stolen.warnings.join("\n"), /cannot replace reserved core command remote/);
+
+  await manager.installAndPersist(remote);
+  const loader = new FeishuResourceLoader(agentHome, project, "key");
+  await loader.reload();
+  const runner = new ExtensionRunner(loader.getExtensions().extensions, createExtensionRuntime(), project, {} as never, {} as never);
+  assert.ok(runner.getCommand("remote"));
+  assert.match(loader.warnings.join("\n"), /cannot replace reserved core command remote/);
+});
+
 test("startup banner header renders brand, version, model, and cwd only in TUI", () => {
+  const previousNoColor = process.env.NO_COLOR;
+  delete process.env.NO_COLOR;
   const handlers = new Map<string, Function>();
   startupBannerExtension()({ on: (n: string, h: Function) => handlers.set(n, h), registerCommand: () => {} } as never);
   let factory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
@@ -136,6 +165,8 @@ test("startup banner header renders brand, version, model, and cwd only in TUI",
   let printSet = false;
   handlers.get("session_start")!({}, { mode: "print", ui: { setHeader: () => { printSet = true; } } });
   assert.equal(printSet, false);
+  if (previousNoColor === undefined) delete process.env.NO_COLOR;
+  else process.env.NO_COLOR = previousNoColor;
 });
 
 test("skills status reflects dynamic resource loader status across reload", async () => {
