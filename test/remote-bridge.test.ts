@@ -682,3 +682,65 @@ test("a second session cannot start the bridge while the first holds the app loc
     await closeServer(f.model.server);
   }
 });
+
+const BRIDGE_APP_ID = "cli_fake_bridge";
+
+function lockFile(home: string): string {
+  return join(home, ".cache", "feishu-remote", `${BRIDGE_APP_ID}.lock`);
+}
+
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function deadPid(): Promise<number> {
+  const child = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+  const pid = child.pid;
+  assert.ok(pid);
+  await new Promise((done) => child.once("exit", done));
+  for (let attempt = 0; attempt < 20 && pidIsAlive(pid); attempt++) await new Promise((done) => setTimeout(done, 10));
+  assert.equal(pidIsAlive(pid), false);
+  return pid;
+}
+
+function plantLock(home: string, pid: number): void {
+  mkdirSync(join(home, ".cache", "feishu-remote"), { recursive: true });
+  writeFileSync(lockFile(home), `${pid}\n`);
+}
+
+test("a stale lock from a dead process is reclaimed so /remote start can connect", async () => {
+  const f = await fixture(echoModel, []);
+  try {
+    plantLock(f.home, await deadPid());
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "Remote bridge connected", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Remote bridge connected/);
+    assert.doesNotMatch(result.output, /already running/);
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a live process holding the app lock makes /remote start fail with that pid", async () => {
+  const f = await fixture(echoModel, []);
+  try {
+    plantLock(f.home, process.pid);
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "/remote start\r" },
+      { wait: "already running", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, new RegExp(`already running \\(pid ${process.pid}\\)`));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});

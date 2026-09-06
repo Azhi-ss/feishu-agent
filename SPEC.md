@@ -393,6 +393,8 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
 14. **Remote Bridge package**
     - Interactive PTY 夹具把 workspace 包绝对路径装进临时 Feishu Agent Home；现有 `/remote` 行为保持。
     - 同一临时 HOME、同一 app id 的两个会话先后 `/remote start`：第二个失败并提到占用 pid。
+    - 临时 HOME 里预先写入死 pid 锁后，`/remote start` 仍能连上。
+    - 同一把锁被活进程占用时，`/remote start` 失败并提到该 pid。
     - 无 `lark-cli` 配置时环境变量身份可用；坏配置不回退环境变量。
     - 允许名单包装保留 `/remote`，其他包装同名命令被剥掉。
 

@@ -81,6 +81,12 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let lockedAppId: string | undefined;
     const dedup = new MessageDedup();
 
+    function dropLock(): void {
+      if (!lockedAppId) return;
+      releaseRemoteLock(process.env.HOME ?? "", lockedAppId);
+      lockedAppId = undefined;
+    }
+
     function paint(ctx: ExtensionContext | undefined): void {
       try {
         if (ctx?.mode !== "tui") return;
@@ -90,12 +96,6 @@ export function remoteBridgeExtension(): ExtensionFactory {
         const label = `│ → remote:${status}`;
         ui.setStatus(REMOTE_STATUS_KEY, process.env.NO_COLOR ? label : ui.theme?.fg?.(color, label) ?? label);
       } catch { /* stale ctx during shutdown */ }
-    }
-
-    function dropLock(): void {
-      if (!lockedAppId) return;
-      releaseRemoteLock(process.env.HOME ?? "", lockedAppId);
-      lockedAppId = undefined;
     }
 
     function notify(ctx: ExtensionContext | undefined, message: string, type: "info" | "warning" | "error" = "info"): void {
