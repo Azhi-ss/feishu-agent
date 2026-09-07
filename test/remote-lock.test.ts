@@ -14,6 +14,7 @@ import {
   requestRemoteHandover,
   waitForRemoteLockRelease,
 } from "../packages/feishu-remote/extensions/remote-lock.js";
+import { remoteBridgeExtension } from "../packages/feishu-remote/index.js";
 
 const APP_ID = "cli_lock_unit";
 
@@ -178,4 +179,21 @@ test("releasing the lock clears any pending yield file", () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("/remote registers argument completions for subcommands", () => {
+  const registered: Record<string, { getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string }> }> = {};
+  const mockPi = {
+    registerCommand: (name: string, opts: any) => { registered[name] = opts; },
+    on: () => {},
+    registerProvider: () => {},
+  };
+  remoteBridgeExtension()(mockPi as any);
+  assert.ok(registered.remote?.getArgumentCompletions, "/remote must register getArgumentCompletions");
+  const all = registered.remote.getArgumentCompletions("");
+  assert.deepEqual(all?.map((i) => i.value), ["start", "switch", "status", "stop"]);
+  const st = registered.remote.getArgumentCompletions("st");
+  assert.deepEqual(st?.map((i) => i.value), ["start", "status", "stop"]);
+  const sw = registered.remote.getArgumentCompletions("sw");
+  assert.deepEqual(sw?.map((i) => i.value), ["switch"]);
 });

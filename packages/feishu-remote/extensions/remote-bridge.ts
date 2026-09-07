@@ -431,8 +431,19 @@ export function remoteBridgeExtension(): ExtensionFactory {
       await start(ctx);
     }
 
+    const REMOTE_SUBCOMMANDS = [
+      { value: "start", label: "start", description: "Connect the remote bridge" },
+      { value: "switch", label: "switch", description: "Take over the bridge from another window" },
+      { value: "status", label: "status", description: "Show connection and lock status" },
+      { value: "stop", label: "stop", description: "Disconnect the bridge and release lock" },
+    ];
+
     pi.registerCommand("remote", {
       description: "Manage the Feishu Remote Bridge (phone control of this session)",
+      getArgumentCompletions: (argumentPrefix: string) => {
+        const query = argumentPrefix.trim().toLowerCase();
+        return REMOTE_SUBCOMMANDS.filter((item) => item.value.startsWith(query));
+      },
       handler: async (args, ctx) => {
         latestCtx = ctx;
         switch (args.trim()) {
