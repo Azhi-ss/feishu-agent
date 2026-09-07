@@ -104,8 +104,9 @@ Only Interactive and text Print modes are supported. JSON and RPC are intentiona
 | Process-report workflow | bundled `process-optimization-biweekly` skill | Sanitized reusable template for source collection, lifecycle-based progress writing, and Feishu document updates |
 | Official Feishu skills | read-only cache from the local `lark-cli` (28 skills: lark-im, lark-doc, lark-calendar, …) | Keyed by CLI version, synced lazily; refresh with `feishu skills sync` |
 | Core tools | `read` `edit` `write` `bash` `grep` `find` `ls` | Third-party packages cannot replace these names |
+| Default theme | bundled `breezy-ocean` (MIT, from [awesome-pi-themes](https://github.com/isashi/awesome-pi-themes)) | Applied as the one-shot default; pick another any time in `/settings` |
 
-Themes and prompt templates are not bundled; load them via packages as needed.
+The default TUI theme (`breezy-ocean`) is bundled and applied automatically; switch it in `/settings`. Prompt templates are not bundled; additional themes and templates load through packages as needed.
 
 ### Recommended optional packages
 

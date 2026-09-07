@@ -104,8 +104,9 @@ Feishu Runtime 会关闭 Pi 内置的启动期网络检查，因此你永远不�
 | 工艺进展汇报工作流 | 内置 `process-optimization-biweekly` skill | 已脱敏的可复用信息采集、生命周期写作和飞书文档更新模板 |
 | 官方飞书 Skills | 本地 `lark-cli` 的只读缓存（28 个：lark-im、lark-doc、lark-calendar……） | 按 CLI 版本作 key，惰性同步；用 `feishu skills sync` 刷新 |
 | 核心工具 | `read` `edit` `write` `bash` `grep` `find` `ls` | 第三方包无法替换这些名字 |
+| 默认主题 | 内置 `breezy-ocean`（MIT，来自 [awesome-pi-themes](https://github.com/isashi/awesome-pi-themes)） | 一次性默认主题；随时可在 `/settings` 里换 |
 
-主题和 prompt 模板不打包；需要时通过包加载。
+默认 TUI 主题（`breezy-ocean`）内置并自动应用，可在 `/settings` 切换。prompt 模板不打包；更多主题和模板需要时通过包加载。
 
 ### 可选推荐包
 
