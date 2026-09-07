@@ -66,7 +66,7 @@ test("Feishu loader keeps identity, allowed contexts, package prompts/themes, an
     assert.match(warnings, /selected .*project.*shadowed .*home/s);
     assert.deepEqual(loader.getAgentsFiles().agentsFiles.map((entry) => entry.path), [join(project, ".feishu-agent", "AGENTS.md"), join(project, "AGENTS.md")]);
     assert.deepEqual(loader.getPrompts().prompts.map((entry) => entry.name), ["brief"]);
-    assert.deepEqual(loader.getThemes().themes.map((entry) => entry.name), ["fixture"]);
+    assert.deepEqual(loader.getThemes().themes.map((entry) => entry.name).sort(), ["breezy-ocean", "fixture"]);
   } finally {
     process.env.PATH = oldPath;
     if (oldAgentDir === undefined) delete process.env.PI_AGENT_DIR; else process.env.PI_AGENT_DIR = oldAgentDir;

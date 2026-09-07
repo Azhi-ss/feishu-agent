@@ -11,7 +11,7 @@ import {
 import { FeishuResourceLoader } from "./resources.js";
 import { cwdMismatchNotice, sessionManagerFor } from "./sessions.js";
 import { CORE_TOOLS } from "./policy.js";
-import { settingsManagerFor } from "./settings.js";
+import { settingsManagerFor, ensureDefaultTheme } from "./settings.js";
 import { memoryRuntime } from "./memory.js";
 
 const ANSI_ESCAPE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
@@ -55,6 +55,7 @@ export async function runtimeHostSwitchOverride(runtime: Pick<AgentSessionRuntim
 
 async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, currentRequest?: string, interactive = false, sessionId?: string) {
   disablePiStartupNetworkChecks();
+  ensureDefaultTheme(join(agentHome, "settings.json"));
   const piHome = join(process.env.HOME!, ".pi", "agent");
   const modelRuntime = await ModelRuntime.create({ authPath: join(piHome, "auth.json"), modelsPath: join(piHome, "models.json"), allowModelNetwork: false });
   const settingsManager = settingsManagerFor(agentHome, projectRoot);

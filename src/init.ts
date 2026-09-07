@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from "
 import { join } from "node:path";
 import { memoryConfig } from "./memory.js";
 import { DEFAULT_SKILLS } from "./default-skills.js";
+import { DEFAULT_THEME_NAME } from "./settings.js";
 
 export const DEFAULT_SYSTEM = `You are Feishu Agent, the dedicated assistant operating Feishu Runtime for this Feishu Project.
 Use Feishu Skills and optional Long-term Memory while preserving Lark Identity. A destructive lark-cli write (delete/remove/revoke/withdraw) may carry --yes only when the user's current-turn request explicitly asks for that kind of action; otherwise let lark-cli's own confirmation prompt run.
@@ -37,7 +38,7 @@ export function initializeHome(agentHome: string, identity: string, reset: { ide
   const mem0Path = join(agentHome, "mem0-config.json");
   if (!existsSync(mem0Path) || reset.identity) { atomicJson(mem0Path, memoryConfig(identity)); created.push(mem0Path); }
   const settingsPath = join(agentHome, "settings.json");
-  if (!existsSync(settingsPath)) { atomicJson(settingsPath, {}); created.push(settingsPath); }
+  if (!existsSync(settingsPath)) { atomicJson(settingsPath, { theme: DEFAULT_THEME_NAME }); created.push(settingsPath); }
   for (const skill of DEFAULT_SKILLS) {
     const skillPath = join(agentHome, "skills", skill.name, "SKILL.md");
     if (!existsSync(skillPath)) {

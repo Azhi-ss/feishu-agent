@@ -160,7 +160,7 @@ test("startup banner header renders brand, version, model, and cwd only in TUI",
   assert.match(output, /v0\.1\.0/);
   assert.match(output, /gpt-test/);
   assert.match(output, /\/ commands/);
-  assert.deepEqual([...usedColors].sort(), ["accent", "dim", "muted"]);
+  assert.deepEqual([...usedColors].sort(), ["accent", "dim", "mdLink", "muted"]);
 
   let printSet = false;
   handlers.get("session_start")!({}, { mode: "print", ui: { setHeader: () => { printSet = true; } } });

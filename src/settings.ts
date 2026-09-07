@@ -3,6 +3,29 @@ import { closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmS
 import { dirname, join } from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 
+/** Theme shipped in the package's themes/ dir; applied once when the user has never picked one. */
+export const DEFAULT_THEME_NAME = "breezy-ocean";
+
+/**
+ * One-shot default-theme backfill: fresh init writes the default directly, and
+ * existing homes get it on next launch. Any explicit `theme` value (including
+ * the built-in dark/light) is never touched, so /settings choices stick.
+ * ponytail: no lock — the value written is identical across processes and the
+ * rename is atomic; upgrade to the storage lock if theme writes ever diverge.
+ */
+export function ensureDefaultTheme(settingsPath: string): void {
+  let current: Record<string, unknown> = {};
+  try { current = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return; // corrupt file: never clobber
+  }
+  if ("theme" in current) return;
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  const temporary = `${settingsPath}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ ...current, theme: DEFAULT_THEME_NAME }, null, 2) + "\n", { mode: 0o600 });
+  renameSync(temporary, settingsPath);
+}
+
 type SettingsScope = "global" | "project";
 interface SettingsStorage { withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void; }
 

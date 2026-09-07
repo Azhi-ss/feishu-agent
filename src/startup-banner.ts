@@ -24,37 +24,14 @@ function shortCwd(): string {
 }
 
 // Small fixed mark made from single-cell geometric Unicode. It is intentionally
-// an abstraction of the bird, not a coarse raster of the source image.
-type BrandColor = "blue" | "teal";
-type BirdPart = [color: BrandColor, text: string];
+// an abstraction of the bird, not a coarse raster of the source image. Colors
+// follow the active theme so the mark stays coherent with any skin.
+type BirdPart = [color: ThemeColor, text: string];
 const BIRD_LINES: BirdPart[][] = [
-  [["teal", "  ◢◤"]],
-  [["blue", " ◢█◤"]],
-  [["blue", "    "]],
+  [["mdLink", "  ◢◤"]],
+  [["accent", " ◢█◤"]],
+  [["dim", "    "]],
 ];
-
-const BRAND_COLORS = {
-  blue: { rgb: [51, 112, 255], ansi256: 27 },
-  teal: { rgb: [0, 214, 185], ansi256: 43 },
-} as const;
-
-type BannerTheme = {
-  fg(c: ThemeColor, t: string): string;
-  getColorMode?: () => string;
-};
-
-function brandFg(color: BrandColor, text: string, theme: BannerTheme): string {
-  if (process.env.NO_COLOR) return text;
-  const { rgb, ansi256 } = BRAND_COLORS[color];
-  const open = theme.getColorMode?.() === "truecolor"
-    ? `\x1b[38;2;${rgb.join(";")}m`
-    : `\x1b[38;5;${ansi256}m`;
-  return `${open}${text}\x1b[39m`;
-}
-
-function birdLine(parts: BirdPart[], theme: BannerTheme): string {
-  return parts.map(([color, text]) => brandFg(color, text, theme)).join("");
-}
 
 export function startupBannerExtension(): ExtensionFactory {
   const version = feishuVersion();
@@ -68,7 +45,7 @@ export function startupBannerExtension(): ExtensionFactory {
           const muted = (t: string) => paint("muted", t);
           const dim = (t: string) => paint("dim", t);
           const model = (ctx as { model?: { id?: string } }).model?.id ?? "";
-          const bird = BIRD_LINES.map((parts) => birdLine(parts, theme));
+          const bird = BIRD_LINES.map((parts) => parts.map(([color, text]) => paint(color, text)).join(""));
           const text = [
             `${a("Feishu Agent")} ${dim(`v${version}`)}`,
             muted(model ? `${model}  ${dim("·")}  ${shortCwd()}` : shortCwd()),

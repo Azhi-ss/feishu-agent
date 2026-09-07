@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createExtensionRuntime,
   DefaultResourceLoader,
@@ -18,6 +19,10 @@ import { findSkillExtension } from "./find-skill.js";
 import { isAllowlistedRemoteExtension } from "./remote-package.js";
 import type { SkillsStatus } from "./tui-status.js";
 import { DEFAULT_SYSTEM } from "./init.js";
+
+// Themes shipped with the Feishu Agent package (themes/ at repo root; after
+// build this file lives in dist/src/, hence ../../). Not a ~/.pi resource.
+const BUNDLED_THEMES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "themes");
 
 function read(path: string): string | undefined {
   return existsSync(path) ? readFileSync(path, "utf8") : undefined;
@@ -116,7 +121,10 @@ export class FeishuResourceLoader implements ResourceLoader {
       settingsManager: settingsManagerFor(this.agentHome, this.projectRoot),
       noExtensions: true, noSkills: true, noContextFiles: true,
       additionalPromptTemplatePaths: resolved.prompts.filter((entry) => entry.enabled).map((entry) => entry.path),
-      additionalThemePaths: resolved.themes.filter((entry) => entry.enabled).map((entry) => entry.path),
+      additionalThemePaths: [
+        ...resolved.themes.filter((entry) => entry.enabled).map((entry) => entry.path),
+        BUNDLED_THEMES_DIR,
+      ],
       systemPrompt: this.prompt,
     });
     await packageResources.reload();
