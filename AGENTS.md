@@ -10,7 +10,7 @@
 
 ```bash
 npm run build          # tsc → dist/，并恢复 dist/src/cli.js 执行位
-npm test               # build + 全量 node --test（当前 104 个）
+npm test               # build + 全量 node --test
 node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 ```
 
@@ -20,6 +20,9 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 - 不引新依赖：优先复用 `@earendil-works/pi-coding-agent` 已导出的能力。
 - 测试只断言外部可观察行为——真实 CLI 子进程 + 临时 HOME + PATH 注入的 fake `lark-cli`/`npm` + 回环 fake 模型/Mem0 服务；不断言私有字段或 Pi 内部实现。每个非平凡行为至少一个会失败的测试。
 - CLI 用户可见文案用英文（与现有输出一致）；SPEC.md / CONTEXT.md 保持中文，README / CONTEXT 保持英文。
+- **Vendored 第三方资源**（当前为 `themes/`）必须在同目录登记来源 URL、版本/日期与同步步骤（见 `themes/CREDITS.md`）；从上游同步后重跑 `npm test`。Vendored 内容不通过 npm 依赖引入。
+- **空 `catch`** 必须注释吞掉了什么错误、为什么 best-effort，且 `try` 只包一条语句。
+- **Pi SDK 钉版本且属 pre-stable**：升级版本号前先读上游 CHANGELOG 的 extension/editor/theme 行为变更，升完在 Node 22 与 24 下跑全量测试，破坏点写进 commit/issue；不盲目追新——已知 0.85.x 的 turn 结算回归会挂 Remote Bridge 电话回合（blocked-tool 场景），锁在 0.84.x 直到上游修复或 bridge 层适配。
 
 ## 硬边界（动这些之前先停下来和用户讨论）
 
@@ -36,10 +39,13 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 - 新行为 → 新测试；修 bug → 先写会失败的回归测试。
 - 测试矩阵原则：临时 HOME/项目、回环 fake 服务，绝不碰真实网络端点、真实飞书账号或用户凭证。
 - 秘密扫描：测试断言产物与诊断输出不含 Mem0 key、lark token。
+- 改 `package.json`/`package-lock.json` 后，用 Node 22 跑一次干净 `npm ci` 验证：npm 11（Node 24）生成的 lock 会漏写 npm 10 要求的 optional peer 条目（CI 矩阵为 22+24，2026-09 曾因此挂过 master）。
+- 迭代跑聚焦测试文件即可，推送 gate 是全量 `npm test`；只报告实际执行过的命令，CI 拥有全量与平台矩阵。
+- 重写历史一律 `git push --force-with-lease`，绝不用裸 `--force`。
 
 ## 本仓库的特殊性
 
-- 在本仓库目录里运行 `feishu` 时，本文件会被 FeishuResourceLoader 自动注入为项目上下文——等于修改那个助手系统提示的一部分，措辞需要慎重。
+- 在本仓库目录里运行 `feishu` 时，本文件会被 FeishuResourceLoader 自动注入为项目上下文——等于修改那个助手系统提示的一部分，措辞需要慎重。每条规则自包含，细节链到 SPEC.md/docs 而不在此复述；清晰度不降时就压缩，能删则删。
 - `~/.feishu-agent/` 是运行时状态（会话、skills 版本缓存、包、记忆配置），调试时可整体删除后重新 `feishu init`。
 
 ## Agent skills
