@@ -350,7 +350,8 @@ test("FEISHU_REMOTE=1 autostarts and a message arriving during a busy turn is qu
       { wait: "remote:connected", send: "" },
       { wait: "SLOW-phone-1", send: "" },
       { wait: "PTY-PONG:SLOW-phone-1", send: "" },
-      { wait: "PTY-PONG:followup-2", send: "/quit\r" },
+      { wait: "PTY-PONG:followup-2", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
     ]);
     assert.equal(result.code, 0, result.output);
     assert.doesNotMatch(result.output, /Agent is already processing/);
