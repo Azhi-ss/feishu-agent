@@ -7,6 +7,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { checkReadiness } from "../src/readiness.js";
+import { REMOTE_PACKAGE_SOURCE, feishuRemotePackagePath } from "../src/remote-package.js";
 import { hermeticEnv } from "./helpers/hermetic-env.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -33,9 +34,12 @@ function publicFixture(models: string[] = ["one", "two"]) {
   writeFileSync(join(lark, "config.json"), '{"defaultProfile":"personal"}\n');
   writeFileSync(join(lark, "token.json"), '{"token":"lark-secret"}\n');
   const mem0Parent = join(agent, "npm", "node_modules", "@mem0");
+  const remoteParent = join(agent, "npm", "node_modules", "@azhi-ss");
   mkdirSync(mem0Parent, { recursive: true });
+  mkdirSync(remoteParent, { recursive: true });
   symlinkSync(join(repoRoot, "node_modules", "@mem0", "pi-agent-plugin"), join(mem0Parent, "pi-agent-plugin"));
-  writeFileSync(join(agent, "settings.json"), JSON.stringify({ packages: ["npm:@mem0/pi-agent-plugin@0.1.5"] }) + "\n");
+  symlinkSync(feishuRemotePackagePath(), join(remoteParent, "feishu-remote"));
+  writeFileSync(join(agent, "settings.json"), JSON.stringify({ packages: ["npm:@mem0/pi-agent-plugin@0.1.5", REMOTE_PACKAGE_SOURCE] }) + "\n");
   return { root, home, project, bin, pi, agent, lark };
 }
 
@@ -123,7 +127,7 @@ test("public init reports no models, missing and rejected Mem0, and doctor failu
 
 test("public init rejects a stale existing Feishu default until explicit reset", async () => {
   const f = publicFixture(["one"]); fakeLark(f.bin);
-  writeFileSync(join(f.agent, "settings.json"), JSON.stringify({ packages: ["npm:@mem0/pi-agent-plugin@0.1.5"], defaultProvider: "fake", defaultModel: "gone" }) + "\n");
+  writeFileSync(join(f.agent, "settings.json"), JSON.stringify({ packages: ["npm:@mem0/pi-agent-plugin@0.1.5", REMOTE_PACKAGE_SOURCE], defaultProvider: "fake", defaultModel: "gone" }) + "\n");
   const server = createServer((_request, response) => { response.writeHead(200, { "content-type": "application/json" }); response.end('{"status":"ok"}'); });
   const host = await listen(server);
   const env = hermeticEnv({ HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: "healthy-key", MEM0_API_HOST: host, PI_OFFLINE: "1" });

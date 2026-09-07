@@ -66,7 +66,7 @@ The installer copies both `SKILL.md` and `feishu-send` into the host Agent's Ski
 MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
 ```
 
-Initialization creates private state and four bundled Feishu Skills under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs the unmodified Mem0 package and the Feishu Remote Package from this repo's workspace path, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, customized `SYSTEM.md`, or edited Skills. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
+Initialization creates private state and four bundled Feishu Skills under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs pinned npm versions of the unmodified Mem0 package and Feishu Remote Package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, customized `SYSTEM.md`, edited Skills, or an existing local/npm Remote Package source. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
 
 ## Run
 
@@ -79,7 +79,7 @@ feishu --session <id>     # resume an exact session in this Feishu Project
 feishu --lark-profile finance -p "task"
 ```
 
-In Interactive mode, `/find-skill <query>` searches the public Skill index; selecting a result shows its source, install count, declared license, and private target path before confirmation. You can also use `/find-skill install <owner/repo@skill-name>` for an explicit result. Installation writes only to `~/.feishu-agent/skills/`—never the real HOME's ordinary Pi global directories—and Print mode searches without waiting for install confirmation. `/remote [start|stop|status]` is provided by the installed Feishu Remote Package (`@azhi-ss/feishu-remote`) to control the active session from mobile Feishu (see [docs/remote-bridge.md](docs/remote-bridge.md)). The package is transport only: ordinary Pi can install it too, and does not gain Feishu Agent skills or policy.
+In Interactive mode, `/find-skill <query>` searches the public Skill index; selecting a result shows its source, install count, declared license, and private target path before confirmation. You can also use `/find-skill install <owner/repo@skill-name>` for an explicit result. Installation writes only to `~/.feishu-agent/skills/`—never the real HOME's ordinary Pi global directories—and Print mode searches without waiting for install confirmation. `/remote [start|stop|status]` is provided by the independently published Feishu Remote Package (`@azhi-ss/feishu-remote`) to control the active session from mobile Feishu (see [docs/remote-bridge.md](docs/remote-bridge.md)). The package is transport only: ordinary Pi can install it with `pi install npm:@azhi-ss/feishu-remote`, and does not gain Feishu Agent skills or policy.
 
 Normal Interactive exit rewrites Pi's generic resume line to `To resume this Feishu session: feishu --session <id>`; copy that command to resume the exact session. Use `feishu -c` for the latest session or `feishu -r` to choose one. If `feishu` is not on PATH, set `FEISHU_RESUME_COMMAND` to the full executable path. Do not resume Feishu sessions through ordinary `pi --session-dir ... --session ...`, because that bypasses the Feishu Runtime boundary.
 
@@ -96,7 +96,7 @@ Only Interactive and text Print modes are supported. JSON and RPC are intentiona
 | Capability | Source | Notes |
 |---|---|---|
 | Long-term memory | `@mem0/pi-agent-plugin` (pinned, auto-installed by `feishu init`) | Project-scoped semantic capture of user/assistant text; `MEM0_API_KEY` env-only |
-| Remote Bridge | `@azhi-ss/feishu-remote` (workspace package, auto-installed by `feishu init`) | Phone control of the active session; transport only — not Feishu Skills, Mem0, or high-risk approval. Ordinary Pi may `pi install` the same path. |
+| Remote Bridge | `@azhi-ss/feishu-remote` (pinned npm package, auto-installed by `feishu init`) | Phone control of the active session; transport only — not Feishu Skills, Mem0, or high-risk approval. Ordinary Pi may run `pi install npm:@azhi-ss/feishu-remote`. |
 | Core policy guard | built-in (hidden `feishu-core-policy` extension) | High-risk `lark-cli --yes` approval gate, blocked `/share` `/import` `/login` `/logout` |
 | Skill authoring | built-in `feishu-skill-maker` skill | Guide for creating new Feishu Skills |
 | Skill discovery and private installation | built-in `/find-skill` command and `feishu-find-skill` skill | Reuses the `skills.sh` index and `npx skills` staging; final files go only to `~/.feishu-agent/skills/`, never `~/.agents/skills` or `~/.pi/agent/skills` |

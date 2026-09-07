@@ -53,7 +53,7 @@ An installable Pi-compatible capability enabled for Feishu Agent rather than for
 _Avoid_: Global plugin, shared extension, ordinary Pi installation, project `.pi` package storage, core-policy override
 
 **Feishu Remote Package**:
-The installable Pi-compatible package `@azhi-ss/feishu-remote` that provides only Remote Bridge transport: `/remote`, the outbound WebSocket, streaming cards, and owner-only session injection. Feishu Agent installs it during `feishu init` from the workspace path resolved against the CLI install root. Ordinary Pi may install the same package explicitly and does not receive Feishu Skills, Mem0, or high-risk approval with it. It lives as a workspace subdirectory of this repository, not a submodule or a separate repo.
+The independently published Pi-compatible npm package `@azhi-ss/feishu-remote` that provides only Remote Bridge transport: `/remote`, the outbound WebSocket, streaming cards, and owner-only session injection. Its source lives in this repository's workspace; Feishu Agent installs a pinned npm version during `feishu init`, while ordinary Pi may install the same package explicitly. Neither host receives Feishu Skills, Mem0, or high-risk approval from this package. It is not a submodule or a separate repository.
 _Avoid_: Built-in hidden remote factory, Feishu-Agent-only plugin, skill bundle, core-policy package, git submodule
 
 **Feishu Remote Bridge**:

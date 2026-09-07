@@ -15,7 +15,7 @@ import { dispatchConfig, setPackageResourceEnabled, type PackageResourceType } f
 import { existingIdentity, initializeHome } from "./init.js";
 import { checkReadiness } from "./readiness.js";
 import { CORE_TOOLS, projectKeyFor } from "./policy.js";
-import { feishuRemotePackagePath, isRemotePackageConfigured } from "./remote-package.js";
+import { REMOTE_PACKAGE_SOURCE, isRemotePackageConfigured } from "./remote-package.js";
 
 function projectRoot(cwd: string): string {
   try {
@@ -217,7 +217,7 @@ else {
       await manager.installAndPersist(MEM0_PACKAGE);
     }
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && isRemotePackageConfigured(entry, agentHome))) {
-      await manager.installAndPersist(feishuRemotePackagePath());
+      await manager.installAndPersist(REMOTE_PACKAGE_SOURCE);
     }
     const skills = await syncOfficialSkills(join(agentHome, "official-skills"));
     if (skills.warning) {

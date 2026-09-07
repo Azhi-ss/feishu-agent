@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { feishuRemotePackagePath } from "../src/remote-package.js";
+import { REMOTE_PACKAGE_SOURCE, REMOTE_PACKAGE_VERSION, feishuRemotePackagePath } from "../src/remote-package.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
 const MEM0_PACKAGE = "npm:@mem0/pi-agent-plugin@0.1.5";
+
+test("the pinned Remote Package source matches the publishable workspace version", () => {
+  const manifest = JSON.parse(readFileSync(join(feishuRemotePackagePath(), "package.json"), "utf8")) as { name?: string; version?: string };
+  assert.equal(manifest.name, "@azhi-ss/feishu-remote");
+  assert.equal(manifest.version, REMOTE_PACKAGE_VERSION);
+  assert.equal(REMOTE_PACKAGE_SOURCE, `npm:${manifest.name}@${manifest.version}`);
+});
 
 function run(cwd: string, env: NodeJS.ProcessEnv, args: string[]) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((done) => {
@@ -108,9 +115,10 @@ if [ -f ${JSON.stringify(join(control, "fail-package"))} ]; then rm ${JSON.strin
 prefix=""
 while [ "$#" -gt 0 ]; do [ "$1" = --prefix ] && { prefix="$2"; break; }; shift; done
 [ -n "$prefix" ]
-mkdir -p "$prefix/node_modules/@mem0"
-ln -s ${JSON.stringify(join(repoRoot, "node_modules", "@mem0", "pi-agent-plugin"))} "$prefix/node_modules/@mem0/pi-agent-plugin"
-printf '{"dependencies":{"@mem0/pi-agent-plugin":"0.1.5"}}' > "$prefix/package.json"
+mkdir -p "$prefix/node_modules/@mem0" "$prefix/node_modules/@azhi-ss"
+ln -sfn ${JSON.stringify(join(repoRoot, "node_modules", "@mem0", "pi-agent-plugin"))} "$prefix/node_modules/@mem0/pi-agent-plugin"
+ln -sfn ${JSON.stringify(join(repoRoot, "packages", "feishu-remote"))} "$prefix/node_modules/@azhi-ss/feishu-remote"
+printf '{"dependencies":{"@mem0/pi-agent-plugin":"0.1.5","@azhi-ss/feishu-remote":"0.1.0"}}' > "$prefix/package.json"
 `, { mode: 0o755 });
 
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: secret, MEM0_API_HOST: mem0Host, PI_OFFLINE: "1" };
@@ -127,16 +135,14 @@ function configuredPackages(agentHome: string): string[] {
   return JSON.parse(readFileSync(join(agentHome, "settings.json"), "utf8")).packages ?? [];
 }
 
-function assertRemotePackageInstalledFromCliRoot(agentHome: string): void {
-  const sources = configuredPackages(agentHome).filter((entry): entry is string => typeof entry === "string" && !entry.startsWith("npm:@mem0"));
-  const remote = sources.find((source) => {
-    const resolved = isAbsolute(source) ? source : join(agentHome, source);
-    return existsSync(join(resolved, "package.json"));
-  });
-  assert.ok(remote, `Remote Package source missing: ${JSON.stringify(sources)}`);
-  assert.doesNotMatch(remote, /^\.\//);
-  assert.equal(realpathSync(isAbsolute(remote) ? remote : join(agentHome, remote)), feishuRemotePackagePath());
-  assert.equal(existsSync(join(agentHome, "npm", "node_modules", "@azhi-ss", "feishu-remote")), false);
+function assertPinnedRemotePackageInstalled(agentHome: string): void {
+  const sources = configuredPackages(agentHome).filter((entry): entry is string => typeof entry === "string" && isRemoteSource(entry));
+  assert.deepEqual(sources, [REMOTE_PACKAGE_SOURCE]);
+  assert.equal(existsSync(join(agentHome, "npm", "node_modules", "@azhi-ss", "feishu-remote", "package.json")), true);
+}
+
+function isRemoteSource(source: string): boolean {
+  return source === "@azhi-ss/feishu-remote" || source.startsWith("npm:@azhi-ss/feishu-remote");
 }
 
 function installs(path: string): string[] {
@@ -163,7 +169,7 @@ test("fresh HOME one-command init is immediately Print-ready, idempotent, isolat
     assertCompleteSummary(first.stdout, f.agentHome, "alice", "fake-model");
     assert.doesNotMatch(first.stdout + first.stderr, new RegExp(f.secret));
     assert.equal(configuredPackages(f.agentHome).filter((entry) => entry === MEM0_PACKAGE).length, 1);
-    assertRemotePackageInstalledFromCliRoot(f.agentHome);
+    assertPinnedRemotePackageInstalled(f.agentHome);
     assert(lines(f.npmLog).every((line) => line.startsWith("false|")));
     assert(lines(f.larkLog).every((line) => line.startsWith("false|")));
 
@@ -193,7 +199,7 @@ test("fresh HOME one-command init is immediately Print-ready, idempotent, isolat
     assert.equal(readFileSync(join(f.agentHome, "SYSTEM.md"), "utf8"), customSystem);
     assert.match(readFileSync(join(f.agentHome, "mem0-config.json"), "utf8"), /feishu:alice/);
     assert.equal(readFileSync(join(f.agentHome, "custom.txt"), "utf8"), "keep me\n");
-    assert.equal(lines(f.npmLog).length, 1, "valid package must not be installed twice");
+    assert.equal(lines(f.npmLog).length, 2, "the two valid default packages must not be installed twice");
     assert.equal(lines(f.larkLog).filter((line) => line.endsWith("|skills list --json")).length, 1, "valid Skill cache must be reused");
 
     const reset = await run(f.project, f.env, ["init", "--identity", "bob", "--model", "fake/other-model", "--thinking", "high", "--reset-identity", "--reset-model", "--reset-system"]);
@@ -237,6 +243,19 @@ test("init keeps an existing npm Feishu Remote Package source", async () => {
   } finally { f.close(); }
 });
 
+test("init keeps an existing local Feishu Remote Package source", async () => {
+  const f = await fixture();
+  try {
+    mkdirSync(f.agentHome, { recursive: true });
+    writeFileSync(join(f.agentHome, "settings.json"), JSON.stringify({ packages: [feishuRemotePackagePath()] }));
+    const result = await run(f.project, f.env, ["init", "--identity", "alice", "--model", "fake/fake-model"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert(configuredPackages(f.agentHome).includes(feishuRemotePackagePath()));
+    assert.equal(configuredPackages(f.agentHome).filter((entry) => typeof entry === "string" && isRemoteSource(entry)).length, 0);
+    assert.equal(installs(f.npmLog).length, 1, "only Mem0 should be installed when a local Remote Package exists");
+  } finally { f.close(); }
+});
+
 test("init installs the exact Mem0 package for similar or stale settings", async () => {
   const f = await fixture();
   try {
@@ -244,13 +263,14 @@ test("init installs the exact Mem0 package for similar or stale settings", async
     writeFileSync(join(f.agentHome, "settings.json"), JSON.stringify({ packages: ["npm:@mem0/pi-agent-plugin@0.1.4", "npm:@mem0/pi-agent-plugin-extra"] }));
     const similar = await run(f.project, f.env, ["init", "--identity", "alice", "--model", "fake/fake-model"]);
     assert.equal(similar.code, 0, similar.stderr);
-    assert.equal(installs(f.npmLog).length, 1);
+    assert.equal(installs(f.npmLog).length, 2);
     assert.equal(configuredPackages(f.agentHome).filter((entry) => entry === MEM0_PACKAGE).length, 1);
+    assertPinnedRemotePackageInstalled(f.agentHome);
 
     rmSync(join(f.agentHome, "npm", "node_modules", "@mem0", "pi-agent-plugin"), { recursive: true, force: true });
     const stale = await run(f.project, f.env, ["init", "--identity", "alice", "--model", "fake/fake-model"]);
     assert.equal(stale.code, 0, stale.stderr);
-    assert.equal(installs(f.npmLog).length, 2, "missing exact package files must be reinstalled");
+    assert.equal(installs(f.npmLog).length, 3, "missing exact package files must be reinstalled");
     assert.equal(configuredPackages(f.agentHome).filter((entry) => entry === MEM0_PACKAGE).length, 1);
   } finally { f.close(); }
 });
@@ -281,14 +301,14 @@ for (const failure of ["model", "mem0", "doctor", "package", "skills"] as const)
       const installsAfter = lines(f.npmLog).length;
       const syncsAfter = lines(f.larkLog).filter((line) => line.endsWith("|skills list --json")).length;
       if (failure === "skills") {
-        assert.equal(installsBefore, 1, "completed package install must survive Skill failure");
-        assert.equal(installsAfter, 1, "Skill rerun must not reinstall package");
+        assert.equal(installsBefore, 2, "completed package installs must survive Skill failure");
+        assert.equal(installsAfter, 2, "Skill rerun must not reinstall packages");
         assert.equal(syncsBefore, 1); assert.equal(syncsAfter, 2);
       } else if (failure === "package") {
-        assert.equal(installsBefore, 1); assert.equal(installsAfter, 2, "failed package install is the missing work");
+        assert.equal(installsBefore, 1); assert.equal(installsAfter, 3, "failed package install is the missing work");
         assert.equal(syncsBefore, 0); assert.equal(syncsAfter, 1);
       } else {
-        assert.equal(installsBefore, 0); assert.equal(installsAfter, 1);
+        assert.equal(installsBefore, 0); assert.equal(installsAfter, 2);
         assert.equal(syncsBefore, 0); assert.equal(syncsAfter, 1);
       }
     } finally { f.close(); }

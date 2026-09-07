@@ -19,10 +19,10 @@ import {
   type RemoteGateway,
   type RemoteInboundEvent,
 } from "./remote-gateway.js";
-import { acquireRemoteLock, releaseRemoteLock } from "./remote-lock.js";
+import { acquireRemoteLock, clearHandoffRequest, describeHolder, hasHandoffRequest, readRemoteLock, releaseRemoteLock, requestRemoteHandover, waitForRemoteLockRelease } from "./remote-lock.js";
 import { shardText, StreamCardSession, visibleAssistantText } from "./stream-card.js";
 
-type RemoteStatus = "off" | "connecting" | "connected" | "error";
+type RemoteStatus = "off" | "standby" | "connecting" | "connected" | "error";
 const REMOTE_STATUS_KEY = "feishu-3-remote";
 
 const MISSING_SECRET = `Remote bridge needs an app secret: set ${REMOTE_SECRET_ENV} to the existing bot app's secret (view it in the Feishu developer console — do not reset it), then run /remote start.`;
@@ -81,7 +81,33 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let reportedPollError = false;
     let reportedCardError = false;
     let lockedAppId: string | undefined;
+    let standbyHolder: string | undefined;
     const dedup = new MessageDedup();
+    let handoffTimer: NodeJS.Timeout | undefined;
+
+    // /remote switch from another window: the requester writes a yield file
+    // (no signals — SIGUSR2 interrupts the TUI raw-mode stdin read). While this
+    // window holds the bridge it polls for that file and stops gracefully.
+    function startHandoffWatch(): void {
+      if (handoffTimer || !lockedAppId) return;
+      const appId = lockedAppId;
+      handoffTimer = setInterval(() => {
+        const home = process.env.HOME ?? "";
+        if (appId !== lockedAppId || !(gateway || pendingGateway)) return;
+        if (!hasHandoffRequest(home, appId)) return;
+        clearHandoffRequest(home, appId);
+        // Stop quietly from the timer (not a slash-command response): no TUI
+        // notify — a prompt opened outside a command turn could eat the next
+        // keystrokes. The requester window prints its own handover progress;
+        // this window signals the handoff via the status line moving to off.
+        void stop(latestCtx).catch(() => { /* handover is best-effort */ });
+      }, 250);
+      handoffTimer.unref();
+    }
+
+    function stopHandoffWatch(): void {
+      if (handoffTimer) { clearInterval(handoffTimer); handoffTimer = undefined; }
+    }
 
     function isStaleRunner(error: unknown): boolean {
       return error instanceof Error && error.message.includes("stale after session");
@@ -91,6 +117,14 @@ export function remoteBridgeExtension(): ExtensionFactory {
       if (!lockedAppId) return;
       releaseRemoteLock(process.env.HOME ?? "", lockedAppId);
       lockedAppId = undefined;
+    }
+
+    function enterStandby(ctx: ExtensionContext | undefined, error: string): void {
+      // Keep the status strip short: the lock error already names the holder as
+      // "(pid 12345 in project)"; reuse that as the standby label.
+      const label = error.match(/\((pid \d+[^)]*)\)/)?.[1] ?? "held by another window";
+      standbyHolder = label;
+      setState("standby", ctx, `standby (held by ${label})`);
     }
 
     function paint(ctx: ExtensionContext | undefined): void {
@@ -204,7 +238,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
       deliver({ chatId: event.chatId, text: event.text });
     }
 
-    async function start(ctx: ExtensionContext): Promise<void> {
+    async function start(ctx: ExtensionContext, options: { quietIfHeld?: boolean } = {}): Promise<void> {
       if (gateway || pendingGateway) {
         notify(ctx, gateway ? "Remote bridge is already connected." : "Remote bridge is already connecting.");
         return;
@@ -218,11 +252,16 @@ export function remoteBridgeExtension(): ExtensionFactory {
       credentials = resolved.credentials;
       const lock = acquireRemoteLock(process.env.HOME ?? "", credentials.appId);
       if (!lock.ok) {
+        if (options.quietIfHeld) {
+          enterStandby(ctx, lock.error);
+          return;
+        }
         setState("error", ctx, lock.error);
         notify(ctx, lock.error, "error");
         return;
-      }
-      lockedAppId = credentials.appId;
+      }      lockedAppId = credentials.appId;
+      standbyHolder = undefined;
+      startHandoffWatch();
       secret = process.env[REMOTE_SECRET_ENV];
       if (!secret) {
         dropLock();
@@ -275,6 +314,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
       transport = created.transport;
       setState("connected", ctx);
       notify(ctx, `Remote bridge connected (transport ${transport}, app ${credentials.appId}).`);
+      startHandoffWatch();
     }
 
     async function stop(paintCtx?: ExtensionContext): Promise<void> {
@@ -283,6 +323,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
       const card = activeCard;
       gateway = undefined;
       pendingGateway = undefined;
+      stopHandoffWatch();
       transport = undefined;
       activeTurn = undefined;
       activeCard = undefined;
@@ -304,7 +345,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
     pi.on("session_start", (_event, ctx) => {
       latestCtx = ctx;
       paint(ctx);
-      if (ctx.mode === "tui" && process.env[REMOTE_AUTOSTART_ENV] === "1" && !gateway && !pendingGateway) void start(ctx);
+      if (ctx.mode === "tui" && process.env[REMOTE_AUTOSTART_ENV] === "1" && !gateway && !pendingGateway) void start(ctx, { quietIfHeld: true });
     });
 
     pi.on("session_shutdown", () => stop());
@@ -356,6 +397,40 @@ export function remoteBridgeExtension(): ExtensionFactory {
       for (const shard of shards.slice(1)) await gw?.sendMessage(turn.chatId, shard).catch(() => {});
     });
 
+    async function switchBridge(ctx: ExtensionContext): Promise<void> {
+      if (gateway || pendingGateway) {
+        notify(ctx, "Remote bridge is already connected in this window.");
+        return;
+      }
+      const resolved = resolveRemoteCredentials(process.env.HOME ?? "");
+      if ("error" in resolved) {
+        setState("error", ctx, resolved.error);
+        notify(ctx, resolved.error, "error");
+        return;
+      }
+      const appId = resolved.credentials.appId;
+      if (!process.env[REMOTE_SECRET_ENV]) {
+        setState("error", ctx, MISSING_SECRET);
+        notify(ctx, MISSING_SECRET, "error");
+        return;
+      }
+      const holder = readRemoteLock(process.env.HOME ?? "", appId);
+      if (holder) {
+        const signaled = requestRemoteHandover(process.env.HOME ?? "", appId);
+        if (signaled) notify(ctx, `Remote bridge: asking ${describeHolder(holder)} to hand over…`);
+        const released = await waitForRemoteLockRelease(process.env.HOME ?? "", appId, signaled ? 10_000 : 1_000);
+        if (!released) {
+          const error = signaled
+            ? `Remote bridge handover timed out: ${describeHolder(holder)} did not release the lock. Stop it there first.`
+            : "Remote bridge handover failed: the lock holder is not a reachable Feishu bridge. Stop it there first.";
+          enterStandby(ctx, error);
+          notify(ctx, error, "error");
+          return;
+        }
+      }
+      await start(ctx);
+    }
+
     pi.registerCommand("remote", {
       description: "Manage the Feishu Remote Bridge (phone control of this session)",
       handler: async (args, ctx) => {
@@ -371,9 +446,13 @@ export function remoteBridgeExtension(): ExtensionFactory {
               notify(ctx, "Remote bridge stopped.");
             }
             break;
+          case "switch":
+            await switchBridge(ctx);
+            break;
           default: // status
             if (status === "connected" && gateway) notify(ctx, `Remote bridge: connected (transport ${transport}, app ${credentials?.appId ?? "unknown"}).`);
             else if (status === "connecting") notify(ctx, "Remote bridge: connecting…");
+            else if (status === "standby") notify(ctx, `Remote bridge: standby (held by ${standbyHolder ?? "another window"}). Run /remote switch to take over.`);
             else if (status === "error") notify(ctx, `Remote bridge: error — ${lastError ?? "run /remote start again."}`, "error");
             else notify(ctx, "Remote bridge: off — run /remote start to enable phone control.");
         }

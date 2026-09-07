@@ -4,9 +4,22 @@
   "description": "Feishu Remote Bridge transport for Pi-compatible agents",
   "type": "module",
   "license": "MIT",
-  "keywords": ["pi-package"],
+  "keywords": ["pi-package", "pi-extension", "feishu", "lark"],
+  "files": [
+    "index.ts",
+    "extensions/**/*.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Azhi-ss/feishu-agent.git",
+    "directory": "packages/feishu-remote"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "pi": {
-    "extensions": ["./extensions/index.ts"]
+    "extensions": ["./index.ts"]
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.73.3"

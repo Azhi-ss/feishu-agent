@@ -64,7 +64,7 @@ function modelFiles(home: string, baseUrl: string): void {
 }
 
 function fakeNpm(path: string): void {
-  writeFileSync(path, `#!/bin/sh\nset -eu\nprefix=""\nwhile [ "$#" -gt 0 ]; do [ "$1" = --prefix ] && { prefix="$2"; break; }; shift; done\nmkdir -p "$prefix/node_modules/@mem0"\nln -s ${JSON.stringify(join(repoRoot, "node_modules", "@mem0", "pi-agent-plugin"))} "$prefix/node_modules/@mem0/pi-agent-plugin"\nprintf '{"dependencies":{"@mem0/pi-agent-plugin":"0.1.5"}}' > "$prefix/package.json"\n`, { mode: 0o755 });
+  writeFileSync(path, `#!/bin/sh\nset -eu\nprefix=""\nwhile [ "$#" -gt 0 ]; do [ "$1" = --prefix ] && { prefix="$2"; break; }; shift; done\nmkdir -p "$prefix/node_modules/@mem0" "$prefix/node_modules/@azhi-ss"\nln -sfn ${JSON.stringify(join(repoRoot, "node_modules", "@mem0", "pi-agent-plugin"))} "$prefix/node_modules/@mem0/pi-agent-plugin"\nln -sfn ${JSON.stringify(join(repoRoot, "packages", "feishu-remote"))} "$prefix/node_modules/@azhi-ss/feishu-remote"\nprintf '{"dependencies":{"@mem0/pi-agent-plugin":"0.1.5","@azhi-ss/feishu-remote":"0.1.0"}}' > "$prefix/package.json"\n`, { mode: 0o755 });
 }
 
 function skill(path: string, name: string, description: string): void {

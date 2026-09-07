@@ -3,6 +3,8 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const REMOTE_PACKAGE_NAME = "@azhi-ss/feishu-remote";
+export const REMOTE_PACKAGE_VERSION = "0.1.0";
+export const REMOTE_PACKAGE_SOURCE = `npm:${REMOTE_PACKAGE_NAME}@${REMOTE_PACKAGE_VERSION}`;
 
 export function feishuRemotePackagePath(): string {
   const candidate = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "packages", "feishu-remote");

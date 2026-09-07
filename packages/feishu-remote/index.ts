@@ -1,4 +1,4 @@
-import { remoteBridgeExtension } from "./remote-bridge.js";
+import { remoteBridgeExtension } from "./extensions/remote-bridge.js";
 
 export default remoteBridgeExtension();
 export { remoteBridgeExtension };
