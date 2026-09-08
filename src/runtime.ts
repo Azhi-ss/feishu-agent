@@ -59,7 +59,12 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
   const piHome = join(process.env.HOME!, ".pi", "agent");
   const modelRuntime = await ModelRuntime.create({ authPath: join(piHome, "auth.json"), modelsPath: join(piHome, "models.json"), allowModelNetwork: false });
   const settingsManager = settingsManagerFor(agentHome, projectRoot);
-  const memory = await memoryRuntime(agentHome, projectKey);
+  // FEISHU_UNATTENDED=1 runs are memory-less by design (SPEC §16.1): Mem0 never
+  // enters the extension list — no key, ping, recall, capture, or warning, so
+  // "no memory" is the expected state rather than a degraded session.
+  const memory = process.env.FEISHU_UNATTENDED === "1"
+    ? { diagnostic: () => undefined }
+    : await memoryRuntime(agentHome, projectKey);
   if (memory.warning) process.stderr.write(`${memory.warning}\n`);
   const resourceLoader = new FeishuResourceLoader(agentHome, projectRoot, projectKey, currentRequest, memory.extension);
   resourceLoader.setMemoryDiagnostic(memory.diagnostic);
