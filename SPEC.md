@@ -247,6 +247,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 强制为 Feishu 进程设置 `MEM0_TELEMETRY=false`。
 - Mem0 加载、健康检查、召回或捕获失败时产生显式 Warning，但不得使 Runtime 创建失败。
 - 降级会话中禁用或跳过本轮 Memory Capture、Recall 和 Dream；其他工具继续工作。
+- `FEISHU_UNATTENDED=1` 的无人值守进程不注册 Mem0 扩展（无 Recall、Capture、Dream，且不需要 API key）；见 §16。
 - 不修改第三方包源码；升级继续使用原始 npm 包。
 
 ### 13. Session storage and commands
@@ -299,6 +300,31 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`、`/remote [start|stop|status|switch]`（`/remote` 由已安装的 Feishu Remote Package 提供，不是内联核心命令）
 
 CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/find-skill` 属于 Runtime 内的交互命令，不新增顶层 `feishu` 参数。
+
+### 16. Unattended Automation
+
+术语见根目录 `CONTEXT.md` 的「Unattended Automation」词条（Automation Workspace、Trigger、Briefing、Sweep、Alert）；架构取舍见 ADR-0002、ADR-0003。
+
+#### 16.1 形态
+
+- 唯一常驻的是外部 Trigger；每次自动化是一个全新的短命 `feishu -p` print run，跑完即退，不存在持有模型上下文的常驻 Runtime。
+- 无人运行必须以环境变量 `FEISHU_UNATTENDED=1` 启动；该进程完全无记忆：不注册 Mem0 扩展（无召回、无捕获、无 dream），因此不需要 `MEM0_API_KEY`，简报输入（群消息、@、文档标题）不可能被学习进任何记忆桶。个性化只允许写在工位 AGENTS.md 中。
+- 无人运行从独立非 git 目录 `~/feishu-automation/`（Automation Workspace）启动，位于可删除的 Agent Home 之外；工位目录创建后不得改名或移动（记忆桶与会话分区哈希绝对路径）。工位包含 AGENTS.md（策略）、运行脚本、`briefings/`（已发简报留痕，保留 30 天）与 `.state/`（Sweep 排重游标）。
+- 触发器脚本主机无关，不写死本机路径假设；Trigger 环境不注入任何密钥：模型凭证只读复用 `~/.pi`，lark-cli 自管登录态。
+- 不新增 `feishu` CLI 子命令或旗标；timer 单元与脚本属于工位目录和 `~/.config/systemd/user/`，不是核心 CLI 面的一部分。
+
+#### 16.2 v0：Briefing
+
+- systemd user timer，工作日 08:30 触发，`Persistent=true`；登录补跑仅在 11:00 cutoff 前发生，逾期跳过。手动出口始终保留：在工位目录运行同一 print prompt 可随时出简报。
+- 事实每次以 user 身份实时拉取，记忆不作为事实来源：今日日程（calendar +agenda）、逾期/今明到期的未完成任务（task +get-my-tasks，其余折叠为数量）、待审批、近 48 小时真人 @我（im +messages-search --is-at-me，过滤 @所有人 与机器人卡片）、近 7 天本人编辑文档（drive +search --edited-since，只列标题与链接）。
+- 交付：bot 以富文本 post 发到 owner 与 bot 的单聊；每条事项带飞书直达链接。部分数据源失败时简报照发，结尾注明失败的数据源；完全静默不是允许的失败模式。user token 过期导致拉取失败时，以 bot 通道通知 owner 重新登录 lark-cli。
+- 运行安全沿用现有轮次高危护栏 + 工位 AGENTS.md 的只读策略（唯一写出口是 owner 单聊），v0 不做代码级只读强制；攻击面与升级条件见 ADR-0003。
+- v0 只交付 Briefing。Sweep（@我轮询，30 分钟量级；先用廉价命令预筛，无新增不发起模型回合；`.state` 排重）在 Briefing 稳定运行一周后再启用，且 v0 只巡 @我。Alert（应用内→短信/电话加急）最后实现，必须具备显式级别阈值、静默时段与每日上限。bot 不加入任何群；某群需要实时性时逐群单独升级为事件监听。
+
+#### 16.3 部署
+
+- v0 部署在 owner 的 WSL 机器（systemd 用户态，不要求 Linger），接受「机器不开则无自动化」的边界——飞书手机端始终是工作时段外的原生通道。
+- 测试要求：临时 HOME + fake 模型/服务下断言 `FEISHU_UNATTENDED=1` 的 print 进程不实例化记忆扩展（无 ping、无 search、无 add），且 11:00 cutoff、缺数据源注明、post 单聊出口均有端到端测试。
 
 ## Testing Decisions
 

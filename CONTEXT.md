@@ -64,4 +64,26 @@ _Avoid_: Standalone daemon, multi-session server, independent chat bot, public w
 The bot credential the in-process bridge uses: it reuses the existing `lark-cli` bot app rather than a separate identity, so no second app or pairing flow is needed. The app id and the owner's `open_id` are read first from the on-disk `lark-cli` config (zero network). If no config file exists, they may be supplied as `FEISHU_REMOTE_APP_ID` and `FEISHU_REMOTE_OWNER_OPEN_ID`; a present but invalid config does not fall back. The app secret is held in the OS keychain by `lark-cli` and cannot be read in-process, so the owner supplies it once via an environment variable (like Mem0), never persisted into the Feishu Agent Home or ordinary Pi settings. The in-process WebSocket is a separate instance for that app, so a `lark-cli event consume` consumer must not run concurrently or Feishu will load-balance events between them.
 _Avoid_: A second dedicated bridge app, storing the app secret on disk, first-DM pairing, concurrent event-consumer sharing
 
+## Unattended Automation
+
+**Automation Workspace**:
+The dedicated, non-git working directory from which all unattended runs start; it owns their memory bucket, session partition, and the injected workspace instructions that encode automation policy. It is deliberately outside the Feishu Agent Home, which remains disposable runtime state.
+_Avoid_: Reusing an interactive project directory, a path inside the Agent Home, relocating the workspace after first use
+
+**Trigger**:
+The only always-on part of unattended automation: an external scheduler or watcher that starts fresh one-shot runs. A Trigger never holds model context itself.
+_Avoid_: A long-lived agent process, a continuously running "brain", sleeping agent loop
+
+**Briefing**:
+A scheduled summary run that pulls the day's hard items (calendar, open tasks, pending approvals), recent work traces (recently edited docs), and at-mentions fresh at delivery time; persistent memory may personalize ordering but is never a source of facts.
+_Avoid_: Memory-generated digest, full-text document scan, transcript archive
+
+**Sweep**:
+A scheduled, identity-based patrol that searches the owner's recent at-mentions and work-item changes without adding the bot to any chat. A cheap command-level prefetch decides whether a model run is needed at all; when nothing changed, no model turn runs.
+_Avoid_: Bot-in-group monitoring, full chat-history ingestion, unconditional model invocation
+
+**Alert**:
+An escalation of a Sweep result judged P0, delivered through Feishu urgent channels (in-app, then SMS/phone), subject to an explicit policy: severity threshold, quiet hours, and per-day cap. Alerts are the last layer built, never the default output of a Sweep.
+_Avoid_: Routine phone buzz, model-self-authorized urgent calls, unbounded escalation frequency
+
 
