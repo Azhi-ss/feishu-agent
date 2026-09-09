@@ -20,3 +20,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+      - name: Verify live npm package installation
+        run: |
+          PI_BIN="$GITHUB_WORKSPACE/node_modules/.bin/pi"
+          TEST_DIR=$(mktemp -d)
+          (cd "$TEST_DIR" && git init -q && "$PI_BIN" install npm:@azhi-ss/feishu-remote -l)
+          test -f "$TEST_DIR/.pi/settings.json"
+          rm -rf "$TEST_DIR"
