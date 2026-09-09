@@ -294,6 +294,9 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu update [source|--extensions]`
 - `feishu config`
 - `feishu skills sync [--update]`（`--update` 先显式 `lark-cli update` 再按新版本重建缓存；仅显式调用才联网）
+- `feishu automation list`
+- `feishu automation add --name <slug> --when <oncalendar> [--tz <IANA>] [--no-catch-up] (--prompt-file <path> | --prompt-stdin) [--yes] [--run-now]`
+- `feishu automation run <name>` / `automation pause <name>` / `automation resume <name>` / `automation rm <name> [--purge]`（详见 §16.5）
 - `feishu -c`
 - `feishu -r`
 - `feishu --session <id>`
@@ -356,6 +359,50 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 **后续实现票建议拆分（本票不实现）**：① 无人硬只读命令策略（ADR-0003 升级，read allow-list + 单写出口）+ 仓库测试；② 预筛脚本与 `.state/` 游标（含损坏/缺失退化、影子 dry-run）；③ 按需 print run 与唯一发送出口接线（合并通知、token 过期单次提醒）；④ Sweep systemd 单元（30 分钟、无 Persistent，安装默认 disabled）+ 部署机端到端验收；⑤ 观察周信号核对后由 owner 显式 enable。
 
 **验收口径**：Sweep 行为（分层、游标退化、无 Persistent、通知合并/去重、越权拦截）与 Briefing 部署制品同属「工位/外部契约/模型内容」，仓库只对其中的核心代码（硬命令策略、无人模式契约）做测试；预筛脚本、systemd 单元、时区与通知内容靠「真实 systemd 子进程 + 临时覆盖时钟」在部署机端到端验收及观察周人工确认，不入仓库测试。
+
+#### 16.5 Automation 管理面（feishu automation）
+
+ADR-0004。Briefing 的手搓部署升级为 Agent 可自助管理的任务面：**只加管理层，不引入常驻进程**。调度后端仍是 systemd **user** timer（仅 Linux/systemd；无 user manager 的平台快速失败并给出可操作报错），每个任务依旧是 ADR-0002 的全新无记忆 `FEISHU_UNATTENDED=1` print run，从 Automation Workspace（`~/feishu-automation/`）启动并注入工位 AGENTS.md。
+
+**命令面（§15 的展开）**：
+
+- `feishu automation list`：列出全部任务，输出 name / calendar（含时区）/ catch-up / 状态（enabled|paused|unit-missing）/ 下次触发。下次触发取 `systemctl --user list-timers`，取不到（如未 enable）只显示 `—`，不报错。
+- `feishu automation add --name <slug> --when <oncalendar> [--tz <IANA>] [--no-catch-up] (--prompt-file <path>|--prompt-stdin) [--yes] [--run-now]`：
+  - `--name`：`^[a-z0-9][a-z0-9-]{0,31}$`；同名任务已存在即失败（无覆盖语义，先 rm）。
+  - `--when`：systemd `OnCalendar` 表达式（如 `Mon..Fri *-*-* 08:30:00`、`daily`、`*-*-* 09,18:00:00`）；**不自带时区后缀**，时区只走 `--tz`。用 `systemd-analyze calendar --iterations=1` 校验语法并取首次触发；校验失败非零退出并原样回显 stderr。
+  - `--tz`：IANA 时区，默认 `Asia/Shanghai`；Node `Intl.DateTimeFormat(undefined, {timeZone})` 先校验有效性。生成单元时以内联后缀拼进 `OnCalendar`（`... Asia/Shanghai`）。
+  - `--no-catch-up`：timer `Persistent=false`（不补发）。默认 `Persistent=true`（错过的触发在下次登录补发一次；任务 prompt/工位策略自行做 cutoff，与 Briefing 同构）。
+  - prompt 二选一：`--prompt-file <path>`（`-` 表示 stdin）或 `--prompt-stdin`；互斥且必填一个。落盘为工位 `jobs/<name>/prompt.md`，不从命令行直接吃 prompt 正文（规避 shell 引用）。
+  - **确认门**：TTY 下打印人话确认（名字、本地+UTC 下次触发、catch-up、prompt 路径、唯一写出口仍是 bot→owner 单聊），要求输入 yes；非 TTY 必须显式 `--yes`，否则非零退出。任何文件/单元写入都发生在确认之后。
+  - `--run-now`：enable 成功后立即同步执行一次真实任务（与 timer 同一入口）；非零退出则自动 `pause` 该任务并提示原因，绝不静默保留从未跑通的 enabled 任务。
+- `feishu automation run <name>`：立即执行一次，不改调度；这也是 systemd 单元 ExecStart 的同一入口（手动/定时同一路径）。它 spawn 一个 `feishu -p <prompt>` 子进程，cwd 为工位根目录（注入工位 AGENTS.md），子进程环境设 `FEISHU_UNATTENDED=1`、`HOME=<home>`、`TZ=<job.tz>`，并 unset 六个密钥/桥接变量；父进程负责留痕与退出码，模型回合在子进程里。
+- `feishu automation pause <name>` / `resume <name>`：`systemctl --user disable --now` / `enable --now` 对应 per-job timer；job 记录保留。
+- `feishu automation rm <name> [--purge]`：停并 disable timer、删除 per-job timer 单元并 daemon-reload。默认保留 `jobs/<name>/`；`--purge` 一并删除该目录。
+
+**递归护栏**：`FEISHU_UNATTENDED=1` 进程中除 `run` 外的所有 management 动词（add/rm/pause/resume/list）一律拒绝——定时任务不能新建/篡改调度（对照 Hermes 在 cron 会话里禁用 cronjob 工具）。
+
+**磁盘与单元布局**（全部在工位 + 用户 systemd 目录，不进仓库、不进 Agent Home）：
+
+```
+~/feishu-automation/
+  AGENTS.md                      # 工位 standing policy（见下）
+  runner.sh                      # 唯一服务入口脚本（首次 add 幂等生成）
+  jobs/<name>/
+    job.json                     # {name, calendar, tz, catchUp, prompt, createdAt}
+    prompt.md                    # 固定 prompt（自包含，无人可追问）
+    runs/<UTC时间戳>.{md,log}    # stdout/stderr 留痕，30 天清理
+~/.config/systemd/user/
+  feishu-automation@.service     # 共享模板（幂等覆盖安装）
+  feishu-automation-<name>.timer # per-job timer（Unit=feishu-automation@<name>.service）
+```
+
+模板服务：`Type=oneshot`、`TimeoutStartSec=600`、`WorkingDirectory=%h/feishu-automation`、`Environment=FEISHU_UNATTENDED=1` `HOME=%h`、`UnsetEnvironment=MEM0_API_KEY FEISHU_REMOTE FEISHU_REMOTE_APP_SECRET FEISHU_REMOTE_APP_ID FEISHU_REMOTE_OWNER_OPEN_ID FEISHU_REMOTE_LOOPBACK_URL`（显式六变量，不用 glob）、`Wants/After=network-online.target`（软依赖）、`ExecStart=%h/feishu-automation/runner.sh %i`。per-job timer：`OnCalendar=<calendar> <tz>`、`Persistent=<true|false>`、`Unit=feishu-automation@<name>.service`、`WantedBy=timers.target`。add/rm/pause/resume 后按需 `daemon-reload`。
+
+`runner.sh` host-neutral（只用 `$HOME`/`%h` 与标准前缀）：补 PATH（asdf shims/bin、linuxbrew、`~/.local/bin`，照搬 Briefing 脚本），`mkdir -p jobs/$1/runs` 并清理 30 天前留痕，以 UTC 时间戳命名 `runs/<stamp>.md/.log`，`exec feishu automation run $1`（TZ 由 `automation run` 按 job.json 设置，shell 不做时区解析）。
+
+**工位 AGENTS.md**：首次 `automation add` 时若工位无 `AGENTS.md`，写入从 Briefing 工位策略泛化的默认 standing policy（唯一对外写出口 = bot 身份向 owner 本人单聊发送；owner open_id 只用 `lark-cli auth status` 本地读取；数据只读现拉、不编造、不换命令绕过；单源失败不阻塞其余栏目；user token 失效发重新登录通知；中文、不泄露 token/环境变量/内部 ID）。已有 AGENTS.md **绝不覆盖**。
+
+**平台与边界**：v1 仅支持 Linux 用户 systemd（`systemctl --user` + `systemd-analyze`）；macOS launchd、Windows、无 user manager 环境一律在写入前非零失败并指明原因，不做半安装。跨机去重不做：任务记录是每台机器本地的，同一任务两台机都 enable 就发两份；纪律是只在一台常开机 enable（与手动 Briefing 部署相同）。不迁移现有手搓 Briefing（`feishu-briefing.*` 单元与脚本不被读取、修改或删除），未来若要并轨另开一票。ADR-0003 升级触发对本任务面同样有效：在硬只读命令策略落地前，生成的任务不应拥有超出「bot→owner digest」的写权限。
 
 ## Testing Decisions
 
