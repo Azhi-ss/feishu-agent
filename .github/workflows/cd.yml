@@ -1,0 +1,39 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "remote-v*"
+      - "@azhi-ss/feishu-remote@*"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to publish"
+        required: true
+        default: "feishu-remote"
+        type: choice
+        options:
+          - feishu-remote
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Publish @azhi-ss/feishu-remote
+        working-directory: packages/feishu-remote
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
