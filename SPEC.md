@@ -324,7 +324,9 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
 #### 16.3 部署
 
 - v0 部署在 owner 的 WSL 机器（systemd 用户态，不要求 Linger），接受「机器不开则无自动化」的边界——飞书手机端始终是工作时段外的原生通道。
-- 测试要求：临时 HOME + fake 模型/服务下断言 `FEISHU_UNATTENDED=1` 的 print 进程不实例化记忆扩展（无 ping、无 search、无 add），且 11:00 cutoff、缺数据源注明、post 单聊出口均有端到端测试。
+- 部署制品全部在 Automation Workspace，不进仓库：`systemd/feishu-briefing.service`（oneshot，`WorkingDirectory=%h/feishu-automation`，`Environment=FEISHU_UNATTENDED=1`，`UnsetEnvironment=MEM0_API_KEY FEISHU_REMOTE FEISHU_REMOTE_APP_SECRET FEISHU_REMOTE_APP_ID FEISHU_REMOTE_OWNER_OPEN_ID FEISHU_REMOTE_LOOPBACK_URL`（显式列出全部 6 个变量，不用 glob））与 `systemd/feishu-briefing.timer`（`OnCalendar=Mon..Fri *-*-* 08:30:00`、`Persistent=true`）。安装/停用各一条命令：`./install-systemd.sh`（拷贝到 `~/.config/systemd/user/` 并 `enable --now` timer）、`./disable-systemd.sh`（`disable --now` timer，加 `--purge` 删除单元）。单元只用 `%h`/`$HOME` 与标准前缀，无写死的本机路径，工位整体拷贝到另一台常开机器后跑一次 install 即可复用。
+- 11:00 cutoff 与周末跳过在 `run-briefing.sh` 的运行路径判定（timer 只管 Mon–Fri 调度；但 `Persistent` 可能把错过的周五触发重放到周六登录，故运行路径也拒绝周末）：本地时间 ≥11:00 或周六/周日则记一条 skip 原因到 journal 并退出 0；`--force`/`BRIEFING_FORCE=1` 是始终可用的手动出口。成败与耗时以 `briefing START/END exit=<rc> duration=<n>s` 写入 `journalctl --user -u feishu-briefing.service`，非零退出由 systemd 记为 failed。
+- 测试要求：临时 HOME + fake 模型/服务下断言 `FEISHU_UNATTENDED=1` 的 print 进程不实例化记忆扩展（无 ping、无 search、无 add；见 `test/unattended-mode.test.ts`）。11:00 cutoff/周末跳过、journal 成败耗时、post 单聊出口、缺数据源注明均通过「真实 systemd service 子进程 + 临时覆盖时钟」在部署机端到端验收（部署制品不属于仓库，故不入仓库测试）；cutoff 是一条显然正确的本地时间判断。
 
 ## Testing Decisions
 
