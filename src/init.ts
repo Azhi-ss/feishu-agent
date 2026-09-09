@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { memoryConfig } from "./memory.js";
 import { DEFAULT_SKILLS } from "./default-skills.js";
 import { DEFAULT_THEME_NAME } from "./settings.js";
@@ -40,11 +40,20 @@ export function initializeHome(agentHome: string, identity: string, reset: { ide
   const settingsPath = join(agentHome, "settings.json");
   if (!existsSync(settingsPath)) { atomicJson(settingsPath, { theme: DEFAULT_THEME_NAME }); created.push(settingsPath); }
   for (const skill of DEFAULT_SKILLS) {
-    const skillPath = join(agentHome, "skills", skill.name, "SKILL.md");
+    const skillDir = join(agentHome, "skills", skill.name);
+    const skillPath = join(skillDir, "SKILL.md");
     if (!existsSync(skillPath)) {
-      mkdirSync(join(agentHome, "skills", skill.name), { recursive: true });
-      writeFileSync(skillPath, skill.body + "\n");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(skillPath, skill.body.endsWith("\n") ? skill.body : skill.body + "\n");
       created.push(skillPath);
+      if (skill.files) {
+        for (const [relPath, content] of Object.entries(skill.files)) {
+          const filePath = join(skillDir, relPath);
+          mkdirSync(dirname(filePath), { recursive: true });
+          writeFileSync(filePath, content.endsWith("\n") ? content : content + "\n");
+          created.push(filePath);
+        }
+      }
     }
   }
   const saved = JSON.parse(readFileSync(mem0Path, "utf8")) as { userId: string };

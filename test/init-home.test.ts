@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -39,11 +39,21 @@ test("init installs default Feishu Skills without overwriting user edits", () =>
   const finderPath = join(agent, "skills", "feishu-find-skill", "SKILL.md");
   assert(first.created.includes(finderPath));
   assert.match(readFileSync(finderPath, "utf8"), /~\/.feishu-agent\/skills/);
-  for (const name of ["feishu-latex-rendering", "process-optimization-biweekly"]) {
+  for (const name of [
+    "feishu-latex-rendering",
+    "process-optimization-biweekly",
+    "deslop-zh",
+    "feishu-pro-diagram",
+    "feishu-package-curator",
+    "feishu-tech-note-writer",
+  ]) {
     const path = join(agent, "skills", name, "SKILL.md");
     assert(first.created.includes(path));
     assert.match(readFileSync(path, "utf8"), new RegExp(`^---\\nname: ${name}\\n`, "m"));
   }
+  const refPath = join(agent, "skills", "feishu-tech-note-writer", "references", "evidence-check.md");
+  assert(first.created.includes(refPath));
+  assert.ok(existsSync(refPath));
   const processTemplate = readFileSync(join(agent, "skills", "process-optimization-biweekly", "SKILL.md"), "utf8");
   assert.match(processTemplate, /<CHAT_ID>|<DOC_TOKEN>|<SPREADSHEET_TOKEN>/);
   assert.doesNotMatch(processTemplate, /(?:ou|oc)_[A-Za-z0-9]{12,}/);

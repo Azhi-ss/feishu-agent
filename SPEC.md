@@ -176,7 +176,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 已存在的私有 Skill 必须经过第二次明确确认才能覆盖。源树中的符号链接和路径穿越会被拒绝；安装先 staging，目标变更完成后再清理临时树。
 - 复制成功后，当前 Runtime 重新加载 Resources，使 Skill 立即可用。已安装 Skill 仍以当前用户权限运行，确认流程不构成沙箱。
 - Print 模式可以输出搜索结果；没有 UI 时安装必须快速失败，不能等待确认。
-- 全新 Feishu Home 默认创建 `feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering` 和 `process-optimization-biweekly`；公共仓库内的工作流 Skill 只能使用脱敏占位符，个人 Chat/Doc/Sheet 标识必须留在用户本地。
+- 全新 Feishu Home 默认创建 8 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer` 与 `feishu-package-curator`；公共仓库内的工作流 Skill 只能使用脱敏占位符，个人 Chat/Doc/Sheet 标识必须留在用户本地。
 
 ### 7. Package management
 
@@ -446,7 +446,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
     - 安装后 ResourceLoader reload 能发现新 Skill；Print 模式搜索可输出结果，安装在无 UI 时非零快速失败而不挂起。
 
 13. **Initialization**
-    - 全新 HOME 一次初始化成功，并创建四个内置 Feishu Skill；已有同名 Skill 的用户内容不被覆盖。
+    - 全新 HOME 一次初始化成功，并创建八个内置 Feishu Skill；已有同名 Skill 的用户内容不被覆盖。
     - 缺少 API Key、无模型、`lark-cli doctor` 失败时输出精确诊断。
     - 重复初始化幂等，不覆盖已有配置。
     - 显式重置选项才改变 Identity、模型或 System Prompt。
