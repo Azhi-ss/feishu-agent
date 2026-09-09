@@ -61,3 +61,7 @@ Issues 与 PRD 以 GitHub issue 管理（`Azhi-ss/feishu-agent`），统一用 `
 ### Domain docs
 
 单上下文仓库：根目录 `CONTEXT.md` 领域词汇表 + `docs/adr/`；工程设计以 `SPEC.md` 为准。见 `docs/agents/domain.md`。
+
+### Capability layering
+
+给 Feishu/Pi 增加能力时，先用「能形成确定性闭环的最低权限层」实现，缺执行/生命周期/分发边界时才向上升级：复用任务措辞 → Prompt Template；按需知识与配套文件 → Skill；结构化参数与结果 → Tool（由 Extension 注册）；模型之外强制策略或监听生命周期 → Extension；安装/锁版/跨机共享 → 再用 Package 包装（Package 是交付维度，不给代码降权、不造沙箱）。润色 prompt 换不来 Runtime 保证；OS/外部调度器能闭环就不要写常驻 Hook。选型问题、各层测试合同与本仓库的对应实例（high-risk guard、工位 AGENTS.md、官方 Skills、钉版 Package、systemd 定时器）见 `docs/agents/capability-layering.md`。
