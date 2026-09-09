@@ -19,7 +19,7 @@ Feishu Agent drives Feishu/Lark work through natural language, backed by the 28 
 - **Run workflow automations** — summarize meetings and minutes, draft standup reports, and script multi-step Feishu workflows (`lark-workflow-*`, `lark-meeting`, `lark-minutes`).
 - **Manage calendar and approvals** — check schedules, book meeting rooms, and process approval tasks (`lark-calendar`, `lark-approval`).
 - **Operate Bitable / Base** — create tables, fields, records, views, and dashboards in Feishu Base (`lark-base`).
-- **Remember across sessions** — project-scoped long-term memory via Mem0; secrets and raw tool output stay out of capture.
+- **Remember across sessions** — person-scoped long-term memory via Mem0: every project and machine shares one fixed bucket under `feishu:<identity>`; secrets and raw tool output stay out of capture.
 - **Author your own skills** — encode repeatable Feishu workflows as private skills (`feishu-skill-maker`).
 - **Write technical notes that render well in Feishu** — use the bundled LaTeX/XML guidance and process-report workflow templates.
 - **Extend with packages** — add MCP servers, web access, and subagents through Pi-compatible extensions.
@@ -141,7 +141,7 @@ Feishu Agent reuses existing `lark-cli` state without copying tokens. Personal-r
 
 ## Long-term Memory
 
-The direct `mem0ai` dependency is pinned to 3.0.8, the first compatible 3.x release using `uuid` 11.1.1; `npm audit --omit=dev` is clean for the installed production tree. Mem0 automatically captures user messages and Assistant text under the collision-proof Feishu Project key. Raw tool output is not auto-captured; Global memory requires an explicit action. The configured `feishu:<identity>` overrides external `MEM0_USER_ID`, `MEM0_API_KEY` remains environment-only, and telemetry is disabled. Startup performs a bounded health check; recall, capture, or Dream failure emits both terminal and Interactive warnings and disables later memory actions for that degraded session. A later healthy invocation recovers without changing unrelated Feishu settings.
+The direct `mem0ai` dependency is pinned to 3.0.8, the first compatible 3.x release using `uuid` 11.1.1; `npm audit --omit=dev` is clean for the installed production tree. Mem0 automatically captures user messages and Assistant text into one fixed, path-independent `feishu` bucket under the configured `feishu:<identity>`, so memory follows the person across projects and machines (sessions, Skills, packages, and settings stay per-project). Raw tool output is not auto-captured; Global memory requires an explicit action. The configured `feishu:<identity>` overrides external `MEM0_USER_ID`, `MEM0_API_KEY` remains environment-only, and telemetry is disabled. Startup performs a bounded health check; recall, capture, or Dream failure emits both terminal and Interactive warnings and disables later memory actions for that degraded session. A later healthy invocation recovers without changing unrelated Feishu settings.
 
 ## Offline release matrix
 
@@ -149,7 +149,7 @@ The release suite compiles the real CLI and exercises it only with temporary hom
 
 - a fresh HOME can run `feishu init`, an immediate Print turn, a mounted Interactive turn, a fake personal Lark command with explicit `--as user`, project-local sessions, and eligible user/Assistant memory capture;
 - hostile ordinary Pi home/project `.pi` and `.agents` resources stay unloaded, conflicting package core tools are rejected with warnings, and a replacement prompt or custom editor cannot replace the base identity or outer command guard;
-- two projects share only the configured global `feishu:<identity>` while keeping sessions, private Skills, package settings, loaded package Skills, and collision-proof Mem0 app IDs independent;
+- two projects share the configured `feishu:<identity>` and its single fixed Mem0 bucket while keeping sessions, private Skills, package settings, and loaded package Skills independent;
 - degraded Mem0 and official Skill fallback emit visible warnings while core file, Bash, Lark, Print, and Interactive work continues;
 - recursive artifact and diagnostic scans reject Mem0 secrets and copied Lark tokens, while raw tool output remains local to sessions and is excluded from automatic Mem0 capture.
 
