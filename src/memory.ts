@@ -31,6 +31,10 @@ export interface MemoryConfig {
   dream: { enabled: boolean; auto: boolean };
 }
 
+// Path-independent Mem0 bucket: memory follows feishu:<identity>, not the
+// checkout path or machine (SPEC issue #35). Must never be "*" (Mem0 wildcard).
+export const MEMORY_APP_ID = "feishu";
+
 export function memoryConfig(identity: string): MemoryConfig {
   const normalized = identity.startsWith("feishu:") ? identity : `feishu:${identity}`;
   return { userId: normalized, autoCapture: true, defaultScope: "project", contextInjection: true, dream: { enabled: true, auto: true } };
@@ -106,7 +110,6 @@ const createDefaultClient = (apiKey: string): MemoryClientLike => new DefaultMem
 
 export async function memoryRuntime(
   agentHome: string,
-  projectKey: string,
   createClient: (apiKey: string) => MemoryClientLike = createDefaultClient,
   timeoutMs = 2000,
 ): Promise<MemoryRuntime> {
@@ -165,7 +168,7 @@ export async function memoryRuntime(
     dream: { enabled: config.dream.enabled, auto: config.dream.auto, minHours: 24, minSessions: 5, minMemories: 20 },
   };
   const dreamStateDir = join(agentHome, "memory-state");
-  const scope: ScopeContext = { userId: config.userId, appId: projectKey, runId: "unknown" };
+  const scope: ScopeContext = { userId: config.userId, appId: MEMORY_APP_ID, runId: "unknown" };
   let degraded = false;
   let dreamTriggered = false;
   let dreamWriteSucceeded = false;

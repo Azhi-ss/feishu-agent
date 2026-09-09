@@ -64,7 +64,7 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
   // "no memory" is the expected state rather than a degraded session.
   const memory = process.env.FEISHU_UNATTENDED === "1"
     ? { diagnostic: () => undefined }
-    : await memoryRuntime(agentHome, projectKey);
+    : await memoryRuntime(agentHome);
   if (memory.warning) process.stderr.write(`${memory.warning}\n`);
   const resourceLoader = new FeishuResourceLoader(agentHome, projectRoot, projectKey, currentRequest, memory.extension);
   resourceLoader.setMemoryDiagnostic(memory.diagnostic);

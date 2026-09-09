@@ -133,7 +133,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 ### 4. Project and cwd model
 
 - Feishu Project 优先使用 `git rev-parse --show-toplevel`；失败时使用启动目录。
-- Project Root 用于项目 Settings、Packages、Skills、项目说明、Session 分区和 Mem0 `app_id`。
+- Project Root 用于项目 Settings、Packages、Skills、项目说明和 Session 分区。Mem0 `app_id` 不随 Project Root 变化：自动记忆按人隔离，所有 Feishu Project 与机器共用固定桶 `feishu`（配合稳定用户 `feishu:<identity>`，见 issue #35）；Session 分区与项目 Package 仍按 Project Root 路径隔离。
 - Runtime CWD 保持用户启动 `feishu` 时的目录；文件工具与 Bash 相对路径基于该目录。
 - 从会话池恢复会话时，默认采用当前启动目录作为本次 Runtime CWD，并对“会话原创建目录与当前目录不同”显示提示。该默认值闭合了 Grilling 中最后一个非阻塞遗漏，并保持“启动目录优先”的既有原则。
 - Session Header 仍保留原创建目录用于审计；恢复时不删除或篡改历史值。

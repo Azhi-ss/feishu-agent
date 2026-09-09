@@ -13,8 +13,8 @@ The composition of Pi `AgentSessionRuntime` with Pi's interactive TUI or one-sho
 _Avoid_: Forked Pi runtime, modified Pi core, patched third-party package, JSON mode, RPC mode, session sharing, external session import, credential mutation, extension-owned core policy
 
 **Long-term Memory**:
-Durable learned context that remains available across Feishu Agent sessions and devices. Automatic learning includes user messages and assistant text replies—but not raw tool results—and is always project-scoped by Git root; `feishu init` records an explicitly chosen stable `feishu:<identity>` Mem0 user ID. Cross-project preferences or raw source material enter memory only through an explicit memory action. Memory is optional at runtime: an unavailable Mem0 service is surfaced clearly but does not block the Feishu Agent's other work.
-_Avoid_: Session history, transcript, chat log, shared agent memory, device-local memory, inferred user identity, startup dependency, global automatic capture, raw tool-output capture
+Durable learned context that remains available across Feishu Agent sessions and devices. Automatic learning includes user messages and assistant text replies—but not raw tool results—and is always person-scoped: every Feishu Project and machine captures into and recalls from one fixed Mem0 bucket (`app_id="feishu"`) under the explicitly chosen stable `feishu:<identity>` Mem0 user ID, so memory survives machine moves and directory changes (issue #35). The project path still partitions sessions and project packages, but not memory. Cross-project preferences or raw source material enter memory only through an explicit memory action. Memory is optional at runtime: an unavailable Mem0 service is surfaced clearly but does not block the Feishu Agent's other work.
+_Avoid_: Session history, transcript, chat log, device-local memory, inferred user identity, startup dependency, path-hash-scoped automatic capture, raw tool-output capture
 
 **Feishu Agent Home**:
 The private configuration root `~/.feishu-agent/` that owns this agent's packages, skills, system prompt, Mem0 state, and centrally stored session files partitioned by Feishu Project. `feishu init` creates this root, installs and configures the default Mem0 package and the Feishu Remote Package, synchronizes official `lark-cli` skills, and validates Lark plus model readiness.
@@ -33,7 +33,7 @@ A loading boundary that prevents Feishu Agent from automatically importing other
 _Avoid_: Filesystem sandbox, container isolation, permission boundary
 
 **Feishu Project**:
-The Git repository root that owns project-level Feishu skills, packages, settings, instructions, sessions, and Mem0 scope. When no Git root exists, the startup working directory is the project. Runtime file and Bash paths remain relative to the directory where `feishu` was launched rather than automatically changing to the project root.
+The Git repository root that owns project-level Feishu skills, packages, settings, instructions, and sessions (but not the fixed person-scoped Mem0 bucket). When no Git root exists, the startup working directory is the project. Runtime file and Bash paths remain relative to the directory where `feishu` was launched rather than automatically changing to the project root.
 _Avoid_: Arbitrary subdirectory as project identity, process-wide workspace, monorepo package root, forced root working directory
 
 **System Prompt Layer**:
