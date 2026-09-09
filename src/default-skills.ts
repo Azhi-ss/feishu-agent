@@ -1471,6 +1471,542 @@ C 类：GitHub Issues、社区帖子、用户反馈。
 `,
 };
 
+const VOLC_DEVINSTANCE = `---
+name: volc-devinstance
+description: "火山引擎机器学习平台（veMLP）开发机管理与算力作业探针。支持快速查询开发机状态、机内正在运行的计算任务与收敛进度、安全开机、以及带作业防断保护的关机操作。当用户询问开发机状态、查看计算作业进度、关闭/开启开发机时使用。"
+---
+
+# 火山引擎开发机控制与算力作业探针 (Volcengine DevInstance & Workload Probe)
+
+本 Skill 用于管理火山引擎机器学习平台开发机（DevInstance）生命周期，具备**双层真值感知**、**作业防断拦截**与**默认安全防护（Fail-Closed）**。
+
+## 核心机制：双层状态判定
+
+1. **第一层（云端服务器级别）**：通过火山 OpenAPI 快速查询开发机硬件是 \`Running\` 还是 \`Stopped\`。
+2. **第二层（机内计算进程级别）**：当机器处于 \`Running\` 时，自动通过 SSH 探针进入内部，探测：
+   - 是否有活跃的 \`vasp_*\`、\`python train\`、\`torch\`、\`gpumd\` 等高密集计算进程；
+   - 当前正在执行的后台 tmux 任务名称与对应的工作目录；
+   - 提取最新一行收敛日志（\`OSZICAR\`、\`vasp.log\`、\`train.log\`、\`nohup.out\`）；
+   - 当前 CPU 负载（Load Average）。
+
+## 依赖说明
+
+- 需要安装火山引擎机器学习平台 CLI \`mlp\`（置于 PATH 中或 \`~/.volc/bin/mlp\`，亦可通过环境变量 \`VOLC_MLP_BIN\` 指定）。
+- SSH 登录凭证优先读取 \`~/.ssh/config\`，亦可通过环境变量 \`VOLC_SSH_KEY\` 自定义。
+
+## 常用命令
+
+所有操作通过底层确定性脚本执行：\`~/.feishu-agent/skills/volc-devinstance/devctl <action> [target]\`
+
+1. **查看所有个人开发机列表**：
+   \`\`\`bash
+   ~/.feishu-agent/skills/volc-devinstance/devctl list
+   \`\`\`
+
+2. **查询开发机详情与机内计算进度**（最常用）：
+   \`\`\`bash
+   ~/.feishu-agent/skills/volc-devinstance/devctl status <instance-name-or-id>
+   \`\`\`
+   - 若机器空闲，提示可以安全关机以节省算力费用；
+   - 若有算例在跑，输出算例名称、目录、收敛步日志并发出不要关机的警告。
+
+3. **启动开发机**：
+   \`\`\`bash
+   ~/.feishu-agent/skills/volc-devinstance/devctl start <instance-name-or-id>
+   \`\`\`
+
+4. **安全关机（带防误杀拦截保护）**：
+   \`\`\`bash
+   ~/.feishu-agent/skills/volc-devinstance/devctl stop <instance-name-or-id>
+   \`\`\`
+   - **防误杀机制**：
+     1. 若检测到机内有正在运行的计算作业（训练/模拟/高负载），**直接拦截关机**；
+     2. 若网络抖动导致 SSH 探针无法连接，默认安全（Fail-Closed）**强行拦截关机**，防止盲目杀掉任务；
+     3. 若用户确定要强制关机，必须显式附加 \`--force\`：\`devctl stop <target> --force\`。
+
+## 对抗安全规则（Agent 交互规范）
+
+- **多重重名拦截**：若输入的简写匹配到多台机器，工具会拒绝执行并输出候选列表，Agent 必须引导用户明确指定全名或 ID。
+- **凭证安全**：绝不在对话和日志中回显任何 AK/SK 或 Token。
+- **关机确认**：当用户在飞书请求关机时，Agent 必须先执行 \`status\` 汇报当前是否有任务在跑，并在确认安全后再关机。
+`;
+
+const VOLC_DEVCTL = `#!/usr/bin/env python3
+"""
+devctl - Volcengine ML Platform DevInstance CLI Helper
+Hardened with:
+ 1. Fail-closed shutdown protection (no kill if probe unreachable unless --force)
+ 2. Multi-match collision disambiguation
+ 3. Generalized task/load detection (VASP, Python/PyTorch, GPUMD)
+ 4. Bounded timeouts & zero-hanging
+ 5. Portable path resolution (env vars, PATH, ~/.volc, ~/.ssh)
+"""
+import sys
+import json
+import subprocess
+import os
+import shutil
+import time
+
+def find_mlp_bin():
+    """Resolve the mlp CLI binary portably:
+    1. VOLC_MLP_BIN environment variable
+    2. shutil.which("mlp") in PATH
+    3. Common user install path: ~/.volc/bin/mlp
+    4. System-wide / user-local paths: ~/bin/mlp, ~/.local/bin/mlp, /usr/local/bin/mlp
+    """
+    env_bin = os.environ.get("VOLC_MLP_BIN")
+    if env_bin and os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+        return env_bin
+    which_bin = shutil.which("mlp")
+    if which_bin:
+        return which_bin
+    candidates = [
+        os.path.expanduser("~/.volc/bin/mlp"),
+        os.path.expanduser("~/bin/mlp"),
+        os.path.expanduser("~/.local/bin/mlp"),
+        "/usr/local/bin/mlp",
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+def resolve_ssh_key(name):
+    """Resolve identity file from ~/.ssh/config or conventional paths.
+    Prioritizes VOLC_SSH_KEY, ~/.ssh/config Host entry, then conventional candidate keys.
+    """
+    env_key = os.environ.get("VOLC_SSH_KEY")
+    if env_key:
+        expanded = os.path.expanduser(env_key)
+        if os.path.exists(expanded):
+            return expanded
+
+    config_path = os.path.expanduser("~/.ssh/config")
+    if os.path.exists(config_path):
+        current_host = None
+        try:
+            with open(config_path, "r", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.lower().startswith("host "):
+                        parts = line.split()
+                        if len(parts) > 1:
+                            current_host = parts[1].strip().lower()
+                    elif current_host and current_host == name.lower() and line.lower().startswith("identityfile"):
+                        parts = line.split()
+                        if len(parts) > 1:
+                            key = os.path.expanduser(parts[1].strip())
+                            if os.path.exists(key):
+                                return key
+        except Exception:
+            pass
+
+    candidates = [
+        f"~/.ssh/keys/{name}",
+        f"~/.ssh/keys/{name.lower()}",
+        f"~/.ssh/{name}",
+        f"~/.ssh/{name.lower()}",
+        "~/.ssh/vasp",
+        "~/.ssh/id_ed25519",
+        "~/.ssh/id_rsa",
+    ]
+    for c in candidates:
+        p = os.path.expanduser(c)
+        if os.path.exists(p):
+            return p
+    return os.path.expanduser("~/.ssh/id_rsa")
+
+def run_mlp(*args):
+    mlp_bin = find_mlp_bin()
+    if not mlp_bin:
+        return None, (
+            "未找到火山引擎 mlp CLI。请先安装 mlp（可置于 ~/.volc/bin/mlp 或加入 PATH），"
+            "或设置环境变量 VOLC_MLP_BIN 指向可执行文件。"
+        )
+    cmd = [mlp_bin, "devinstance"] + list(args)
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        return None, res.stderr.strip() or res.stdout.strip()
+    return res.stdout.strip(), None
+
+def get_my_instances():
+    out, err = run_mlp("list", "--mine", "--output", "json")
+    if err:
+        return [], err
+    if not out:
+        return [], None
+    try:
+        return json.loads(out), None
+    except Exception as e:
+        return [], str(e)
+
+def resolve_instance(identifier):
+    items, err = get_my_instances()
+    if err:
+        return None, [], err
+    # 1. Exact ID match
+    for it in items:
+        if it.get("Id") == identifier:
+            return it, [], None
+    # 2. Exact Name match
+    exact_names = [it for it in items if it.get("Name") == identifier]
+    if len(exact_names) == 1:
+        return exact_names[0], [], None
+    elif len(exact_names) > 1:
+        return None, exact_names, None
+    
+    # 3. Fuzzy Name match (case-insensitive)
+    fuzzy = [it for it in items if identifier.lower() in it.get("Name", "").lower()]
+    if len(fuzzy) == 1:
+        return fuzzy[0], [], None
+    elif len(fuzzy) > 1:
+        return None, fuzzy, None
+        
+    return None, [], None
+
+def probe_instance_workload(ip, port, key_path=None):
+    """Probe inside running instance via SSH with fail-closed state tracking."""
+    ssh_user = os.environ.get("VOLC_SSH_USER", "root")
+    remote_script = r'''
+python3 - << 'INNER'
+import subprocess, os, json
+
+# 1. Tmux sessions
+sessions = []
+try:
+    res = subprocess.run(["tmux", "ls"], capture_output=True, text=True)
+    if res.returncode == 0:
+        for line in res.stdout.strip().splitlines():
+            if line:
+                sessions.append(line.split(":")[0].strip())
+except Exception:
+    pass
+
+# 2. VASP process count
+try:
+    res = subprocess.run(["pgrep", "-c", "vasp_"], capture_output=True, text=True)
+    vasp_ranks = int(res.stdout.strip())
+except Exception:
+    vasp_ranks = 0
+
+# 3. General compute processes (python/train/gpumd)
+general_jobs = []
+try:
+    res = subprocess.run(["pgrep", "-fa", "gpumd|python.*train|torch"], capture_output=True, text=True)
+    general_jobs = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
+except Exception:
+    pass
+
+# 4. Detailed task progress
+tasks = []
+for s in sessions:
+    res = subprocess.run(["tmux", "list-panes", "-t", s, "-F", "#{pane_current_path}"], capture_output=True, text=True)
+    cwd = res.stdout.strip().splitlines()[0] if res.stdout.strip() else "未知目录"
+    
+    recent_info = ""
+    for log_name in ("OSZICAR", "vasp.log", "train.log", "nohup.out"):
+        target_log = os.path.join(cwd, log_name)
+        if os.path.isfile(target_log):
+            try:
+                with open(target_log, "r", errors="ignore") as f:
+                    lines = f.readlines()
+                    if lines:
+                        recent_info = f"{log_name}: {lines[-1].strip()}"
+                        break
+            except: pass
+    
+    tasks.append({"session": s, "directory": cwd, "recent_log": recent_info})
+
+load1, load5, load15 = os.getloadavg()
+
+print(json.dumps({
+    "success": True,
+    "vasp_ranks": vasp_ranks,
+    "general_jobs_count": len(general_jobs),
+    "load_1m": load1,
+    "load_5m": load5,
+    "tasks": tasks
+}))
+INNER
+'''
+    cmd = [
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=4", "-p", str(port),
+    ]
+    if key_path and os.path.exists(key_path):
+        cmd.extend(["-i", key_path])
+    cmd.extend([f"{ssh_user}@{ip}", remote_script])
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        return {"success": False, "error": res.stderr.strip() or "SSH connection failed"}
+    try:
+        for line in res.stdout.strip().splitlines():
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                d = json.loads(line)
+                d["success"] = True
+                return d
+        return {"success": False, "error": "Invalid probe payload"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def cmd_list():
+    items, err = get_my_instances()
+    if err:
+        print(f"❌ 获取开发机列表失败: {err}")
+        return
+    if not items:
+        print("未找到当前账号名下的开发机。")
+        return
+    print(f"{'名称 (NAME)':20s} | {'状态 (STATE)':10s} | {'实例ID (ID)':26s} | {'规格 (FLAVOR)':20s} | {'SSH端口'}")
+    print("-" * 95)
+    for it in items:
+        name = it.get("Name", "-")
+        st = it.get("Status", {}).get("State", "-")
+        iid = it.get("Id", "-")
+        flav = it.get("ResourceClaim", {}).get("InstanceTypeId", "-")
+        ports = it.get("Ports", [])
+        ssh_info = "-"
+        for p in ports:
+            if p.get("Name") == "SSH连接" and p.get("Status", {}).get("State") == "Available":
+                ip = p.get("ExternalIp")
+                port = p.get("ExternalPort")
+                if ip and port:
+                    ssh_info = f"{ip}:{port}"
+        print(f"{name:20s} | {st:10s} | {iid:26s} | {flav:20s} | {ssh_info}")
+
+def cmd_status(target):
+    it, matches, err = resolve_instance(target)
+    if err:
+        print(f"❌ 错误: {err}")
+        return
+    if matches:
+        print(f"❌ 错误：输入 '{target}' 匹配到多个开发机，请使用完整名称或 ID 明确指定：")
+        for m in matches:
+            print(f"  - {m.get('Name')} ({m.get('Id')}) [{m.get('Status',{}).get('State')}]")
+        return
+    if not it:
+        print(f"❌ 未找到与 '{target}' 匹配的开发机。请执行 'devctl list' 查看列表。")
+        return
+    
+    iid = it.get("Id")
+    out, err = run_mlp("get", "--id", iid, "--output", "json")
+    if not out:
+        print(f"获取实例详情失败: {err}")
+        return
+    
+    d = json.loads(out)
+    st = d.get("Status", {}).get("State")
+    msg = d.get("Status", {}).get("Message", "")
+    name = d.get("Name")
+    flav = d.get("ResourceClaim", {}).get("InstanceTypeId")
+    vol = d.get("Volume", {}).get("Size")
+    ports = d.get("Ports", [])
+    launch_time = d.get("LaunchTime", "-")
+    
+    print(f"=== 云端开发机基础状态: {name} ===")
+    print(f"实例 ID:     {iid}")
+    print(f"开机状态:    {st} {('(' + msg + ')') if msg else ''}")
+    print(f"计算规格:    {flav}")
+    print(f"系统盘:      {vol} GiB")
+    print(f"启动时间:    {launch_time}")
+    
+    key_path = resolve_ssh_key(name)
+    ssh_ip, ssh_port = None, None
+    ssh_user = os.environ.get("VOLC_SSH_USER", "root")
+    for p in ports:
+        if p.get("Name") == "SSH连接":
+            p_st = p.get("Status", {}).get("State")
+            ip = p.get("ExternalIp")
+            port = p.get("ExternalPort")
+            if p_st == "Available" and ip and port:
+                ssh_ip, ssh_port = ip, port
+                key_arg = f"-i {key_path} " if os.path.exists(key_path) else ""
+                print(f"SSH 直连:    ssh {key_arg}-p {port} {ssh_user}@{ip}  (或直接: ssh {name.lower()})")
+        elif p.get("Name") == "WebIDE" and st == "Running":
+            url = p.get("APIGPublicUrl")
+            if url:
+                print(f"WebIDE:      {url}")
+    
+    print("\\n--- 机器内部任务与负载深度探针 ---")
+    if st != "Running":
+        print(f"机器处于 {st} 状态，未在运行任何计算任务。")
+        return
+    
+    if not (ssh_ip and ssh_port):
+        print("未检测到可用的公网 SSH 端口，无法执行内部探针。")
+        return
+    
+    probe = probe_instance_workload(ssh_ip, ssh_port, key_path=key_path)
+    if not probe or not probe.get("success"):
+        err_msg = probe.get("error") if probe else "连接超时"
+        print(f"⚠️ SSH 探针无法连接 ({err_msg})，请稍后重试。")
+        return
+    
+    ranks = probe.get("vasp_ranks", 0)
+    gjobs = probe.get("general_jobs_count", 0)
+    load = probe.get("load_1m", 0)
+    tasks = probe.get("tasks", [])
+    
+    if ranks > 0 or gjobs > 0 or load > 2.0:
+        print(f"⚡ 【正在计算中】")
+        if ranks > 0:
+            print(f"  • VASP 并行核心数:  {ranks} ranks (高负荷)")
+        if gjobs > 0:
+            print(f"  • 其他活跃计算进程:  {gjobs} 个 (Python/PyTorch/GPUMD)")
+        print(f"  • CPU 1分钟平均负载: {load:.2f}")
+        print(f"  • 活跃后台任务会话:  {len(tasks)} 个")
+        for t in tasks:
+            print(f"    ▶ 会话名:   {t.get('session')}")
+            print(f"      计算目录: {t.get('directory')}")
+            if t.get("recent_log"):
+                print(f"      最新进度: {t.get('recent_log')}")
+        print("⚠️ 警告：当前机器处于繁忙计算状态，切勿随意关机！")
+    else:
+        print(f"💤 【当前空闲】机内无活跃计算进程 (CPU 负载: {load:.2f})。")
+        if tasks:
+            print(f"存在 {len(tasks)} 个已结束或挂起的 tmux 会话：")
+            for t in tasks:
+                print(f"  - {t.get('session')} ({t.get('directory')})")
+        print("✅ 提示：如果不需要继续计算，建议关机以节省算力费用。")
+
+def cmd_start(target):
+    it, matches, err = resolve_instance(target)
+    if err:
+        print(f"❌ 错误: {err}")
+        return
+    if matches:
+        print(f"❌ 错误：输入 '{target}' 匹配到多个开发机，请使用全名指定：")
+        for m in matches:
+            print(f"  - {m.get('Name')} ({m.get('Id')})")
+        return
+    if not it:
+        print(f"❌ 未找到与 '{target}' 匹配的开发机。")
+        return
+    iid = it.get("Id")
+    name = it.get("Name")
+    print(f"正在启动开发机 {name} ({iid})...")
+    out, err = run_mlp("start", "--id", iid)
+    if err:
+        print(f"启动命令发送失败: {err}")
+        return
+    print("启动指令已下发，正在轮询状态...")
+    for _ in range(8):
+        time.sleep(3)
+        chk, _ = run_mlp("get", "--id", iid, "--output", "json")
+        if chk:
+            st = json.loads(chk).get("Status", {}).get("State")
+            if st in ("Running", "Deploying"):
+                print(f"当前状态: {st}")
+                if st == "Running":
+                    cmd_status(iid)
+                return
+    print("机器已进入启动队列，请稍后查询状态。")
+
+def cmd_stop(target, force=False):
+    it, matches, err = resolve_instance(target)
+    if err:
+        print(f"❌ 错误: {err}")
+        return
+    if matches:
+        print(f"❌ 错误：输入 '{target}' 匹配到多个开发机，请使用全名指定：")
+        for m in matches:
+            print(f"  - {m.get('Name')} ({m.get('Id')})")
+        return
+    if not it:
+        print(f"❌ 未找到与 '{target}' 匹配的开发机。")
+        return
+    iid = it.get("Id")
+    name = it.get("Name")
+    
+    out, _ = run_mlp("get", "--id", iid, "--output", "json")
+    if out:
+        d = json.loads(out)
+        st = d.get("Status", {}).get("State")
+        if st == "Running" and not force:
+            ssh_ip, ssh_port = None, None
+            for p in d.get("Ports", []):
+                if p.get("Name") == "SSH连接" and p.get("Status", {}).get("State") == "Available":
+                    ssh_ip = p.get("ExternalIp")
+                    ssh_port = p.get("ExternalPort")
+                    break
+            
+            if ssh_ip and ssh_port:
+                key_path = resolve_ssh_key(name)
+                probe = probe_instance_workload(ssh_ip, ssh_port, key_path=key_path)
+                # 1. Fail-closed: probe failed
+                if not probe or not probe.get("success"):
+                    print(f"🛑 安全拦截：无法通过 SSH 确认机内计算状态 (网络未连通或探测超时)。")
+                    print(f"为防止强行关机导致正在跑的作业被杀死，已阻止关机！")
+                    print(f"若确定机器安全且执意关机，请附加参数：devctl stop {name} --force")
+                    return
+                # 2. Fail-closed: active calculation running
+                ranks = probe.get("vasp_ranks", 0)
+                gjobs = probe.get("general_jobs_count", 0)
+                load = probe.get("load_1m", 0)
+                if ranks > 0 or gjobs > 0 or load > 2.0:
+                    tasks = [t.get("session") for t in probe.get("tasks", [])]
+                    print(f"🚨 严重警告：开发机 {name} 内部正在进行密集计算！")
+                    if ranks > 0: print(f"  • VASP 进程占用: {ranks} 核")
+                    if gjobs > 0: print(f"  • 其他计算进程: {gjobs} 个")
+                    print(f"  • 系统负载: {load:.2f}")
+                    print(f"  • 运行中的会话: {tasks}")
+                    print(f"此时关机会导致计算直接中断丢步！")
+                    print(f"若确实需要强制关机，请附加参数：devctl stop {name} --force")
+                    return
+
+    print(f"正在停止开发机 {name} ({iid}) 以释放算力...")
+    out, err = run_mlp("stop", "--id", iid)
+    if err:
+        print(f"停止命令发送失败: {err}")
+        return
+    print("停止指令已下发，正在等待关机确认...")
+    for _ in range(8):
+        time.sleep(3)
+        chk, _ = run_mlp("get", "--id", iid, "--output", "json")
+        if chk:
+            st = json.loads(chk).get("Status", {}).get("State")
+            if st == "Stopped":
+                print(f"开发机 {name} 已成功关机 (Stopped)。算力已释放。")
+                return
+    print(f"开发机 {name} 正在关机中，请稍后确认。")
+
+def main():
+    if len(sys.argv) < 2:
+        print("用法: devctl <list | status <name/id> | start <name/id> | stop <name/id> [--force]>")
+        sys.exit(1)
+    
+    action = sys.argv[1].lower()
+    if action == "list":
+        cmd_list()
+    elif action in ("status", "get", "info"):
+        if len(sys.argv) < 3:
+            print("错误: 请指定开发机名称或 ID，例如: devctl status my-instance")
+            sys.exit(1)
+        cmd_status(sys.argv[2])
+    elif action in ("start", "on", "boot"):
+        if len(sys.argv) < 3:
+            print("错误: 请指定开发机名称或 ID，例如: devctl start my-instance")
+            sys.exit(1)
+        cmd_start(sys.argv[2])
+    elif action in ("stop", "off", "shutdown"):
+        if len(sys.argv) < 3:
+            print("错误: 请指定开发机名称或 ID，例如: devctl stop my-instance")
+            sys.exit(1)
+        cmd_stop(sys.argv[2], force="--force" in sys.argv)
+    else:
+        print(f"未知操作 '{action}'。支持的操作: list, status, start, stop")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+`;
+
+const VOLC_DEVINSTANCE_FILES: Record<string, string> = {
+  devctl: VOLC_DEVCTL,
+};
+
 export const DEFAULT_SKILLS: DefaultSkill[] = [
   { name: "feishu-skill-maker", body: FEISHU_SKILL_MAKER },
   { name: "feishu-find-skill", body: FEISHU_FIND_SKILL },
@@ -1480,4 +2016,5 @@ export const DEFAULT_SKILLS: DefaultSkill[] = [
   { name: "feishu-pro-diagram", body: FEISHU_PRO_DIAGRAM },
   { name: "feishu-package-curator", body: FEISHU_PACKAGE_CURATOR },
   { name: "feishu-tech-note-writer", body: FEISHU_TECH_NOTE_WRITER, files: FEISHU_TECH_NOTE_WRITER_FILES },
+  { name: "volc-devinstance", body: VOLC_DEVINSTANCE, files: VOLC_DEVINSTANCE_FILES },
 ];

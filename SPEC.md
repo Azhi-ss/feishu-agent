@@ -176,7 +176,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 已存在的私有 Skill 必须经过第二次明确确认才能覆盖。源树中的符号链接和路径穿越会被拒绝；安装先 staging，目标变更完成后再清理临时树。
 - 复制成功后，当前 Runtime 重新加载 Resources，使 Skill 立即可用。已安装 Skill 仍以当前用户权限运行，确认流程不构成沙箱。
 - Print 模式可以输出搜索结果；没有 UI 时安装必须快速失败，不能等待确认。
-- 全新 Feishu Home 默认创建 8 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer` 与 `feishu-package-curator`；公共仓库内的工作流 Skill 只能使用脱敏占位符，个人 Chat/Doc/Sheet 标识必须留在用户本地。
+- 全新 Feishu Home 默认创建 9 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer`、`feishu-package-curator` 与 `volc-devinstance`；公共仓库内的工作流 Skill 只能使用脱敏占位符，个人 Chat/Doc/Sheet 标识必须留在用户本地。
 
 ### 7. Package management
 

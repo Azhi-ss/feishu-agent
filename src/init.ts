@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { memoryConfig } from "./memory.js";
 import { DEFAULT_SKILLS } from "./default-skills.js";
@@ -50,7 +50,17 @@ export function initializeHome(agentHome: string, identity: string, reset: { ide
         for (const [relPath, content] of Object.entries(skill.files)) {
           const filePath = join(skillDir, relPath);
           mkdirSync(dirname(filePath), { recursive: true });
-          writeFileSync(filePath, content.endsWith("\n") ? content : content + "\n");
+          const isExecutable = content.startsWith("#!");
+          writeFileSync(filePath, content.endsWith("\n") ? content : content + "\n", {
+            mode: isExecutable ? 0o755 : 0o644,
+          });
+          if (isExecutable) {
+            try {
+              chmodSync(filePath, 0o755);
+            } catch {
+              // best-effort: writeFileSync already set mode; chmodSync may fail on non-posix filesystems
+            }
+          }
           created.push(filePath);
         }
       }

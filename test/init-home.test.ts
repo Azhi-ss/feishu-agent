@@ -46,6 +46,7 @@ test("init installs default Feishu Skills without overwriting user edits", () =>
     "feishu-pro-diagram",
     "feishu-package-curator",
     "feishu-tech-note-writer",
+    "volc-devinstance",
   ]) {
     const path = join(agent, "skills", name, "SKILL.md");
     assert(first.created.includes(path));
@@ -54,6 +55,12 @@ test("init installs default Feishu Skills without overwriting user edits", () =>
   const refPath = join(agent, "skills", "feishu-tech-note-writer", "references", "evidence-check.md");
   assert(first.created.includes(refPath));
   assert.ok(existsSync(refPath));
+  const devctlPath = join(agent, "skills", "volc-devinstance", "devctl");
+  assert(first.created.includes(devctlPath));
+  assert.ok(existsSync(devctlPath));
+  const devctlBody = readFileSync(devctlPath, "utf8");
+  assert.doesNotMatch(devctlBody, /\/home\/dministrator/);
+  assert.match(devctlBody, /find_mlp_bin/);
   const processTemplate = readFileSync(join(agent, "skills", "process-optimization-biweekly", "SKILL.md"), "utf8");
   assert.match(processTemplate, /<CHAT_ID>|<DOC_TOKEN>|<SPREADSHEET_TOKEN>/);
   assert.doesNotMatch(processTemplate, /(?:ou|oc)_[A-Za-z0-9]{12,}/);
