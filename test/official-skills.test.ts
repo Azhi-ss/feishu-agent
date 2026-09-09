@@ -99,3 +99,70 @@ test("cache-only startup never calls skills list or skills read when cache is ab
   assert.equal(calls, "--version\n");
   assert.doesNotMatch(calls, /skills list|skills read/);
 });
+
+function updatingFake(root: string) {
+  const bin = join(root, "bin");
+  const log = join(root, "calls");
+  const updated = join(root, "updated");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "lark-cli"), `#!/bin/sh
+echo "$@" >> "${log}"
+case "$*" in
+  "update --json") touch "${updated}"; echo '{"ok":true,"version":"1.0.94"}';;
+  "--version") [ -f "${updated}" ] && echo "lark-cli 1.0.94" || echo "lark-cli 1.0.0";;
+  "skills list --json") echo '["docs"]';;
+  "skills read docs") echo '---
+name: docs
+description: official
+---
+body';;
+  *) exit 2;;
+esac
+`, { mode: 0o755 });
+  return { log, env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` } };
+}
+
+test("update option runs lark-cli update before exporting skills for the new version", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-official-update-"));
+  const cache = join(root, "cache");
+  const f = updatingFake(root);
+  const result = await syncOfficialSkills(cache, true, f.env, { updateLarkCli: true });
+  assert.equal(result.version, "lark-cli 1.0.94");
+  assert.equal(result.source, "current");
+  const calls = readFileSync(f.log, "utf8").trim().split("\n");
+  assert.equal(calls[0], "update --json", "lark-cli update runs before any version/skill call");
+  assert.ok(calls.includes("skills list --json"));
+  assert.equal(result.cacheDir, join(cache, Buffer.from("lark-cli 1.0.94").toString("base64url")));
+});
+
+test("a failed lark-cli update aborts the sync without exporting skills or touching the cache", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-official-update-fail-"));
+  const cache = join(root, "cache");
+  const bin = join(root, "bin");
+  const log = join(root, "calls");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "lark-cli"), `#!/bin/sh
+echo "$@" >> "${log}"
+case "$*" in
+  "update --json") echo 'update boom' >&2; exit 1;;
+  *) echo 'should not be reached after a failed update' >&2; exit 2;;
+esac
+`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` };
+  await assert.rejects(
+    () => syncOfficialSkills(cache, true, env, { updateLarkCli: true }),
+    /lark-cli update/i,
+  );
+  const calls = readFileSync(log, "utf8");
+  assert.match(calls, /^update --json\n?$/);
+  assert.doesNotMatch(calls, /skills list|--version/);
+});
+
+test("without the update option lark-cli update is never invoked", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-official-no-update-"));
+  const cache = join(root, "cache");
+  const f = updatingFake(root);
+  const result = await syncOfficialSkills(cache, true, f.env);
+  assert.equal(result.version, "lark-cli 1.0.0");
+  assert.doesNotMatch(readFileSync(f.log, "utf8"), /update/);
+});

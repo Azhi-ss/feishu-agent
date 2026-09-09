@@ -6,6 +6,8 @@ import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
 const CLI_TIMEOUT_MS = 1500;
+// `lark-cli update` runs a global npm install; the version/skill calls are local and fast.
+const CLI_UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function safeVersion(version: string): string {
   return Buffer.from(version).toString("base64url");
@@ -34,6 +36,7 @@ export type OfficialSkillsResult = {
 
 export type OfficialSkillsOptions = {
   allowSync?: boolean;
+  updateLarkCli?: boolean;
 };
 
 function cacheDirs(cacheRoot: string): string[] {
@@ -63,16 +66,31 @@ function latestValidCache(cacheRoot: string): OfficialSkillsResult | undefined {
   return undefined;
 }
 
-async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+async function runCli(args: string[], env: NodeJS.ProcessEnv, timeoutMs = CLI_TIMEOUT_MS, maxBuffer = 1024 * 1024): Promise<string> {
   const result = await execFileAsync("lark-cli", args, {
     encoding: "utf8",
     env,
-    timeout: CLI_TIMEOUT_MS,
+    timeout: timeoutMs,
     killSignal: "SIGTERM",
-    maxBuffer: 1024 * 1024,
+    maxBuffer,
     windowsHide: true,
   });
   return result.stdout;
+}
+
+// A global npm install can emit more than the 1 MB cap used by local calls.
+const CLI_UPDATE_MAX_BUFFER = 16 * 1024 * 1024;
+
+// Explicitly self-update lark-cli (network + global install). Only reachable from the
+// user-typed `feishu skills sync --update`; never called from startup/init, preserving
+// the zero-network startup invariant. A failure aborts the sync and leaves caches intact.
+async function updateLarkCli(env: NodeJS.ProcessEnv): Promise<void> {
+  try {
+    await runCli(["update", "--json"], env, CLI_UPDATE_TIMEOUT_MS, CLI_UPDATE_MAX_BUFFER);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`lark-cli update failed; official Skills left unchanged: ${detail}`);
+  }
 }
 
 export async function syncOfficialSkills(
@@ -81,6 +99,9 @@ export async function syncOfficialSkills(
   env = process.env,
   options: OfficialSkillsOptions = {},
 ): Promise<OfficialSkillsResult> {
+  // Self-update first (and only when explicitly requested) so the version read below
+  // sees the freshly installed CLI and the exported skills match that binary.
+  if (options.updateLarkCli) await updateLarkCli(env);
   let version: string;
   try {
     version = (await runCli(["--version"], env)).trim();

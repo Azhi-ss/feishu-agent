@@ -57,6 +57,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 37. 作为用户，我希望 CLI 版本未变化时复用缓存，从而启动无需重复导出所有 Skills。
 38. 作为用户，我希望同步失败时回退最近一次成功缓存并显示告警，从而网络或 CLI 局部故障不阻塞启动。
 39. 作为用户，我希望执行 `feishu skills sync` 强制刷新官方 Skills，从而可以主动修复缓存。
+84. 作为用户，我希望 `feishu skills sync --update` 一条命令先升级 lark-cli 再按新版本重建官方 Skills，从而不必手动串两条命令；且该联网升级只在我显式调用时发生，启动与 init 永不自动升级。
 40. 作为用户，我希望同名 Skill 使用“项目私有 > 全局私有 > 安装包 > 官方缓存”的确定优先级，从而覆盖行为可预测。
 41. 作为用户，我希望启动时列出所有被遮蔽的 Skill 来源，从而覆盖不能静默发生。
 42. 作为用户，我希望在 Feishu Agent 中用 `/find-skill <query>` 搜索公开 Skill 目录，并在确认后把选中的 Skill 安装到 Feishu 私有目录，从而不污染普通 Pi 或其他 Agent。
@@ -160,8 +161,8 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 当前版本缓存完整且带成功标记时直接复用。
 - 版本变化时，通过 `lark-cli skills list/read` 导出官方 Skills 到临时目录，完成校验后原子移动到版本缓存目录。
 - 同步失败时使用最近一次成功版本并产生 Startup Warning；不存在任何成功缓存时仍可启动，但必须明确报告官方 Skills 不可用。
-- `feishu skills sync` 忽略已有缓存并强制同步。
-- 升级 lark-cli 属于用户手动操作（`lark-cli update`）；启动路径不做任何网络更新检查。
+- `feishu skills sync` 忽略已有缓存并强制同步。`feishu skills sync --update` 是显式一键升级：先以 `lark-cli update --json` 升级 CLI（联网 + 全局安装，长超时），成功后再按新版本重建官方 Skills 缓存；CLI 升级失败则中止且不动缓存。
+- 升级 lark-cli 属于用户显式手动操作（`lark-cli update`，或一键的 `feishu skills sync --update`）；启动与 init 路径不做任何网络更新检查，启动时只读取与当前 CLI 版本匹配的缓存（不自动重建）。CLI 升级后缓存不会在启动时自动重建，需显式 `feishu skills sync`（或 `--update`、或重跑 init）。
 - 同名 Skill 按“项目私有 > 全局私有 > 安装包 > 官方缓存”解析。
 - 每次启动输出冲突诊断，列出最终来源与所有被遮蔽路径。
 
@@ -292,7 +293,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu list`
 - `feishu update [source|--extensions]`
 - `feishu config`
-- `feishu skills sync`
+- `feishu skills sync [--update]`（`--update` 先显式 `lark-cli update` 再按新版本重建缓存；仅显式调用才联网）
 - `feishu -c`
 - `feishu -r`
 - `feishu --session <id>`
@@ -382,6 +383,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
    - 首次版本同步、缓存复用、版本变化、原子发布、同步失败回退和无缓存告警。
    - Runtime 入口强制跳过 Pi 内置启动期网络检查（上游 `pi update` 版本提示与 `pi update --extensions` 包更新提示），管理命令不受影响。
    - `feishu skills sync` 强制刷新。
+   - `feishu skills sync --update` 先调 `lark-cli update --json` 再按新版本重建；update 失败则中止且不动缓存；不带 `--update` 时绝不调用 update（临时 HOME + PATH 注入 fake lark-cli，见 `test/skills-update.test.ts`、`test/official-skills.test.ts`）。
 
 4. **Package commands**
    - 全局安装写入 Feishu Agent Home。

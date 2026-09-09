@@ -69,7 +69,7 @@ const HELP = `Usage:
   feishu config [-l]
   feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>
                                   Open or script Feishu Package resource settings
-  feishu skills sync
+  feishu skills sync [--update]  Rebuild official Skills cache; --update also self-updates lark-cli first
   feishu -r                      Select a session in this Feishu Project
   feishu -c                      Continue this Feishu Project's latest session
   feishu --session <id>          Resume an exact session in this Feishu Project
@@ -151,7 +151,7 @@ function normalizeAndValidateArgs(input: string[]): string[] {
       return args;
     }
     case "skills":
-      if (args.length !== 2 || args[1] !== "sync") fail("Usage: feishu skills sync");
+      if (args[1] !== "sync" || args.length > 3 || (args.length === 3 && args[2] !== "--update")) fail("Usage: feishu skills sync [--update]");
       return args;
     default:
       if (args[0].startsWith("-")) fail(`Unsupported option: ${args[0]}`);
@@ -227,9 +227,12 @@ else {
     process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\nModel: ${readiness.model}\nMem0 Package: ready\nRemote Package: ready\nOfficial Skills: ${skills.version}\nLark doctor: ${readiness.doctor}\nMemory: ${readiness.memory}\n`);
   }
   else if (args[0] === "skills" && args[1] === "sync") {
+    const update = args.length === 3;
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
     try {
-      const result = await syncOfficialSkills(join(agentHome, "official-skills"), true);
+      if (update) process.stdout.write("Updating lark-cli…\n");
+      const result = await syncOfficialSkills(join(agentHome, "official-skills"), true, process.env, { updateLarkCli: update });
+      if (result.source !== "current") fail(result.warning ?? "Official Skill synchronization failed.");
       process.stdout.write(`Synchronized official Skills for ${result.version}.\n`);
     } catch (error) {
       fail(`Official Skill synchronization failed: ${error instanceof Error ? error.message : String(error)}`);
