@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { MEMORY_APP_ID } from "../src/memory.js";
 import { REMOTE_PACKAGE_SOURCE, REMOTE_PACKAGE_VERSION, feishuRemotePackagePath } from "../src/remote-package.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -182,7 +183,7 @@ test("fresh HOME one-command init is immediately Print-ready, idempotent, isolat
     const memorySearch = f.memoryRequests.find((request) => request.url === "/v3/memories/search/");
     assert(memorySearch, "Print must perform Mem0 recall");
     assert.match(memorySearch.body, /"user_id":"feishu:alice"/);
-    assert.match(memorySearch.body, /"app_id":"project-/);
+    assert.match(memorySearch.body, new RegExp(`"app_id":"${MEMORY_APP_ID}"`));
 
     const bareRerun = await run(f.project, f.env, ["init"]);
     assert.equal(bareRerun.code, 0, bareRerun.stderr);

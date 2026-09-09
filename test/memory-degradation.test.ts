@@ -132,7 +132,7 @@ test("delayed first Mem0 ping cannot outlive a successful startup health check",
   assert(address && typeof address !== "string");
   process.env.MEM0_API_HOST = `http://127.0.0.1:${address.port}`;
   try {
-    const runtime = await memoryRuntime(agent, "project");
+    const runtime = await memoryRuntime(agent);
     await Promise.race([firstRequest, new Promise((_, reject) => setTimeout(() => reject(new Error("health request did not settle")), 500))]);
     assert(runtime.extension);
     assert.equal(runtime.warning, undefined);
@@ -154,7 +154,7 @@ test("actual Dream tool failure degrades the session and does not record complet
   writeMemoryConfig(agent, "alice");
   process.env.MEM0_API_KEY = apiKeySentinel;
   const calls: string[] = [];
-  const runtime = await memoryRuntime(agent, "project", () => client({
+  const runtime = await memoryRuntime(agent, () => client({
     add: async () => { calls.push("add"); throw new Error(`dream tool failed ${apiKeySentinel}`); },
     delete: async () => { calls.push("delete"); throw new Error(`dream tool failed ${apiKeySentinel}`); },
     search: async () => { calls.push("search"); return { results: [] }; },
@@ -193,7 +193,7 @@ test("missing key, composition load, and health failures remain non-blocking and
   const originalKey = process.env.MEM0_API_KEY;
   try {
     delete process.env.MEM0_API_KEY;
-    const missing = await memoryRuntime(agent, "project");
+    const missing = await memoryRuntime(agent);
     assert.equal(missing.extension, undefined);
     assert.match(missing.warning!, /Memory load unavailable.*MEM0_API_KEY is missing/);
     const startHandlers = new Map<string, Function>();
@@ -203,7 +203,7 @@ test("missing key, composition load, and health failures remain non-blocking and
     assert.deepEqual(notifications, [missing.warning]);
 
     process.env.MEM0_API_KEY = apiKeySentinel;
-    const load = await memoryRuntime(agent, "project", () => client());
+    const load = await memoryRuntime(agent, () => client());
     assert(load.extension);
     const loadHandlers = new Map<string, Function[]>();
     const originalWrite = process.stderr.write;
@@ -222,7 +222,7 @@ test("missing key, composition load, and health failures remain non-blocking and
     assert(loadNotifications.some((message) => message.includes("Memory load unavailable")));
     assert.doesNotMatch(load.diagnostic()!, new RegExp(apiKeySentinel));
 
-    const health = await memoryRuntime(agent, "project", () => client({ ping: async () => { throw new Error(`health failed ${apiKeySentinel}`); } }));
+    const health = await memoryRuntime(agent, () => client({ ping: async () => { throw new Error(`health failed ${apiKeySentinel}`); } }));
     assert.equal(health.extension, undefined);
     assert.match(health.warning!, /Memory health unavailable/);
     assert.doesNotMatch(health.warning!, new RegExp(apiKeySentinel));
@@ -249,7 +249,7 @@ test("recall, capture, and direct Dream failures warn in TUI and stderr, then sk
       });
       let dreamMessages = 0;
       const sendMessage = feature === "dream" ? (() => { if (dreamMessages++ === 0) throw new Error(`dream ${apiKeySentinel}`); }) : (() => {});
-      const runtime = await memoryRuntime(agent, "project", () => failing);
+      const runtime = await memoryRuntime(agent, () => failing);
       const mounted = mount(runtime.extension!, sendMessage);
       if (feature === "recall") await mounted.handlers.get("before_agent_start")![0]({ prompt: "remember", systemPrompt: "base" }, mounted.ctx);
       if (feature === "capture") await mounted.handlers.get("agent_end")![0]({ messages: [{ role: "user", content: "capture me" }] }, mounted.ctx);
@@ -280,11 +280,11 @@ test("a later healthy invocation restores recall and capture without changing Fe
   const settings = '{"defaultProvider":"fake","unrelated":"preserved"}\n';
   writeFileSync(join(agent, "settings.json"), settings);
   process.env.MEM0_API_KEY = apiKeySentinel;
-  const degraded = await memoryRuntime(agent, "project", () => client({ ping: async () => { throw new Error("offline"); } }));
+  const degraded = await memoryRuntime(agent, () => client({ ping: async () => { throw new Error("offline"); } }));
   assert.equal(degraded.extension, undefined);
 
   const calls: string[] = [];
-  const healthy = await memoryRuntime(agent, "project", () => client({ search: async () => { calls.push("search"); return { results: [] }; }, add: async () => { calls.push("add"); return []; } }));
+  const healthy = await memoryRuntime(agent, () => client({ search: async () => { calls.push("search"); return { results: [] }; }, add: async () => { calls.push("add"); return []; } }));
   const mounted = mount(healthy.extension!);
   await mounted.handlers.get("before_agent_start")![0]({ prompt: "healthy", systemPrompt: "base" }, mounted.ctx);
   await mounted.handlers.get("agent_end")![0]({ messages: [{ role: "user", content: "healthy capture" }] }, mounted.ctx);
@@ -377,7 +377,7 @@ test("memory status updates dynamically during session upon degradation", async 
   const failingClient = client({
     search: async () => { throw new Error("recall error"); },
   });
-  const runtime = await memoryRuntime(agent, "project", () => failingClient);
+  const runtime = await memoryRuntime(agent, () => failingClient);
   const mounted = mount(runtime.extension!);
   assert.equal(mounted.statusCalls.find(([k]) => k === "feishu-1-memory")?.[1], "● mem");
 
@@ -406,7 +406,7 @@ test("timed out health check aborts the in-flight ping and leaves no lingering r
     add: async () => [], search: async () => ({ results: [] }), getAll: async () => ({ results: [] }),
     update: async () => ({}), delete: async () => ({}), deleteAll: async () => ({}),
   };
-  const runtime = await memoryRuntime(agent, "project", () => slowClient, 50);
+  const runtime = await memoryRuntime(agent, () => slowClient, 50);
   assert.equal(runtime.extension, undefined);
   assert.match(runtime.warning!, /health check timed out after 50ms/);
   assert.equal(signalReceived, true);

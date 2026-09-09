@@ -7,7 +7,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { projectKeyFor } from "../src/policy.js";
-import { writeMemoryConfig } from "../src/memory.js";
+import { MEMORY_APP_ID, writeMemoryConfig } from "../src/memory.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -124,7 +124,7 @@ test("fresh HOME release path reaches Print, mounted Interactive, personal fake 
     const additions = memoryRequests.filter((entry) => entry.url === "/v3/memories/add/");
     assert(additions.length >= 2, JSON.stringify(memoryRequests));
     assert(additions.every((entry) => entry.body.includes('"user_id":"feishu:alice"')));
-    assert(additions.every((entry) => entry.body.includes(`"app_id":"${projectKeyFor(project)}"`)));
+    assert(additions.every((entry) => entry.body.includes(`"app_id":"${MEMORY_APP_ID}"`)));
     assert(additions.some((entry) => entry.body.includes("release print") && entry.body.includes("RELEASE-PRINT-OK")));
     assert(additions.some((entry) => entry.body.includes("inspect my personal calendar") && entry.body.includes("RELEASE-INTERACTIVE-LARK-OK")));
     assert(additions.every((entry) => !entry.body.includes(rawToolOutput)), "raw tool output reached Mem0");
@@ -241,7 +241,7 @@ export default pi => {
   } finally { modelServer.close(); }
 });
 
-test("two projects keep sessions, private and package Skills, settings, and Mem0 app IDs independent while sharing identity", async () => {
+test("two projects share one fixed Mem0 bucket and identity while keeping sessions, private and package Skills, and settings independent", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-release-projects-"));
   const home = join(root, "home"), bin = join(root, "bin"), one = join(root, "one"), two = join(root, "two");
   for (const path of [join(home, ".feishu-agent"), bin, one, two]) mkdirSync(path, { recursive: true });
@@ -285,7 +285,7 @@ test("two projects keep sessions, private and package Skills, settings, and Mem0
     const additions = memoryBodies.filter((entry) => entry.url === "/v3/memories/add/");
     assert.equal(additions.length, 2, JSON.stringify(memoryBodies));
     assert(additions.every((entry) => entry.body.includes('"user_id":"feishu:alice"')));
-    assert.deepEqual(new Set(additions.map((entry) => JSON.parse(entry.body).app_id)), new Set([projectKeyFor(one), projectKeyFor(two)]));
+    assert.deepEqual([...new Set(additions.map((entry) => JSON.parse(entry.body).app_id))], [MEMORY_APP_ID]);
     const sessionRoot = join(home, ".feishu-agent", "sessions");
     assert(allFiles(join(sessionRoot, projectKeyFor(one))).some((path) => path.endsWith(".jsonl")));
     assert(allFiles(join(sessionRoot, projectKeyFor(two))).some((path) => path.endsWith(".jsonl")));
