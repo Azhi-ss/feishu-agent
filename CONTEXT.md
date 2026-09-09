@@ -79,7 +79,7 @@ A scheduled summary run that pulls the day's hard items (calendar, open tasks, p
 _Avoid_: Memory-generated digest, full-text document scan, transcript archive
 
 **Sweep**:
-A scheduled, identity-based patrol that searches the owner's recent at-mentions and work-item changes without adding the bot to any chat. A cheap command-level prefetch decides whether a model run is needed at all; when nothing changed, no model turn runs.
+A scheduled, identity-based patrol that searches the owner's recent at-mentions (v0 scope; other work-item changes may be added later) without adding the bot to any chat. A cheap command-level prefetch decides whether a model run is needed at all; when nothing changed, no model turn runs. In v0 it is @-mentions only, designed (SPEC §16.4) but neither implemented nor enabled until the Briefing observation week passes; a `.state/` cursor dedupes notices, the ~30-minute timer has no Persistent catch-up, and enabling it first requires the ADR-0003 hard read-only command policy.
 _Avoid_: Bot-in-group monitoring, full chat-history ingestion, unconditional model invocation
 
 **Alert**:

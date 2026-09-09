@@ -319,7 +319,7 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
 - 事实每次以 user 身份实时拉取，记忆不作为事实来源：今日日程（calendar +agenda）、逾期/今明到期的未完成任务（task +get-my-tasks，其余折叠为数量）、待审批、近 48 小时真人 @我（im +messages-search --is-at-me，过滤 @所有人 与机器人卡片）、近 7 天本人编辑文档（drive +search --edited-since，只列标题与链接）。
 - 交付：bot 以富文本 post 发到 owner 与 bot 的单聊；每条事项带飞书直达链接。部分数据源失败时简报照发，结尾注明失败的数据源；完全静默不是允许的失败模式。user token 过期导致拉取失败时，以 bot 通道通知 owner 重新登录 lark-cli。
 - 运行安全沿用现有轮次高危护栏 + 工位 AGENTS.md 的只读策略（唯一写出口是 owner 单聊），v0 不做代码级只读强制；攻击面与升级条件见 ADR-0003。
-- v0 只交付 Briefing。Sweep（@我轮询，30 分钟量级；先用廉价命令预筛，无新增不发起模型回合；`.state` 排重）在 Briefing 稳定运行一周后再启用，且 v0 只巡 @我。Alert（应用内→短信/电话加急）最后实现，必须具备显式级别阈值、静默时段与每日上限。bot 不加入任何群；某群需要实时性时逐群单独升级为事件监听。
+- v0 只交付 Briefing。Sweep（@我轮询，30 分钟量级；先用廉价命令预筛，无新增不发起模型回合；`.state` 排重）在 Briefing 稳定运行一周后再启用，且 v0 只巡 @我；其完整设计（分层、游标、定时器、护栏升级判定、启用门槛）见 §16.4，本里程碑只设计、不实现、不启用。Alert（应用内→短信/电话加急）最后实现，必须具备显式级别阈值、静默时段与每日上限。bot 不加入任何群；某群需要实时性时逐群单独升级为事件监听。
 
 #### 16.3 部署
 
@@ -327,6 +327,34 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
 - 部署制品全部在 Automation Workspace，不进仓库：`systemd/feishu-briefing.service`（oneshot，`WorkingDirectory=%h/feishu-automation`，`Environment=FEISHU_UNATTENDED=1`，`UnsetEnvironment=MEM0_API_KEY FEISHU_REMOTE FEISHU_REMOTE_APP_SECRET FEISHU_REMOTE_APP_ID FEISHU_REMOTE_OWNER_OPEN_ID FEISHU_REMOTE_LOOPBACK_URL`，显式列出全部 6 个变量、不用 glob）与 `systemd/feishu-briefing.timer`（`OnCalendar=Mon..Fri *-*-* 08:30:00 Asia/Shanghai`、`Persistent=true`）。安装/停用各一条命令：`./install-systemd.sh`（拷贝到 `~/.config/systemd/user/` 并 `enable --now` timer）、`./disable-systemd.sh`（`disable --now` timer，加 `--purge` 删除单元）。单元只用 `%h`/`$HOME` 与标准前缀，无写死的本机路径，工位整体拷贝到另一台常开机器后跑一次 install 即可复用。
 - 11:00 cutoff 与周末跳过在 `run-briefing.sh` 的运行路径判定（均按北京时间；timer 只管 Mon–Fri 调度；但 `Persistent` 可能把错过的周五触发重放到周六登录，故运行路径也拒绝周末）：北京时间 ≥11:00 或周六/周日则记一条 skip 原因到 journal 并退出 0；`--force`/`BRIEFING_FORCE=1` 是始终可用的手动出口。成败与耗时以 `briefing START/END exit=<rc> duration=<n>s` 写入 `journalctl --user -u feishu-briefing.service`，非零退出由 systemd 记为 failed。
 - 测试要求：临时 HOME + fake 模型/服务下断言 `FEISHU_UNATTENDED=1` 的 print 进程不实例化记忆扩展（无 ping、无 search、无 add；见 `test/unattended-mode.test.ts`）。11:00 cutoff/周末跳过、journal 成败耗时、post 单聊出口、缺数据源注明均通过「真实 systemd service 子进程 + 临时覆盖时钟」在部署机端到端验收（部署制品不属于仓库，故不入仓库测试）；cutoff 是一条显然正确的北京时间判断。
+
+#### 16.4 Sweep 设计（v0 只设计、不实现、不启用）
+
+Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」的轻量巡查；v0 只巡 @我，bot 不进任何群。本节把七个开放决策定清楚，供观察周后的实现票照做。Sweep 与 Briefing 共用同一个 Automation Workspace（`~/feishu-automation/`）、同一套 `FEISHU_UNATTENDED=1` 无记忆 print run（§16.1）与同一个 bot→owner 单聊出口；它只新增 `.state/` 游标、一个预筛脚本和一对独立的 systemd 单元。**本里程碑不落任何代码、`.state` 实现、systemd 单元或部署，也不安装/不启用 Sweep timer。**
+
+**形态：两层（廉价预筛 + 按需 print run）。** 决策 1：无新增 @ 时绝不发起模型回合。
+- 第 1 层（确定性脚本，零模型、零密钥）：timer 每次触发跑一个不经模型的 `run-sweep-prefetch.sh`（沿用 `run-briefing.sh` 风格，`export TZ=Asia/Shanghai`），以 user 身份执行 `im +messages-search --is-at-me`，复用 Briefing 的 @栏 过滤规则剔除 @所有人 广播与机器人/卡片消息，再按 `.state/` 游标去重，得到「本轮新增」候选。输入：定时器 + `.state/`；输出：候选为空则记 journal 后退出 0（不启动模型）；非空则把候选（message_id、群名、发送人、时间、原文摘要、直达链接）落盘为本轮候选文件并进入第 2 层。网络未就绪、user token 过期或 lark-cli 非零退出：不进入第 2 层，按下方失败语义处理，下一轮自愈，脚本自身退出码区分「空 / 有候选 / 预筛失败」。
+- 第 2 层（按需一次 print run）：仅当第 1 层产出非空候选才以 `FEISHU_UNATTENDED=1` 启动一次全新短命 `feishu -p`，候选集经**文件**（工位内候选文件路径）传入，不把群消息原文拼进命令行。print run 只读取该候选文件并据此生成一条合并提醒、经 bot 发到 owner 单聊；它**不再另拉数据源、不扩大读取面**（见决策 6 的硬只读策略）。发送成功后由第 1 层脚本推进游标；模型回合失败（非零退出）时游标不推进，下一轮用同一候选自然重试（at-least-once，可能重复、绝不漏）。
+
+**排重游标。** 决策 2：`.state/sweep-cursor.json` 存 `{"watermarkMs": <epoch ms>, "notifiedIds": [...]}`。`watermarkMs` 是已成功提醒消息的最大时间戳（仅用于缩小查询窗口），`notifiedIds` 是近一个窗口内已成功提醒的 `message_id` 有界集合（正确性去重，按时间或条数裁剪），二者都按 `Asia/Shanghai` 口径记录、存储用 epoch 毫秒以天然规避时钟/时区歧义（与 §16.3 的北京时间口径一致）。去重以 `message_id` 为准：`@所有人` 与机器人消息在进游标前即被过滤。**缺失/损坏一律安全退化为「宁可重复」**：文件缺失→首轮只查有界回看窗口（默认近 48h，与 Briefing @栏一致）而不是全历史，记 journal warning；JSON 解析失败→把坏文件改名归档（不删除）、按「有界回看 + 空 notifiedIds」重建，本轮至多重发该窗口内的 @。重复提醒可容忍，漏 @ 不可接受；时钟回拨由 `message_id` 去重兜底，不依赖单调时钟。
+
+**定时器形态。** 决策 3：systemd **user** timer，周期约 30 分钟，单元放工位 `systemd/`（如 `feishu-sweep.service` oneshot + `feishu-sweep.timer`），与 Briefing 单元同构（`WorkingDirectory=%h/feishu-automation`、`Environment=FEISHU_UNATTENDED=1`、同样的 `UnsetEnvironment` 六变量显式清单、只用 `%h`/`$HOME`）。计时用 `OnBootSec=5min` + `OnUnitActiveSec=30min`，**不用** `OnCalendar=*:0/30`：轮询是相对节拍而非整点约定，且开机后错开 5 分钟、按上次实际触发滚动，可避免 WSL/笔记本休眠恢复后的整点突发。**显式 `Persistent=false`（且不写 `Persistent=true`）：不做任何补发**——轮询是持续覆盖过程，错过的轮次由下一轮的有界回看窗口自然覆盖，补发只会在开机时一口气重放一串陈旧 @，这与 Briefing「固定时点晨报、错过要在 cutoff 前补打」的语义相反。网络依赖用软依赖 `Wants=network-online.target` + `After=network-online.target`（不加硬 `Requires`，避免 WSL 用户态/网络目标缺失时拖垮单元）；网络未就绪由第 1 层快速失败、下一轮覆盖，不做重试循环。
+
+**安静时段 / 频率护栏：v0 明确不做。** 决策 4：v0 不设夜间免打扰，也不设单轮/单日「抑制上限」——@我是旁人主动发起的协同信号，静默压下它反而可能漏事；真正需要分级与静默的是未来的 **Alert**，其显式级别阈值、静默时段、每日上限属于 Alert 里程碑，Sweep 提前实现这些就是提前实现 Alert，明确不做。唯一保留的是第 1 层的**防故障洪泛 sanity bound**（如一轮候选数异常巨大，疑似搜索/游标损坏）：超过上限时不逐条灌满一屏，而是合并成一条「本轮 @ 异常多（N 条，已折叠，请直接查飞书）」的提醒并记 warning——这是退化保护而非免打扰/频率策略。是否引入真正的免打扰时段，列入观察周后复核项。
+
+**通知出口、合并与失败语义。** 决策 5：出口仍是 bot→owner 单聊富文本 post 一条，空结果不发（这是常态：多数 30 分钟无新增）。一轮多条新 @ **合并成一条**消息（每条一行：群名、发送人、一句摘要、飞书直达链接），不逐条轰炸；中文、一屏内、只依据第 1 层候选、禁止编造，与 Briefing 同一工位 AGENTS.md 口径。发送幂等靠 `message_id` 游标，不依赖消息平台去重。失败语义对齐 Briefing（完全静默不是允许的失败模式）：模型回合/发送失败→不推进游标，下一轮重发（可能重复）；**第 1 层预筛连续失败**（user token 过期鉴权失败、lark-cli 非零退出、网络持续不可达等）→单次失败只记 journal（偶发抖动由下一轮自愈，不打扰），当第 1 层**连续 N 次失败（v0 暂定 N=6，约 3 小时）**才经 bot 通道发**一条**去重提醒（token 过期文案为「请重新登录 lark-cli」，其余为「Sweep 巡查暂时不可用」），并在 `.state/` 记 notice 标记，同一连续失效周期只发一次、预筛重新成功后清除——既不静默停摆，也不复刻 Briefing 每次失败都提醒的行为。
+
+**ADR-0003 硬只读升级判定：本里程碑在「启用」时点触发，且是启用前置。** 决策 6（明确结论，不回避）：Sweep 一旦启用，就会在**无人在场、非固定时点、每天约 48 次**自动产生对外写动作（向 owner 单聊发提醒），直接命中 ADR-0003「**Sweep gaining write actions**」这一已写明的升级触发条件。因此 v0 Sweep **不再适用纯提示词级只读护栏**：在 Sweep timer 被 enable 之前，必须先把无人运行升级为**硬命令策略（read allow-list + 单一写出口）**，否则不得启用。本结论是对既有 ADR-0003 的直接应用，该 ADR 已预先裁决且注明「改动局部、无需重设计」，故**不新增 ADR**；策略范围与落地顺序在此定清楚：
+- **范围**：策略作用于所有 `FEISHU_UNATTENDED=1` 的 print run（Briefing 与 Sweep 一并收紧，单一规则，不为 Sweep 开特例分支）。Bash 只允许一份只读 `lark-cli` 读命令 allow-list（calendar/task/approval/im 搜索/drive 搜索等），唯一写出口是「bot 向 owner open_id 的 1-on-1 发 post」这一个参数化出口；非 allow-list 命令与任何其它写/发动作在命令层被拒，而非靠提示词自觉。Sweep 第 1 层是不经模型的确定性脚本，天然不产生模型驱动写动作；第 2 层 print run 不得自行调用通用发送命令，只经该唯一受控出口。
+- **落地顺序（后续实现票，本票只写设计）**：① 先实现 launch-mode 硬命令策略（无人命令策略编辑器：读 allow-list + 单写出口）并配仓库测试——**该实现落地即取代 ADR-0003 的提示词级护栏裁决，届时在 0003 标记 superseded 或新增一条硬策略 ADR（本设计票不新增）**；② 预筛脚本 + `.state/` 游标；③ 按需 print run 与唯一发送出口接线；④ Sweep systemd 单元（安装但不 enable）+ 手动/影子验收；⑤ 仅在决策 7 的门槛全部满足后才由 owner 显式 enable。
+
+**启用门槛（默认不启用）。** 决策 7：Sweep 单元可随工位制品一起**安装但保持 disabled**（`enable` 需要 owner 显式执行一条命令，安装动作本身不 enable），`feishu init` 不触碰 Sweep；默认安装态下不存在任何 30 分钟巡查。Briefing 观察周（稳定运行一周，见 §16.2）期间采集三类信号——**送达率**（简报/通知是否稳定到达、失败是否都有 bot 告警而非静默）、**是否有越权工具调用**（是否出现 AGENTS.md/allow-list 之外的读写动作；这同时是 ADR-0003 的独立升级触发）、**打扰度/信息密度**（真实 @ 的信噪比、是否被 @所有人/机器人噪声污染、合并与折叠是否够用）；Sweep 自身的入站量在观察周用**只写日志不发提醒的影子（dry-run）预筛**评估，不开真实通知；该影子只读、无模型、无写动作，可在观察周内先行落地，不被决策 6 的硬写策略门槛阻塞（即后续票的②预筛脚本先以 log-only 形态运行，观察周后再接①硬策略、③发送与④定时器）。确认人是 owner（单人，无自动启用）。**enable 需同时满足**：Briefing 满一周且上述信号可接受；决策 6 的硬命令策略已实现并通过测试；owner 在工单/工位显式签字。未满足则继续 disabled，观察周结论可回头修订本设计。
+
+**Out of Scope（Sweep v0）**：实时事件监听 / `lark-cli event consume` 常驻看护；bot 加入任何群或群内实时升级；Alert / 应用内→短信→电话加急及其级别阈值、静默时段、每日上限；@我 之外的多数据源（任务、文档、审批变更等）巡查；Sweep 的任何代码、`.state` 实现、systemd 单元与部署；对 Briefing 本身的改动。
+
+**后续实现票建议拆分（本票不实现）**：① 无人硬只读命令策略（ADR-0003 升级，read allow-list + 单写出口）+ 仓库测试；② 预筛脚本与 `.state/` 游标（含损坏/缺失退化、影子 dry-run）；③ 按需 print run 与唯一发送出口接线（合并通知、token 过期单次提醒）；④ Sweep systemd 单元（30 分钟、无 Persistent，安装默认 disabled）+ 部署机端到端验收；⑤ 观察周信号核对后由 owner 显式 enable。
+
+**验收口径**：Sweep 行为（分层、游标退化、无 Persistent、通知合并/去重、越权拦截）与 Briefing 部署制品同属「工位/外部契约/模型内容」，仓库只对其中的核心代码（硬命令策略、无人模式契约）做测试；预筛脚本、systemd 单元、时区与通知内容靠「真实 systemd 子进程 + 临时覆盖时钟」在部署机端到端验收及观察周人工确认，不入仓库测试。
 
 ## Testing Decisions
 
