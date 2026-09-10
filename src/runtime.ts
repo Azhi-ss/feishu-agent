@@ -109,18 +109,17 @@ export async function createRuntime(cwd: string, projectRoot: string, projectKey
 
 export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string): Promise<number> {
   const runtime = await createRuntime(cwd, projectRoot, projectKey, agentHome, false, prompt);
-  try {
-    const code = await runPrintMode(runtime, { mode: "text", initialMessage: prompt });
-    if (code) return code;
-    const approvalError = runtime.session.state.messages.flatMap((message) => message.role === "toolResult" && message.isError ? message.content : [])
-      .find((part) => part.type === "text" && /High-risk lark-cli|Blocked lark-cli/.test(part.text));
-    if (approvalError?.type === "text") {
-      process.stderr.write(`${approvalError.text}\n`);
-      return 1;
-    }
-    return 0;
+  const code = await runPrintMode(runtime, { mode: "text", initialMessage: prompt });
+  if (code) return code;
+  // runPrintMode disposes the runtime in its own finally (matching upstream main.js);
+  // a second dispose re-emits session_shutdown on an invalidated extension ctx.
+  const approvalError = runtime.session.state.messages.flatMap((message) => message.role === "toolResult" && message.isError ? message.content : [])
+    .find((part) => part.type === "text" && /High-risk lark-cli|Blocked lark-cli/.test(part.text));
+  if (approvalError?.type === "text") {
+    process.stderr.write(`${approvalError.text}\n`);
+    return 1;
   }
-  finally { await runtime.dispose(); }
+  return 0;
 }
 
 export async function runInteractive(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, selectSession = false, sessionId?: string): Promise<void> {
