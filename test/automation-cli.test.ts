@@ -161,7 +161,7 @@ test("add validates name, schedule, instructions, durations, and timezone before
     { args: ["--name", "job", "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], input: "   \n", match: /nonempty task/ },
     { args: ["--name", "job", "--at", "2030-06-01T09:00", "--prompt-file", join(f.root, "missing.txt"), "--yes"], match: /cannot read task file/i },
     { args: ["--name", "job", "--at", "2030-06-01T09:00", "--yes"], match: /--prompt-file .*--prompt-stdin/i },
-    { args: ["--name", "job", "--at", "2030-06-01T09:00", "--prompt-stdin", "--catch-up", "2h", "--yes"], match: /unknown option/i },
+    { args: ["--name", "job", "--at", "2030-06-01T09:00", "--prompt-stdin", "--catch-up", "2h", "--no-catch-up", "--yes"], match: /catch-up/i },
   ];
   for (const testCase of cases) {
     const result = runCli(f, ["automation", "add", ...testCase.args], { input: testCase.input ?? "task text\n" });

@@ -73,9 +73,10 @@ const HELP = `Usage:
   feishu automation list         List saved Automation Jobs
   feishu automation show <name>  Inspect one Automation Job and its latest run
   feishu automation add --name <slug> --at <ISO-time> (--prompt-file <path> | --prompt-stdin)
-                 [--tz <IANA>] [--timeout <duration>] [--yes]
+                 [--tz <IANA>] [--catch-up <duration>] [--timeout <duration>] [--yes]
                                   Create a one-shot Automation Job
   feishu automation run <name>   Run a saved job once now in a fresh unattended Print
+  feishu automation serve        Run the foreground scheduling Trigger (one per managed workspace)
   feishu -r                      Select a session in this Feishu Project
   feishu -c                      Continue this Feishu Project's latest session
   feishu --session <id>          Resume an exact session in this Feishu Project
@@ -99,21 +100,21 @@ function invalidOptionValue(args: string[], index: number, flag: string): string
   return value;
 }
 
-// Strict parser for the slice-1 automation surface (#39). Only one-shot add,
-// list, show, and run exist; later slices add update/pause/resume/rm and the
-// Trigger commands. Mutating verbs are rejected inside inherited unattended
-// runs (a narrow recursion check, not a security boundary).
-const AUTOMATION_VALUE_FLAGS = new Set(["--name", "--at", "--tz", "--timeout", "--prompt-file"]);
+// Strict parser for the #39/#40 automation surface: one-shot add, list, show,
+// run, and the foreground serve Trigger. Later slices add update/pause/resume/
+// rm and background service start/stop/status. Mutating verbs are rejected
+// inside inherited unattended runs (a narrow recursion check, not security).
+const AUTOMATION_VALUE_FLAGS = new Set(["--name", "--at", "--tz", "--timeout", "--prompt-file", "--catch-up"]);
 const AUTOMATION_BOOL_FLAGS = new Set(["--prompt-stdin", "--yes"]);
 
 function normalizeAutomationArgs(input: string[]): string[] {
   const verb = input[1];
-  const known = new Set(["list", "show", "add", "run"]);
+  const known = new Set(["list", "show", "add", "run", "serve"]);
   if (!verb || !known.has(verb)) {
-    fail(`Unknown automation command: ${verb ?? ""}. Supported: feishu automation list|show|add|run.`);
+    fail(`Unknown automation command: ${verb ?? ""}. Supported: feishu automation list|show|add|run|serve.`);
   }
-  if (verb === "list") {
-    if (input.length !== 2) fail("Usage: feishu automation list");
+  if (verb === "list" || verb === "serve") {
+    if (input.length !== 2) fail(`Usage: feishu automation ${verb}`);
     return input;
   }
   if (verb === "show" || verb === "run") {
@@ -134,6 +135,8 @@ function normalizeAutomationArgs(input: string[]): string[] {
       index++;
     } else if (AUTOMATION_BOOL_FLAGS.has(token)) {
       flags.add(token);
+    } else if (token === "--no-catch-up") {
+      fail("--no-catch-up applies to recurring schedules, which arrive in a later release. Use --catch-up <duration> to set a one-shot lateness window.");
     } else {
       fail(`Unknown option for automation add: ${token}. This slice supports one-shot jobs only (--at); cron and interval schedules arrive in a later release.`);
     }
@@ -332,6 +335,25 @@ else {
       });
   }
   else if (args[0] === "-p") {
+    if (process.env.FEISHU_AUTOMATION_ADMISSION === "1") {
+      delete process.env.FEISHU_AUTOMATION_ADMISSION;
+      if (process.env.FEISHU_UNATTENDED !== "1" || !process.send || !process.connected) {
+        fail("Automation admission requires a connected supervisor.");
+      }
+      await new Promise<void>((resolve) => {
+        const disconnected = (): void => fail("Automation supervisor disconnected before admission; no task was started.");
+        const admitted = (message: unknown): void => {
+          if (!message || typeof message !== "object" || !("type" in message) || message.type !== "automation-admit") return;
+          process.off("disconnect", disconnected);
+          process.off("message", admitted);
+          process.disconnect();
+          resolve();
+        };
+        process.once("disconnect", disconnected);
+        process.on("message", admitted);
+        process.send!({ type: "automation-ready" });
+      });
+    }
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");

@@ -1,4 +1,4 @@
-// feishu automation command handlers (slice 1, issue #39).
+// feishu automation command handlers (slice 1 #39, slice 2 #40).
 // Structured results go to stdout as one JSON object; English diagnostics and
 // interactive confirmation go to stderr. All file writes happen only after
 // complete validation and affirmative confirmation.
@@ -8,23 +8,31 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
   AutomationError,
+  DEFAULT_LATENESS_MINUTES,
   DEFAULT_TIMEZONE,
   DEFAULT_TIMEOUT_MINUTES,
   ensureWorkspace,
+  findOccurrence,
   listJobs,
   loadJob,
+  loadScheduleState,
   managedWorkspaceHome,
+  nowMs,
+  oneshotOccurrenceId,
   parseDurationMinutes,
   parseOneShot,
   resolveLarkProfile,
   resolvedLocal,
   saveJob,
   scheduleEligibilityNotice,
+  workspacePaths,
   validateName,
   type JobRecord,
   type OneShotSchedule,
+  type OccurrenceState,
 } from "./automation.js";
 import { runJobManual } from "./automation-runner.js";
+import { liveTrigger, serve as serveTrigger } from "./automation-trigger.js";
 
 const RECURSION_NOTICE = "Automation management is disabled inside an inherited unattended run (loop prevention). Run this command from an ordinary Feishu session.";
 
@@ -33,6 +41,7 @@ interface AddOptions {
   at: string;
   timeZone: string;
   timeoutMinutes: number;
+  latenessMinutes: number;
   task: string;
   profile: string;
   yes: boolean;
@@ -86,7 +95,14 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function planLines(options: AddOptions, schedule: OneShotSchedule): string[] {
+function triggerNotice(root: string): string {
+  const owner = liveTrigger(workspacePaths(root));
+  return owner
+    ? `The scheduling Trigger is running (pid ${owner.pid}); scheduled execution requires this foreground process to remain alive.`
+    : "The scheduling Trigger is not running. Start `feishu automation serve` explicitly for scheduled firing; saving a job does not start it.";
+}
+
+function planLines(options: AddOptions, schedule: OneShotSchedule, root: string): string[] {
   return [
     "Automation Job plan (one-shot):",
     `  name:        ${options.name}`,
@@ -95,7 +111,7 @@ function planLines(options: AddOptions, schedule: OneShotSchedule): string[] {
     `  timeout:     ${options.timeoutMinutes} minute${options.timeoutMinutes === 1 ? "" : "s"}`,
     `  lark profile: ${options.profile}`,
     "  identity:    ordinary messages as bot; document appends as user (prompt-level policy)",
-    "The scheduling Trigger is not running: the job is stored and enabled, but it will not fire until the Trigger is started in a later release.",
+    triggerNotice(root),
   ];
 }
 
@@ -119,16 +135,24 @@ export async function automationCommand(args: string[]): Promise<number> {
 
   const root = managedWorkspaceHome();
 
+  if (verb === "serve") {
+    const workspace = ensureWorkspace(root);
+    const code = await serveTrigger(workspace, {
+      log: (line) => process.stderr.write(`${line}\n`),
+    });
+    return code;
+  }
+
   if (verb === "list") {
     const { jobs, warnings } = listJobs(root);
     for (const warning of warnings) process.stderr.write(`Warning: ${warning}\n`);
-    process.stdout.write(`${JSON.stringify({ jobs: jobs.map(jobSummary) }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ jobs: jobs.map((job) => jobSummary(root, job)) }, null, 2)}\n`);
     return 0;
   }
 
   if (verb === "show") {
     const job = loadJob(root, args[2]);
-    process.stdout.write(`${JSON.stringify(jobView(job), null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(jobView(root, job), null, 2)}\n`);
     return 0;
   }
 
@@ -142,15 +166,17 @@ export async function automationCommand(args: string[]): Promise<number> {
     const timeZone = flagValue(rest, "--tz") ?? DEFAULT_TIMEZONE;
     const timeoutMinutes = flagValue(rest, "--timeout") ? parseDurationMinutes(flagValue(rest, "--timeout")!) : DEFAULT_TIMEOUT_MINUTES;
     if (timeoutMinutes < 1) fail("Execution timeout must be at least one minute.");
+    const latenessMinutes = flagValue(rest, "--catch-up") === undefined
+      ? DEFAULT_LATENESS_MINUTES : parseDurationMinutes(flagValue(rest, "--catch-up")!);
     const task = readTask(rest);
 
     if (existsSync(join(root, "jobs", name, "job.json"))) fail(`An Automation Job named "${name}" already exists; choose a different name.`);
 
-    const schedule = parseOneShot(at, timeZone);
+    const schedule = { ...parseOneShot(at, timeZone), latenessMinutes };
     const profile = resolveLarkProfile(process.env.LARK_PROFILE);
 
-    const options: AddOptions = { name, at, timeZone, timeoutMinutes, task: task.replace(/\s+$/, ""), profile, yes: rest.includes("--yes") };
-    await confirm(planLines(options, schedule), options.yes);
+    const options: AddOptions = { name, at, timeZone, timeoutMinutes, latenessMinutes, task: task.replace(/\s+$/, ""), profile, yes: rest.includes("--yes") };
+    await confirm(planLines(options, schedule, root), options.yes);
 
     // Everything validated and confirmed: seed the managed workspace (missing
     // standing instructions only) and atomically persist the new record.
@@ -161,14 +187,14 @@ export async function automationCommand(args: string[]): Promise<number> {
       createdAt: new Date().toISOString(),
       profile,
       task: options.task,
-      schedule: { ...schedule },
+      schedule,
       timeoutMinutes,
       state: "enabled",
       runs: [],
     };
     saveJob(workspace.root, job);
-    process.stdout.write(`${JSON.stringify(jobSummary(job), null, 2)}\n`);
-    process.stderr.write("Saved. The scheduling Trigger is not running in this release; use `feishu automation run` to execute manually.\n");
+    process.stdout.write(`${JSON.stringify(jobSummary(root, job), null, 2)}\n`);
+    process.stderr.write(`Saved. ${triggerNotice(root)} Use \`feishu automation run\` for a separate manual attempt.\n`);
     return 0;
   }
 
@@ -195,31 +221,74 @@ export async function automationCommand(args: string[]): Promise<number> {
   return 1;
 }
 
-function jobSummary(job: JobRecord) {
+function oneshotOccurrence(root: string, job: JobRecord): OccurrenceState | null | undefined {
+  const state = loadScheduleStateFor(root, job.name);
+  if (state === undefined) return undefined;
+  return findOccurrence(state, oneshotOccurrenceId(job.schedule.dueMs));
+}
+
+function loadScheduleStateFor(root: string, name: string) {
+  try {
+    return loadScheduleState(workspacePaths(root), name);
+  } catch (error) {
+    if (error instanceof AutomationError) {
+      process.stderr.write(`Warning: ${error.message}\n`);
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function scheduledStateFor(job: JobRecord, occurrence: OccurrenceState | null | undefined, now: number): string {
+  if (occurrence === undefined) return "unknown";
+  if (occurrence?.status === "running") return "running";
+  switch (occurrence?.outcome) {
+    case "completed":
+    case "failed":
+    case "timeout":
+    case "unknown":
+      return "consumed";
+    case "overlap-skipped":
+      return "overlap-skipped";
+    case "expired":
+      return "expired";
+    default: {
+      const windowEnd = job.schedule.dueMs + job.schedule.latenessMinutes * 60000;
+      return now < job.schedule.dueMs ? "future" : now <= windowEnd ? "due" : "expired";
+    }
+  }
+}
+
+function jobSummary(root: string, job: JobRecord) {
   const latest = job.runs.at(-1) ?? null;
-  const now = Date.now();
-  const scheduledState = now < job.schedule.dueMs ? "future"
-    : now <= job.schedule.dueMs + job.schedule.latenessMinutes * 60000 ? "due"
-    : "expired";
+  const trigger = liveTrigger(workspacePaths(root));
+  const occurrence = oneshotOccurrence(root, job);
+  const scheduledState = scheduledStateFor(job, occurrence, nowMs());
   return {
     name: job.name,
     state: job.state,
     scheduledState,
+    nextDueAt: scheduledState === "future" || scheduledState === "due" ? new Date(job.schedule.dueMs).toISOString() : null,
     profile: job.profile,
     schedule: { kind: job.schedule.kind, resolvedLocal: resolvedLocal(job.schedule), timeZone: job.schedule.timeZone, offset: job.schedule.offset, latenessMinutes: job.schedule.latenessMinutes },
     timeoutMinutes: job.timeoutMinutes,
     createdAt: job.createdAt,
-    latestRun: latest ? { outcome: latest.outcome, startedAt: latest.startedAt } : null,
-    triggerRunning: false,
+    latestRun: latest ? { outcome: latest.outcome, startedAt: latest.startedAt, trigger: latest.trigger } : null,
+    triggerRunning: trigger !== null,
+    triggerPid: trigger?.pid ?? null,
   };
 }
 
-function jobView(job: JobRecord) {
+function jobView(root: string, job: JobRecord) {
+  const state = loadScheduleStateFor(root, job.name);
   return {
-    ...jobSummary(job),
+    ...jobSummary(root, job),
     task: job.task,
     latestRun: job.runs.at(-1) ?? null,
     recentRuns: job.runs.slice(-10),
-    scheduleNotice: scheduleEligibilityNotice(job.schedule, Date.now()),
+    scheduleOccurrence: oneshotOccurrence(root, job) ?? null,
+    scheduleNotice: state === undefined
+      ? "Schedule state is unavailable; cannot determine eligibility. Evidence is preserved."
+      : scheduleEligibilityNotice(job.schedule, nowMs(), state),
   };
 }

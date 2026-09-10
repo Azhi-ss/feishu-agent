@@ -87,6 +87,47 @@ The Feishu Runtime disables Pi's built-in startup network checks, so you will ne
 
 Only Interactive and text Print modes are supported. JSON and RPC are intentionally absent.
 
+## One-shot Automation Jobs
+
+Prepare a self-contained task file naming fixed destinations, actions, identities,
+and failure handling, then review and save it:
+
+```bash
+feishu automation add --name reminder --at 2030-06-01T09:00 \
+  --prompt-file task.md --catch-up 2h --timeout 10m --yes
+feishu automation list
+feishu automation show reminder
+feishu automation serve          # foreground: keep this process alive
+# In another terminal, an explicit separate attempt:
+feishu automation run reminder
+```
+
+`--yes` attests that the caller reviewed and confirmed the plan. Without it,
+interactive creation asks for confirmation; noninteractive creation fails promptly.
+Offset-less `--at` values use the saved IANA timezone (`--tz`, default
+`Asia/Shanghai`); an explicit offset identifies an absolute instant. Timing is
+minute-level, never before the due instant. The default two-hour lateness window
+is inclusive; an unstarted one-shot beyond it becomes **expired**, not failed or
+deleted. Definitions, run output, and per-run scratch areas live in `~/feishu-jobs`,
+separate from the legacy Briefing workspace.
+
+Only one foreground Trigger admits scheduled work in a managed workspace. It shares
+same-job exclusion and a two-run capacity limit with independent manual callers.
+Waiting never extends the original lateness deadline. Every run is a fresh
+`FEISHU_UNATTENDED=1` Print child without Mem0, using the saved Lark profile and
+normal tools/guards. Scheduled occurrences are consumed before work is released;
+restart or clock rollback does not replay failed, timed-out, interrupted/unknown,
+or overlap-skipped occurrences. Runner completion is **not** proof of Feishu
+business delivery. Manual runs do not re-arm or expire schedules and may repeat
+external effects; inspect their receipts and logs.
+
+Ctrl-C stops foreground admission and bounds only Trigger-owned children. Independent
+manual runs remain supervised by their own callers and continue occupying capacity.
+Normal Interactive/Print/init never install, start, or probe the Trigger. No OS
+service installation, cron/interval scheduling, lifecycle editing, or automation
+Skill is included in this slice; the existing Briefing is untouched. Corrupt state
+is diagnosed and retained for inspection, never guessed safe to replay.
+
 ## Packages and Skills
 
 ### Defaults (what you get out of the box)

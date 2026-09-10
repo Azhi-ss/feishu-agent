@@ -1,23 +1,26 @@
-// Automation job management (SPEC §16.5, issue #38; slice 1 = issue #39).
-//
-// Slice 1 owns: one-shot job add/list/show, and supervised manual runs that
-// spawn a fresh memory-less unattended Print child. Recurring schedules,
-// lifecycle edits, the Trigger/service, and the model-facing Skill are later
-// slices (#40-#44). All state lives in a dedicated managed workspace and is
-// local versioned JSON plus task text; nothing here performs network I/O.
+// One-shot Automation storage, admission, and schedule state (#39/#40).
+// The Trigger and manual CLI share these local, versioned records and locks.
+// Recurring schedules, lifecycle editing, OS services, and Skills are later slices.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export const RECORD_VERSION = 1;
+export const STATE_VERSION = 1;
 export const DEFAULT_TIMEZONE = "Asia/Shanghai";
 export const DEFAULT_TIMEOUT_MINUTES = 10;
-const DEFAULT_LATENESS_MINUTES = 120;
+export const DEFAULT_LATENESS_MINUTES = 120;
+export const MAX_CONCURRENT_RUNS = 2;
 const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
-export class AutomationError extends Error {}
+export class AutomationError extends Error {
+  constructor(message: string, readonly reason?: "busy" | "overlap" | "capacity" | "not-due" | "expired") {
+    super(message);
+  }
+}
 
 export interface OneShotSchedule {
   kind: "oneshot";
@@ -28,7 +31,7 @@ export interface OneShotSchedule {
   offset: string | null;
   /** Resolved absolute instant (epoch ms). */
   dueMs: number;
-  /** Lateness window for the future Trigger (minutes); slice 1 only displays it. */
+  /** Lateness window: missed first start is admitted until dueMs + this many minutes. */
   latenessMinutes: number;
 }
 
@@ -52,7 +55,41 @@ export interface RunSummary {
   endedAt: string | null;
   outcome: RunOutcome;
   exitCode: number | null;
-  trigger: "manual";
+  trigger: "manual" | "scheduled";
+}
+
+// ----------------------------------------------------------------------------
+// Controlled clock seam
+// ----------------------------------------------------------------------------
+
+/**
+ * Current time in epoch ms. Production uses Date.now; hermetic Trigger tests
+ * point FEISHU_AUTOMATION_CLOCK_FILE at a frozen {"now": <ms>} fixture they
+ * rewrite between ticks. There is deliberately no public clock flag: the only
+ * callers of this seam are automation internals.
+ */
+export function nowMs(env: NodeJS.ProcessEnv = process.env): number {
+  const clockFile = env.FEISHU_AUTOMATION_CLOCK_FILE;
+  if (!clockFile) return Date.now();
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(clockFile, "utf8")).now;
+  } catch {
+    throw new AutomationError("Controlled automation clock is unreadable; no timing decision was made.");
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || !Number.isFinite(new Date(value).getTime())) {
+    throw new AutomationError("Controlled automation clock requires a valid epoch-millisecond value.");
+  }
+  return value;
+}
+
+/** The one clock fixture accelerates tick/termination checkpoints, not production time. */
+export function tickIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
+  return env.FEISHU_AUTOMATION_CLOCK_FILE ? 40 : 20_000;
+}
+
+export function stopGraceMs(env: NodeJS.ProcessEnv = process.env): number {
+  return env.FEISHU_AUTOMATION_CLOCK_FILE ? 200 : 10_000;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,16 +202,28 @@ export function resolvedLocal(schedule: OneShotSchedule): string {
 }
 
 /**
- * Eligibility of a one-shot's scheduled occurrence at `now` (derived, never
- * persisted in slice 1: scheduled dispatch/expiry state arrives with #40).
+ * Eligibility notice for an independently invoked manual run. It never
+ * consumes the schedule; the wording reflects the durable occurrence state
+ * produced by the Trigger when available (#40).
  */
-export function scheduleEligibilityNotice(schedule: OneShotSchedule, nowMs: number): string {
+export function scheduleEligibilityNotice(schedule: OneShotSchedule, nowMsValue: number, state?: ScheduleState | null): string {
   const due = new Date(schedule.dueMs).toISOString();
-  if (nowMs < schedule.dueMs) {
+  const occurrence = state ? findOccurrence(state, oneshotOccurrenceId(schedule.dueMs)) : null;
+  if (occurrence?.status === "running") {
+    return `The scheduled one-shot occurrence (${due}) has already been consumed; completion is not yet confirmed. This separate manual attempt does not re-arm it and may duplicate external effects.`;
+  }
+  const outcome = occurrence?.outcome ?? null;
+  if (outcome === "expired") {
+    return `This manual run is a separate attempt: the scheduled one-shot occurrence (${due}) is expired, and this run neither revives nor re-arms it.`;
+  }
+  if (outcome) {
+    return `This manual run is a separate attempt: the scheduled one-shot occurrence (${due}) already settled as ${outcome}; this run may repeat its external effects and neither consumes nor re-arms the schedule.`;
+  }
+  if (nowMsValue < schedule.dueMs) {
     return `The scheduled one-shot occurrence (${due}) is still in the future and remains eligible for Trigger dispatch; this manual run neither consumed nor re-armed it.`;
   }
   const windowEnd = schedule.dueMs + schedule.latenessMinutes * 60000;
-  if (nowMs <= windowEnd) {
+  if (nowMsValue <= windowEnd) {
     return `The scheduled one-shot occurrence (${due}) is still within its ${schedule.latenessMinutes}-minute lateness window and remains eligible; this manual run neither consumed nor re-armed it.`;
   }
   return `The scheduled one-shot occurrence (${due}) is past its ${schedule.latenessMinutes}-minute lateness window and would be recorded expired by the Trigger; this manual run neither consumed nor re-armed the schedule.`;
@@ -208,9 +257,209 @@ export function workspacePaths(root: string): Workspace {
 }
 
 function atomicWriteJson(path: string, value: unknown): void {
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx", flush: true });
   renameSync(tmp, path);
+  const directory = openSync(dirname(path), "r");
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
+}
+
+export function processAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+const lockOwners = new Map<string, string>();
+
+/** Publish a complete owner record atomically; never expose a half-written lock. */
+export function acquireWorkspaceLock(
+  lockPath: string,
+  contents: Record<string, unknown>,
+  liveError: (held: Record<string, unknown>) => string,
+): void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const token = randomUUID();
+  const candidate = `${lockPath}.${token}.candidate`;
+  writeFileSync(candidate, JSON.stringify({ ...contents, version: 1, token }) + "\n", { mode: 0o600, flag: "wx", flush: true });
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        linkSync(candidate, lockPath);
+        lockOwners.set(lockPath, token);
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const held = readLockRecord(lockPath);
+      if (!held) continue;
+      if (lockAlive(held)) throw new AutomationError(liveError(held));
+
+      // One reclaimer at a time. A crash during reclaim preserves both files
+      // and fails closed with an actionable diagnosis, rather than guessing.
+      const recovery = `${lockPath}.recovery`;
+      try {
+        linkSync(candidate, recovery);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        throw new AutomationError(`Lock recovery is already in progress or was interrupted at ${recovery}; evidence is preserved. Inspect the owner before explicitly clearing the recovery marker.`);
+      }
+      try {
+        const current = readLockRecord(lockPath);
+        if (current && !lockAlive(current)) {
+          renameSync(lockPath, `${lockPath}.${randomUUID()}.stale`);
+        }
+      } finally {
+        rmSync(recovery);
+      }
+    }
+    throw new AutomationError("Automation admission changed concurrently; retry the command.");
+  } finally {
+    rmSync(candidate);
+  }
+}
+
+export function releaseWorkspaceLock(lockPath: string): void {
+  const token = lockOwners.get(lockPath);
+  if (!token) return;
+  const current = readLockRecord(lockPath);
+  if (current?.token === token) rmSync(lockPath);
+  lockOwners.delete(lockPath);
+}
+
+export function readLockRecord(lockPath: string): Record<string, unknown> | null {
+  let raw: string;
+  try {
+    raw = readFileSync(lockPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new AutomationError(`Cannot read lock at ${lockPath}; evidence is preserved.`);
+  }
+  let held: Record<string, unknown>;
+  try {
+    held = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw new AutomationError(`Corrupt lock at ${lockPath}; evidence is preserved. Inspect it before retrying.`);
+  }
+  if (!held || typeof held !== "object" || !Number.isSafeInteger(held.pid) || Number(held.pid) <= 0
+    || (held.version !== undefined && held.version !== 1)
+    || (held.supervisorPid !== undefined && (!Number.isSafeInteger(held.supervisorPid) || Number(held.supervisorPid) <= 0))) {
+    throw new AutomationError(`Invalid or unsupported lock at ${lockPath}; evidence is preserved. Inspect it before retrying.`);
+  }
+  return held;
+}
+
+function lockAlive(held: Record<string, unknown>): boolean {
+  return processAlive(Number(held.pid))
+    || (typeof held.supervisorPid === "number" && processAlive(held.supervisorPid));
+}
+
+/** Both a live child and its still-settling supervisor retain the slot. */
+export function readLiveLock(lockPath: string): Record<string, unknown> | null {
+  const held = readLockRecord(lockPath);
+  return held && lockAlive(held) ? held : null;
+}
+
+// ----------------------------------------------------------------------------
+// Durable scheduled-occurrence state (kept separate from run history)
+// ----------------------------------------------------------------------------
+
+export type OccurrenceOutcome =
+  | "completed" | "failed" | "timeout" | "unknown"
+  | "expired" | "overlap-skipped";
+
+export interface OccurrenceState {
+  id: string;
+  /** "running" while admitted; "settled" once an outcome is recorded. */
+  status: "running" | "settled";
+  outcome?: OccurrenceOutcome;
+  runId?: string;
+  /** Supervised Print PID, persisted before IPC admission. */
+  childPid?: number;
+  startedAt?: string;
+  endedAt?: string;
+  exitCode?: number | null;
+}
+
+export interface ScheduleState {
+  version: number;
+  name: string;
+  occurrences: OccurrenceState[];
+}
+
+export function oneshotOccurrenceId(dueMs: number): string {
+  return `oneshot:${dueMs}`;
+}
+
+export function scheduleStatePath(workspace: Workspace, name: string): string {
+  return join(workspace.jobs, name, "schedule.json");
+}
+
+export function loadScheduleState(workspace: Workspace, name: string): ScheduleState | null {
+  const path = scheduleStatePath(workspace, name);
+  if (!existsSync(path)) {
+    if (loadJob(workspace.root, name).runs.some((run) => run.trigger === "scheduled")) {
+      throw new AutomationError(`Schedule state for "${name}" is missing after a scheduled attempt; run evidence is preserved. Restore the ledger before any scheduling decisions.`);
+    }
+    return null;
+  }
+  let state: ScheduleState;
+  try {
+    state = JSON.parse(readFileSync(path, "utf8")) as ScheduleState;
+  } catch {
+    throw new AutomationError(`Schedule state for "${name}" is corrupt; it has been preserved for inspection at ${path}.`);
+  }
+  if (!state || typeof state !== "object") {
+    throw new AutomationError(`Schedule state for "${name}" is corrupt; it has been preserved at ${path}.`);
+  }
+  if (state.version !== STATE_VERSION) {
+    throw new AutomationError(`Schedule state for "${name}" uses an unsupported version; it has been preserved at ${path}.`);
+  }
+  const dueId = oneshotOccurrenceId(loadJob(workspace.root, name).schedule.dueMs);
+  if (state.name !== name || !Array.isArray(state.occurrences) || state.occurrences.length !== 1
+    || !validOccurrence(state.occurrences[0], dueId)) {
+    throw new AutomationError(`Schedule state for "${name}" is corrupt; it has been preserved at ${path}.`);
+  }
+  return state;
+}
+
+function validOccurrence(entry: OccurrenceState | null, dueId: string): boolean {
+  if (!entry || typeof entry !== "object" || entry.id !== dueId) return false;
+  if (entry.childPid !== undefined && (!Number.isSafeInteger(entry.childPid) || entry.childPid <= 0)) return false;
+  if (entry.runId !== undefined && (typeof entry.runId !== "string" || !entry.runId)) return false;
+  if (entry.startedAt !== undefined && (typeof entry.startedAt !== "string" || !Number.isFinite(Date.parse(entry.startedAt)))) return false;
+  if (entry.exitCode !== undefined && entry.exitCode !== null && !Number.isInteger(entry.exitCode)) return false;
+  if (entry.status === "running") return !!entry.runId && !!entry.startedAt && entry.outcome === undefined;
+  return entry.status === "settled" && typeof entry.outcome === "string"
+    && ["completed", "failed", "timeout", "unknown", "expired", "overlap-skipped"].includes(entry.outcome)
+    && typeof entry.endedAt === "string" && Number.isFinite(Date.parse(entry.endedAt));
+}
+
+export function saveScheduleState(workspace: Workspace, state: ScheduleState): void {
+  atomicWriteJson(scheduleStatePath(workspace, state.name), state);
+}
+
+/** The occurrence for one due instant, or null when nothing is recorded. */
+export function findOccurrence(state: ScheduleState | null, id: string): OccurrenceState | null {
+  return state?.occurrences.find((entry) => entry.id === id) ?? null;
+}
+
+export function mutateOccurrence(workspace: Workspace, name: string, id: string, mutate: (entry: OccurrenceState | null) => OccurrenceState | null): OccurrenceState | null {
+  const state = loadScheduleState(workspace, name) ?? { version: STATE_VERSION, name, occurrences: [] };
+  const index = state.occurrences.findIndex((entry) => entry.id === id);
+  const before = index >= 0 ? state.occurrences[index] : null;
+  const after = mutate(before ? { ...before } : null);
+  if (after) {
+    if (index >= 0) state.occurrences[index] = after;
+    else state.occurrences.push(after);
+    // Never prune occurrence consumption as log cleanup.
+    saveScheduleState(workspace, state);
+  }
+  return after;
 }
 
 export const STANDING_INSTRUCTIONS = `# Feishu Automation Workspace
@@ -274,6 +523,7 @@ export function jobPath(root: string, name: string): string {
 }
 
 export function loadJob(root: string, name: string): JobRecord {
+  validateName(name);
   const path = jobPath(root, name);
   if (!existsSync(path)) throw new AutomationError(`No Automation Job named "${name}". Run "feishu automation list" to see saved jobs.`);
   let record: JobRecord;
@@ -282,16 +532,135 @@ export function loadJob(root: string, name: string): JobRecord {
   } catch {
     throw new AutomationError(`Job record for "${name}" is corrupt; it has been preserved for inspection at ${path}.`);
   }
+  if (!record || typeof record !== "object") {
+    throw new AutomationError(`Job record for "${name}" is corrupt; it has been preserved at ${path}.`);
+  }
   if (record.version !== RECORD_VERSION) {
-    throw new AutomationError(`Job record "${name}" uses an unsupported record version (${record.version}); it has been preserved at ${path}.`);
+    throw new AutomationError(`Job record "${name}" uses an unsupported record version; it has been preserved at ${path}.`);
+  }
+  const schedule = record.schedule;
+  if (record.name !== name || record.state !== "enabled"
+    || typeof record.profile !== "string" || !record.profile.trim()
+    || typeof record.task !== "string" || !record.task.trim()
+    || typeof record.createdAt !== "string" || !Number.isFinite(Date.parse(record.createdAt))
+    || !Number.isSafeInteger(record.timeoutMinutes) || record.timeoutMinutes < 1 || record.timeoutMinutes * 60000 > 2147483647
+    || !schedule || schedule.kind !== "oneshot"
+    || !Number.isSafeInteger(schedule.dueMs) || !Number.isFinite(new Date(schedule.dueMs).getTime())
+    || !Number.isSafeInteger(schedule.latenessMinutes) || schedule.latenessMinutes < 1 || schedule.latenessMinutes * 60000 > 2147483647
+    || typeof schedule.wall !== "string" || typeof schedule.timeZone !== "string"
+    || (schedule.offset !== null && typeof schedule.offset !== "string")
+    || !Array.isArray(record.runs) || !record.runs.every(validRunSummary)) {
+    throw new AutomationError(`Job record for "${name}" is corrupt; it has been preserved at ${path}.`);
+  }
+  try {
+    const resolved = parseOneShot(schedule.wall + (schedule.offset ?? ""), schedule.timeZone);
+    if (resolved.dueMs !== schedule.dueMs) throw new AutomationError("Inconsistent due instant.");
+  } catch {
+    throw new AutomationError(`Job schedule for "${name}" is invalid; it has been preserved at ${path}.`);
   }
   return record;
+}
+
+function validRunSummary(run: RunSummary | null): boolean {
+  return !!run && typeof run === "object"
+    && typeof run.runId === "string" && !!run.runId
+    && typeof run.startedAt === "string" && Number.isFinite(Date.parse(run.startedAt))
+    && (run.endedAt === null || (typeof run.endedAt === "string" && Number.isFinite(Date.parse(run.endedAt))))
+    && ["completed", "failed", "timeout", "unknown"].includes(run.outcome)
+    && ["manual", "scheduled"].includes(run.trigger)
+    && (run.exitCode === null || Number.isInteger(run.exitCode));
 }
 
 export function saveJob(root: string, job: JobRecord): void {
   const dir = join(workspacePaths(root).jobs, job.name);
   mkdirSync(dir, { recursive: true });
   atomicWriteJson(jobPath(root, job.name), job);
+}
+
+// ----------------------------------------------------------------------------
+// Shared admission: per-job exclusivity plus the two-different-job capacity.
+// Manual callers and the Trigger route through the same file locks, so an
+// active manual run occupies shared capacity across Trigger shutdown/restart.
+// ----------------------------------------------------------------------------
+
+const JOB_LOCK_NAME = "run.lock";
+
+export function jobLockPath(workspace: Workspace, name: string): string {
+  return join(workspace.jobs, name, JOB_LOCK_NAME);
+}
+
+function liveJobLocks(workspace: Workspace, except?: string): Array<{ name: string; pid: number }> {
+  if (!existsSync(workspace.jobs)) return [];
+  const live: Array<{ name: string; pid: number }> = [];
+  for (const name of readdirSync(workspace.jobs)) {
+    if (except && name === except) continue;
+    const held = readLiveLock(join(workspace.jobs, name, JOB_LOCK_NAME));
+    if (held && typeof held.pid === "number") live.push({ name, pid: held.pid });
+  }
+  return live;
+}
+
+export interface Admission {
+  jobLockPath: string;
+  /** Replace the lock payload (supervisor PID -> supervised child PID). */
+  replaceContents: (contents: Record<string, unknown>) => void;
+  releaseJobLock: () => void;
+}
+
+/**
+ * Take the workspace admission mutex, then the per-job O_EXCL lock. Scheduled
+ * callers receive an overlap-skip error instead of an already-running one;
+ * manual callers get the already-running error. Capacity saturation fails
+ * honestly rather than queuing; the Trigger treats that as "wait and recheck
+ * the deadline". The admission mutex is released before this function
+ * returns; the per-job lock stays owned until releaseJobLock().
+ */
+export function admitRun(
+  workspace: Workspace,
+  job: JobRecord,
+  kind: "manual" | "scheduled",
+  lockContents: { pid: number; runId: string; startedAt: string },
+): Admission {
+  const admissionLockPath = join(workspace.root, "admission.lock");
+  try {
+    acquireWorkspaceLock(admissionLockPath, { pid: process.pid, runId: lockContents.runId, kind }, () =>
+      "Another Automation admission is in progress; retry in a moment.");
+  } catch (error) {
+    if (error instanceof AutomationError && error.message.startsWith("Another Automation admission")) {
+      throw new AutomationError(error.message, "busy");
+    }
+    throw error;
+  }
+  try {
+    const targetLock = jobLockPath(workspace, job.name);
+    const target = readLiveLock(targetLock);
+    if (target) {
+      const message = `An Automation Run of job "${job.name}" is already running (run ${String(target.runId)}, pid ${String(target.pid)}). Wait for it to finish before starting another run.`;
+      throw new AutomationError(message, "overlap");
+    }
+
+    const others = liveJobLocks(workspace, job.name);
+    if (others.length >= MAX_CONCURRENT_RUNS) {
+      throw new AutomationError(`Automation workspace capacity is full: ${others.length} runs of different jobs are active (at most ${MAX_CONCURRENT_RUNS}). Wait for a slot; scheduled waiting never extends its lateness deadline.`, "capacity");
+    }
+
+    acquireWorkspaceLock(targetLock, { ...lockContents, kind }, (held) =>
+      `An Automation Run of job "${job.name}" is already running (run ${String(held.runId)}, pid ${String(held.pid)}). Wait for it to finish before starting another run.`);
+
+    return {
+      jobLockPath: targetLock,
+      replaceContents: (contents) => {
+        const token = lockOwners.get(targetLock);
+        if (!token || readLockRecord(targetLock)?.token !== token) {
+          throw new AutomationError(`Automation run ownership changed at ${targetLock}; evidence is preserved.`);
+        }
+        atomicWriteJson(targetLock, { ...contents, version: 1, token });
+      },
+      releaseJobLock: () => releaseWorkspaceLock(targetLock),
+    };
+  } finally {
+    releaseWorkspaceLock(admissionLockPath);
+  }
 }
 
 // ---------------------------------------------------------------------------
