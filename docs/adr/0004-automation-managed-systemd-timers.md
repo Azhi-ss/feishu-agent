@@ -1,5 +1,11 @@
 # Automation tooling: the Agent manages systemd timers itself, but still owns no scheduler process
 
+> Superseded for managed jobs by [ADR-0005](0005-cross-platform-automation-trigger.md),
+> the [ADR-0003 policy revision](0003-unattended-prompt-level-guards.md), and
+> SPEC §16.5. The systemd-only language, resident-process ban, per-job timers,
+> owner-only write prerequisite, and trial-run workflow below are historical.
+> The replacement specification is settled but not yet implemented.
+
 The Briefing deployment (ADR-0002) is hand-built: the workspace scripts and
 systemd units live outside the repository and are installed by copying files
 and running a shell script. The Agent cannot create or inspect scheduled jobs;

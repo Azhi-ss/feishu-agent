@@ -176,7 +176,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 已存在的私有 Skill 必须经过第二次明确确认才能覆盖。源树中的符号链接和路径穿越会被拒绝；安装先 staging，目标变更完成后再清理临时树。
 - 复制成功后，当前 Runtime 重新加载 Resources，使 Skill 立即可用。已安装 Skill 仍以当前用户权限运行，确认流程不构成沙箱。
 - Print 模式可以输出搜索结果；没有 UI 时安装必须快速失败，不能等待确认。
-- 全新 Feishu Home 默认创建 9 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer`、`feishu-package-curator` 与 `volc-devinstance`；公共仓库内的工作流 Skill 只能使用脱敏占位符，个人 Chat/Doc/Sheet 标识必须留在用户本地。
+- 当前实现的全新 Home 有 9 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer`、`feishu-package-curator` 与 `volc-devinstance`。本规格 §16.5 待实现的 `feishu-automation` 将成为第 10 个，沿用显式 init 补齐流程；公共资源只能使用脱敏占位符，个人标识留在用户本地。
 
 ### 7. Package management
 
@@ -294,9 +294,11 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu update [source|--extensions]`
 - `feishu config`
 - `feishu skills sync [--update]`（`--update` 先显式 `lark-cli update` 再按新版本重建缓存；仅显式调用才联网）
-- `feishu automation list`
-- `feishu automation add --name <slug> --when <oncalendar> [--tz <IANA>] [--no-catch-up] (--prompt-file <path> | --prompt-stdin) [--yes] [--run-now]`
-- `feishu automation run <name>` / `automation pause <name>` / `automation resume <name>` / `automation rm <name> [--purge]`（详见 §16.5）
+- `feishu automation list` / `feishu automation show <name>`
+- `feishu automation add --name <slug> (--cron <expr> | --at <ISO-time> | --every <duration>) (--prompt-file <path> | --prompt-stdin) [--tz <IANA>] [--catch-up <duration> | --no-catch-up] [--timeout <duration>] [--yes]`
+- `feishu automation update <name> [同 add 的可变选项，不含 --name] [--yes]`
+- `feishu automation run <name>` / `pause <name>` / `resume <name>` / `cancel <name>` / `rm <name> [--purge]`
+- `feishu automation start` / `stop` / `status` / `serve`（Trigger 生命周期，与任务的 pause/cancel 区分；详见 §16.5）
 - `feishu -c`
 - `feishu -r`
 - `feishu --session <id>`
@@ -307,15 +309,15 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
 
 ### 16. Unattended Automation
 
-术语见根目录 `CONTEXT.md` 的「Unattended Automation」词条（Automation Workspace、Trigger、Briefing、Sweep、Alert）；架构取舍见 ADR-0002、ADR-0003。
+术语见根目录 `CONTEXT.md` 的「Unattended Automation」词条；架构取舍见 ADR-0002、ADR-0003 修订与 ADR-0005。§16.2–16.4 保留已有 Briefing 部署及独立 Sweep 里程碑；新跨平台管理能力以 §16.5 为准，不隐式迁移或启用这些旧任务。
 
 #### 16.1 形态
 
-- 唯一常驻的是外部 Trigger；每次自动化是一个全新的短命 `feishu -p` print run，跑完即退，不存在持有模型上下文的常驻 Runtime。
-- 无人运行必须以环境变量 `FEISHU_UNATTENDED=1` 启动；该进程完全无记忆：不注册 Mem0 扩展（无召回、无捕获、无 dream），因此不需要 `MEM0_API_KEY`，简报输入（群消息、@、文档标题）不可能被学习进任何记忆桶。个性化只允许写在工位 AGENTS.md 中。
-- 无人运行从独立非 git 目录 `~/feishu-automation/`（Automation Workspace）启动，位于可删除的 Agent Home 之外；工位目录创建后不得改名或移动（记忆桶与会话分区哈希绝对路径）。工位包含 AGENTS.md（策略）、运行脚本、`briefings/`（已发简报留痕，保留 30 天）与 `.state/`（Sweep 排重游标）。
-- 触发器脚本主机无关，不写死本机路径假设；Trigger 环境不注入任何密钥：模型凭证只读复用 `~/.pi`，lark-cli 自管登录态。
-- 不新增 `feishu` CLI 子命令或旗标；timer 单元与脚本属于工位目录和 `~/.config/systemd/user/`，不是核心 CLI 面的一部分。
+- 唯一常驻的是与模型会话分离的 Trigger；既有 Briefing 使用外部系统定时器，新的管理能力使用独立应用级调度进程。每次自动化是一个全新的短命 `feishu -p` print run，跑完即退，不保留模型上下文。
+- 无人运行设置 `FEISHU_UNATTENDED=1`，不注册 Mem0 扩展（无召回、捕获或 dream），不需要 `MEM0_API_KEY`；个性化与任务上下文写在工位说明和任务文件中，不依赖历史会话。
+- 无人运行从独立非 git Automation Workspace 启动，位于 Agent Home 之外。旧 Briefing 工位、策略与制品保持不动；新任务使用独立 managed 工位。会话继续按工位路径分区；任务迁移不意味着迁移凭证、会话或自动接力。
+- Trigger 不持有模型会话、不将密钥写入服务配置；每次执行只读复用模型认证，lark-cli 自管登录态。普通 Interactive/Print/init 不隐式安装、启动或等待 Trigger，也不增加调度相关网络请求。
+- 旧 Briefing 系统单元仍是部署制品；新 `feishu automation` 管理面列入 §15，不再沿用「一律不增加 CLI」或 Linux-only 的限制。
 
 #### 16.2 v0：Briefing
 
@@ -360,49 +362,72 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 
 **验收口径**：Sweep 行为（分层、游标退化、无 Persistent、通知合并/去重、越权拦截）与 Briefing 部署制品同属「工位/外部契约/模型内容」，仓库只对其中的核心代码（硬命令策略、无人模式契约）做测试；预筛脚本、systemd 单元、时区与通知内容靠「真实 systemd 子进程 + 临时覆盖时钟」在部署机端到端验收及观察周人工确认，不入仓库测试。
 
-#### 16.5 Automation 管理面（feishu automation）
+#### 16.5 跨平台 Automation 管理与应用级 cron
 
-ADR-0004。Briefing 的手搓部署升级为 Agent 可自助管理的任务面：**只加管理层，不引入常驻进程**。调度后端仍是 systemd **user** timer（仅 Linux/systemd；无 user manager 的平台快速失败并给出可操作报错），每个任务依旧是 ADR-0002 的全新无记忆 `FEISHU_UNATTENDED=1` print run，从 Automation Workspace（`~/feishu-automation/`）启动并注入工位 AGENTS.md。
+**状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 已发布为 `ready-for-agent`，尚未实现或部署。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
 
-**命令面（§15 的展开）**：
+##### 分工与管理入口
 
-- `feishu automation list`：列出全部任务，输出 name / calendar（含时区）/ catch-up / 状态（enabled|paused|unit-missing）/ 下次触发。下次触发取 `systemctl --user list-timers`，取不到（如未 enable）只显示 `—`，不报错。
-- `feishu automation add --name <slug> --when <oncalendar> [--tz <IANA>] [--no-catch-up] (--prompt-file <path>|--prompt-stdin) [--yes] [--run-now]`：
-  - `--name`：`^[a-z0-9][a-z0-9-]{0,31}$`；同名任务已存在即失败（无覆盖语义，先 rm）。
-  - `--when`：systemd `OnCalendar` 表达式（如 `Mon..Fri *-*-* 08:30:00`、`daily`、`*-*-* 09,18:00:00`）；**不自带时区后缀**，时区只走 `--tz`。用 `systemd-analyze calendar --iterations=1` 校验语法并取首次触发；校验失败非零退出并原样回显 stderr。
-  - `--tz`：IANA 时区，默认 `Asia/Shanghai`；Node `Intl.DateTimeFormat(undefined, {timeZone})` 先校验有效性。生成单元时以内联后缀拼进 `OnCalendar`（`... Asia/Shanghai`）。
-  - `--no-catch-up`：timer `Persistent=false`（不补发）。默认 `Persistent=true`（错过的触发在下次登录补发一次；任务 prompt/工位策略自行做 cutoff，与 Briefing 同构）。
-  - prompt 二选一：`--prompt-file <path>`（`-` 表示 stdin）或 `--prompt-stdin`；互斥且必填一个。落盘为工位 `jobs/<name>/prompt.md`，不从命令行直接吃 prompt 正文（规避 shell 引用）。
-  - **确认门**：TTY 下打印人话确认（名字、本地+UTC 下次触发、catch-up、prompt 路径、唯一写出口仍是 bot→owner 单聊），要求输入 yes；非 TTY 必须显式 `--yes`，否则非零退出。任何文件/单元写入都发生在确认之后。
-  - `--run-now`：enable 成功后立即同步执行一次真实任务（与 timer 同一入口）；非零退出则自动 `pause` 该任务并提示原因，绝不静默保留从未跑通的 enabled 任务。
-- `feishu automation run <name>`：立即执行一次，不改调度；这也是 systemd 单元 ExecStart 的同一入口（手动/定时同一路径）。它 spawn 一个 `feishu -p <prompt>` 子进程，cwd 为工位根目录（注入工位 AGENTS.md），子进程环境设 `FEISHU_UNATTENDED=1`、`HOME=<home>`、`TZ=<job.tz>`，并 unset 六个密钥/桥接变量；父进程负责留痕与退出码，模型回合在子进程里。
-- `feishu automation pause <name>` / `resume <name>`：`systemctl --user disable --now` / `enable --now` 对应 per-job timer；job 记录保留。
-- `feishu automation rm <name> [--purge]`：停并 disable timer、删除 per-job timer 单元并 daemon-reload。默认保留 `jobs/<name>/`；`--purge` 一并删除该目录。
+- 一个 Automation 模块通过 §15 CLI 管理定义、日程、派发与记录，复用已有无人 Print runner。Feishu 私有 automation Skill 通过既有 Bash 帮用户编写、展示、确认和管理任务；不新增模型工具、常驻 Extension Hook 或独立自动化 Package。
+- Skill 通过显式 init 幂等安装到新旧 Home，已有用户修改不覆盖；不在普通启动安装。任务必须自包含，不复制整个创建聊天或依赖 Mem0。新任务使用独立的非 git managed Automation Workspace，不改变既有 Briefing 工位及其政策。
+- macOS/Linux 使用共同应用级 cron 逻辑；系统服务只托管一个 Trigger，不生成逐任务系统日程、不改 crontab。每任务只在选定主机执行，迁移需显式设置，不做同步、自动接力或跨机去重。
+- `add` 要求唯一安全名、恰好一种日程、非空任务文件/stdin；名称为小写字母/数字/连字符，首位字母或数字，最长 32 字符。同名保留记录也不能静默覆盖。`update` 保留未传字段，校验完整结果，无选项报错。
+- 创建和所有影响执行的修改均先显示完整计划/差异（时间、时区、下次触发、内容、动作、目标、身份、补跑、时限），再明确确认。TTY 等肯定答复，非 TTY 缺 `--yes` 快速失败；Skill 得到用户确认后才能携带该旗标。它是调用者的确认声明，不是签名授权；CLI 不把正文解析成 ACL。
+- 创建时保存解析后的非敏感 Lark profile 并纳入确认/查看：依次采用已有显式 `--lark-profile`、调用环境的 profile、lark-cli 本地默认配置（包括其无名默认），本地无法确定时要求用户显式指定。定时与手动运行使用任务记录，不跟随之后 Trigger/调用方的默认值；改 profile 用现有旗标经 update 确认，不复制对应凭证。
+- 参数非法、日程冲突、任务为空、同名或确认被拒时不产生任务/服务变更。`--catch-up` 与 `--no-catch-up` 互斥，duration 为正整数分钟/小时/天，至少一分钟。创建不自动真实试跑；去掉旧 `--run-now` 分支，显式 `run` 作为手动入口。
+- CLI stdout 为结构化命令结果，英文诊断/交互确认放 stderr；不新增全局 JSON/RPC Agent 模式。`list/show` 提供任务状态、日程、时区、策略、下次执行、最近结果及留痕，`show` 可读完整说明；`status` 报真实 Trigger 状态。可在 Trigger 停止时保存 enabled 任务，但回执必须明确服务未运行。
 
-**递归护栏**：`FEISHU_UNATTENDED=1` 进程中除 `run` 外的所有 management 动词（add/rm/pause/resume/list）一律拒绝——定时任务不能新建/篡改调度（对照 Hermes 在 cron 会话里禁用 cronjob 工具）。
+##### 日程合同
 
-**磁盘与单元布局**（全部在工位 + 用户 systemd 目录，不进仓库、不进 Agent Home）：
+| 类型 | 规则 |
+|---|---|
+| 日历重复 | 数字五字段 cron；支持通配符、列表、范围、步长；日与星期都受限时按 OR。拒绝秒字段、宏、扩展语法及 OnCalendar，不近似转换。 |
+| 一次性 | `--at` 为 ISO 时间，无偏移按任务时区、有偏移为绝对时刻；相对自然语言由模型先转换为展示给用户的绝对时间。 |
+| 固定间隔 | 首次启用为锚点，第一个间隔后触发；耗时/重启不改节拍。修改间隔建立新确认锚点，暂停/恢复不改锚点。 |
 
-```
-~/feishu-automation/
-  AGENTS.md                      # 工位 standing policy（见下）
-  runner.sh                      # 唯一服务入口脚本（首次 add 幂等生成）
-  jobs/<name>/
-    job.json                     # {name, calendar, tz, catchUp, prompt, createdAt}
-    prompt.md                    # 固定 prompt（自包含，无人可追问）
-    runs/<UTC时间戳>.{md,log}    # stdout/stderr 留痕，30 天清理
-~/.config/systemd/user/
-  feishu-automation@.service     # 共享模板（幂等覆盖安装）
-  feishu-automation-<name>.timer # per-job timer（Unit=feishu-automation@<name>.service）
-```
+- 时区每任务固定保存，默认 `Asia/Shanghai`，可指定其他 IANA 时区；换机器/系统时区不漂移。分钟级调度，不承诺秒级精度；固定间隔是经过时长，不能用 cron 步长冒充。
+- 重复任务默认两小时补跑窗口，可调整或关闭。恢复时最多执行最近一轮且必须在原定时刻的窗口内，不重放历史积压。一旦执行开始，失败或 unknown 不再当补跑。
+- 一次性也默认两小时窗口，可调整；过窗且未开始则 expired，保留记录、不再自动执行。定时派发开始即消费该次计划，即使失败也不自动再次派发，手动再跑是新的明确尝试。
+- 简单时钟默认：不早于计划时刻；回拨不重复已结算 occurrence；DST 不存在的本地分钟跳过，重复分钟只算一次。一次性无偏移时刻若不存在/歧义要求显式偏移。关闭补跑仍允许到期分钟内正常派发，不补更早分钟。
 
-模板服务：`Type=oneshot`、`TimeoutStartSec=600`、`WorkingDirectory=%h/feishu-automation`、`Environment=FEISHU_UNATTENDED=1` `HOME=%h`、`UnsetEnvironment=MEM0_API_KEY FEISHU_REMOTE FEISHU_REMOTE_APP_SECRET FEISHU_REMOTE_APP_ID FEISHU_REMOTE_OWNER_OPEN_ID FEISHU_REMOTE_LOOPBACK_URL`（显式六变量，不用 glob）、`Wants/After=network-online.target`（软依赖）、`ExecStart=%h/feishu-automation/runner.sh %i`。per-job timer：`OnCalendar=<calendar> <tz>`、`Persistent=<true|false>`、`Unit=feishu-automation@<name>.service`、`WantedBy=timers.target`。add/rm/pause/resume 后按需 `daemon-reload`。
+##### 运行与结果合同
 
-`runner.sh` host-neutral（只用 `$HOME`/`%h` 与标准前缀）：补 PATH（asdf shims/bin、linuxbrew、`~/.local/bin`，照搬 Briefing 脚本），`mkdir -p jobs/$1/runs` 并清理 30 天前留痕，以 UTC 时间戳命名 `runs/<stamp>.md/.log`，`exec feishu automation run $1`（TZ 由 `automation run` 按 job.json 设置，shell 不做时区解析）。
+- 同任务至多一份，覆盖定时/手动竞争；到点仍有本任务运行则 skip、不排队、不结束后补跑，手动重复返回 already-running。
+- 同一 managed 工位最多两个不同任务并行，手动也占同一容量；其他 scheduled 工作等待但不延长窗口。等待的重复任务最多保留最新未开始一轮，派发前重查资格；过窗则重复 skip、一次性 expired，不建无界队列。
+- 默认执行时限十分钟，可按任务改，从实际启动而非排队计时。超时终止并记录 timeout，不自动重跑；确认所属进程退出后释放容量，不凭陈旧 PID 误杀无关进程。
+- 失败、超时、取消、结果不明均不自动整任务重试；后续正常重复日程保持 enabled。保留退出码、诊断、输出；unknown 不等于“没产生写入”，部分完成不回滚，手动重跑时提示可能重复。
+- runner 完成不是所有业务写入成功的证明；不把模型自称成功或缺失回执变成 exactly-once 保证。保留成功、失败、超时、取消、unknown、过期与 skip 的区别。
+- 本地版本化 JSON、任务文本与运行记录，原子更新、有限本地协调；记录足够的 occurrence/运行身份防止重启自动重新派发。坏记录/未知版本保留并报错，不清空证据或自动重启任务。
 
-**工位 AGENTS.md**：首次 `automation add` 时若工位无 `AGENTS.md`，写入从 Briefing 工位策略泛化的默认 standing policy（唯一对外写出口 = bot 身份向 owner 本人单聊发送；owner open_id 只用 `lark-cli auth status` 本地读取；数据只读现拉、不编造、不换命令绕过；单源失败不阻塞其余栏目；user token 失效发重新登录通知；中文、不泄露 token/环境变量/内部 ID）。已有 AGENTS.md **绝不覆盖**。
+##### 生命周期默认值（由工程收敛，不再逐项访谈）
 
-**平台与边界**：v1 仅支持 Linux 用户 systemd（`systemctl --user` + `systemd-analyze`）；macOS launchd、Windows、无 user manager 环境一律在写入前非零失败并指明原因，不做半安装。跨机去重不做：任务记录是每台机器本地的，同一任务两台机都 enable 就发两份；纪律是只在一台常开机 enable（与手动 Briefing 部署相同）。不迁移现有手搓 Briefing（`feishu-briefing.*` 单元与脚本不被读取、修改或删除），未来若要并轨另开一票。ADR-0003 升级触发对本任务面同样有效：在硬只读命令策略落地前，生成的任务不应拥有超出「bot→owner digest」的写权限。
+- `pause` 停新派发并丢弃未开始轮次，当前运行继续；`cancel` 中止当前轮次，不回滚写入。模型把日常管理意图映射到明确命令。`resume` 不补人为暂停期间，保留间隔锚点，过期 one-shot 不自动复活。
+- 更新仅影响后续运行，当前轮次保留启动时的计划快照；修改待确认期间旧计划有效，除非用户明确暂停。只改正文不改日程锚点。
+- `rm` 默认保留任务/历史，`--purge` 才删除保留制品；存在活跃运行时拒绝移除并给 pause/cancel 指引，不删无关文件。`run` 无需常驻 Trigger，但走共同执行/锁路径；允许手动执行保留的 paused/completed/expired 任务，不允许执行 removed 任务。手动运行不消费/重置 one-shot 的计划或过期状态，不移位重复日程；若未来仍有正常触发，回执明确提示。
+- 独立手动调用负责监管自己的子进程直到结束；中断时做有界终止或记录 unknown。Trigger stop 只处理其所属执行，不终止独立手动进程，后者仍占共用容量。
+- managed 工位与现有 Briefing 分离，缺失 standing instructions 在显式首次设置播种，已有不覆盖；每轮 scratch 分开以免并发冲突。留痕保留 30 天，清理不删除定义或活跃运行。
+- 每轮新 `FEISHU_UNATTENDED=1` Print 进程，无 Mem0/旧会话上下文；保持正常资源隔离与工具，真实 HOME、非敏感 Lark profile。只读复用模型认证、lark-cli 自管 token，不保存环境快照或把秘密写进服务/日志/会话；不向子进程注入 Mem0/Remote Bridge 秘密或自启变量。
+- 提示词要求任务不管理自身调度；管理入口对继承的 unattended 标记拒绝任务/服务管理调用，Trigger 直接启动 Print 子进程。此小检查仅防递归误用，有通用 Bash 就不是安全沙箱。
+- `start` 显式安装并启用专属服务：macOS launchd、Linux/WSL user systemd，只托管共同 `serve` 进程；`stop` 停服务及重启、保留任务。停止 Trigger 时不新派发，对所属执行做有界结束，unknown 不自动重试；活运行不能被重启误认为已空闲。
+- 安装先本地校验，缺可执行文件/user manager 快速失败、不半启用，支持含空格路径和不同 Node 布局。只记录必需路径/非秘密环境，不自动 root/linger/改登录设置；无 user manager 可显式前台 `serve`，该进程退出即无调度。
+- 普通 Interactive/Print/init 不隐式安装、启动、等待或探测调度服务，不增加启动网络请求；显式初始化原有行为不扩张。不新增依赖、升级或 patch 第三方包。
+
+##### 模型行为约束与范围
+
+- 最终采用提示词约束：保留既有工具、Skills、高危护栏与凭证保护，不新增权限引擎、受限工具集、按目标 allow-list、受控发送 API 或沙箱。
+- 任务说明写清目标、输入、固定目的地、动作、身份、产物与失败处理。首版仅约定固定会话 bot 普通消息与固定现有文档 user 追加；不覆盖/删除、换目标、加群、改权限/成员、处理审批或加急，不因访问失败自动换身份。
+- 这是行为约定，不声称其他命令不可调用；外部内容的提示词注入、模型误判仍可越权。不得借 scheduler 入参校验重新引入被否决的业务权限项目。
+- 原高危 guard 不变，不向定时 prompt 追加伪造破坏性批准；需要交互确认的调用在 Print 快速失败。定时业务仍由模型通过现有 lark-cli 工作流完成，不另写飞书 API 客户端。
+- 不迁移或改变旧 Briefing，不实现/启用 Sweep/Alert、群监听、跨机协调。独立里程碑的门槛不作为此能力的隐式前置，也不由本规格自动取消。
+
+##### 测试合同
+
+- 用户已确认**一个主缝：真实 CLI 子进程**。临时 HOME/工位、PATH fake lark-cli/服务命令、回环 fake 模型/Mem0；观察退出码、结果、子进程启动数与制品，不断言私有字段或 Pi 内部。
+- 一处受控测试时钟驱动真实管理/serve 路径，覆盖时间类型、时区/DST、重启/回拨、补跑/过期；不真等数小时，不新增公开时钟旗标或生产测试服务。
+- fake 子进程关卡覆盖定时/手动竞争、同任务互斥、两任务容量、等候窗口、超时/取消与崩溃后不重跑，包含模拟副作用后失败的回归。
+- 复用 CLI surface、Print、unattended、init/resource、release/isolation 的既有测试模式，验证确认门、Skill 安装/发现/正文加载/脚本结果、资源/身份上下文、无 Mem0、秘密不复制、高危 guard 不退化。
+- 增补手动执行未到期/暂停/完成/过期 one-shot 不改计划、removed 不可运行、手动进程独立监管，以及保存的 Lark profile 不随调用方或服务默认变化的回归；改 profile 仍需确认。
+- fake 模型只证明接线和政策进入上下文，不证明任意真实模型永不越权。两个平台运行相同行为测试（macOS/Linux × Node 22/24）；服务用替身，不触碰真实任务/crontab/服务。真实 service smoke 另需授权并单独报告；全量 gate、干净安装、diff-check 沿用仓库要求。
 
 ## Testing Decisions
 
@@ -493,7 +518,7 @@ ADR-0004。Briefing 的手搓部署升级为 Agent 可自助管理的任务面�
     - 安装后 ResourceLoader reload 能发现新 Skill；Print 模式搜索可输出结果，安装在无 UI 时非零快速失败而不挂起。
 
 13. **Initialization**
-    - 全新 HOME 一次初始化成功，并创建八个内置 Feishu Skill；已有同名 Skill 的用户内容不被覆盖。
+    - 全新 HOME 初始化安装默认 Feishu Skills（包括 §16.5 的 automation Skill），已有 Home 显式 init 可补齐缺失 Skill，已有用户内容不被覆盖。
     - 缺少 API Key、无模型、`lark-cli doctor` 失败时输出精确诊断。
     - 重复初始化幂等，不覆盖已有配置。
     - 显式重置选项才改变 Identity、模型或 System Prompt。
@@ -508,6 +533,10 @@ ADR-0004。Briefing 的手搓部署升级为 Agent 可自助管理的任务面�
     - 握手未完成时 `/new`：不得出现 stale-ctx 报错；手机消息不得打进已替换的会话。
     - 无 `lark-cli` 配置时环境变量身份可用；坏配置不回退环境变量。
     - 允许名单包装保留 `/remote`，其他包装同名命令被剥掉。
+
+15. **Automation**
+    - 复用真实 CLI 主测试缝，按 §16.5 与完整 PRD 验证任务管理/确认、受控时间、并发/恢复、无人 Print、Skill 接线、服务替身、秘密扫描及 macOS/Linux × Node 22/24 行为矩阵。
+    - 只验证提示词注入和既有 guard，不把模型遵守业务规则当作硬权限测试；不触碰真实任务或账户。
 
 ### Prior art
 
@@ -529,7 +558,7 @@ ADR-0004。Briefing 的手搓部署升级为 Agent 可自助管理的任务面�
 - 将 Session 存入项目仓库。
 - 自动推断 Mem0 Identity。
 - 在 Feishu Agent 内管理模型登录凭证。
-- 首版跨平台完整支持；项目包兼容 Symlink/Junction 的 Windows 行为需单独验收。
+- Windows 原生服务与其他平台完整适配；本次 Automation 明确支持 macOS/Linux，不沿用 Linux-only 限制，项目包 Symlink/Junction 的 Windows 行为仍单独验收。
 - 自定义飞书 API Client 或替代 `lark-cli`。
 
 ## Further Notes

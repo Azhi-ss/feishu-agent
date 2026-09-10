@@ -74,10 +74,12 @@ and update across projects?**
 - **Extension layer**: the turn-scoped high-risk guard (`src/high-risk.ts`)
   blocks destructive `lark-cli` commands with `--yes` — enforceable because it
   runs before tool execution; a prompt could not do this.
-- **Prompt policy layer**: the Automation Workspace `AGENTS.md` standing policy
-  (SPEC §16). It is deliberately prompt-level only; ADR-0003 names the exact
-  triggers that require upgrading it to a hard command policy (Sweep write
-  actions, Alert, bot-in-group, any observed out-of-policy call).
+- **Prompt policy layer**: the Automation Workspace `AGENTS.md` and approved
+  task instructions. The owner chose this approach for managed Automation Jobs
+  too (SPEC §16.5, ADR-0003 revision), without a new restricted toolset or
+  per-target enforcement. Existing tools remain available: these instructions
+  are not a permission boundary. Separate Sweep/Alert enablement gates remain
+  in SPEC §16.4 and ADR-0003.
 - **Skill layer**: official `lark-*` Skills, `/find-skill`, and the host
   `skills/feishu-control/` distribution resource. Skill-bundled scripts are
   real supply-chain surface even though they are "just Markdown + scripts".
@@ -85,11 +87,13 @@ and update across projects?**
   `@azhi-ss/feishu-remote`, and resource filtering in `src/resources.ts`.
   Pinning and allow-listing are provenance controls, not sandboxes — the
   AGENTS.md isolation boundary says so in user-facing terms.
-- **OS/native before hook**: unattended scheduling uses external systemd
-  user timers spawning ephemeral print runs (ADR-0002, SPEC §16.5), not a
-  resident Extension loop; the feishu side adds only a Tool-grade management
-  surface (`feishu automation`). Startup stays zero-network/zero-blocking by
-  construction — a built-in scheduler daemon would violate that boundary.
+- **Trigger separate from Runtime**: the deployed Briefing uses external
+  systemd user timers (ADR-0002). The revised automation design (ADR-0005,
+  SPEC §16.5; not implemented) permits an explicitly enabled, standalone
+  cross-platform Trigger with no retained model context. OS services supervise
+  that process, not individual job calendars. Interactive/Print/init must not
+  implicitly install, start, or wait for it; a separate scheduler does not
+  inherently violate zero-network/zero-blocking startup.
 
 ## Anti-examples
 

@@ -1,5 +1,11 @@
 # Unattended automation uses ephemeral print runs with an external trigger
 
+> Managed Automation Jobs retain the fresh-run/no-Mem0 principle below.
+> [ADR-0005](0005-cross-platform-automation-trigger.md) and SPEC §16.5 replace
+> the original systemd-only trigger with a separate application scheduler and
+> a managed workspace distinct from the deployed Briefing. The deployment
+> details below remain historical context, not requirements for new jobs.
+
 Unattended automation (the daily Briefing, and later the periodic Sweep) needs to
 do work when the user is not sitting at the TUI. We decided that the always-on
 component is only an external **Trigger** (a systemd user timer now; an event
@@ -42,9 +48,10 @@ once created (the memory bucket and session partition hash the absolute path).
   tolerable with a human watching the TUI, unacceptable unattended. It also
   accumulates context and cost with no audit boundary.
 
-- **Cron/systemd spawning ephemeral print runs** (chosen): cheap, self-healing
-  (a failed run is retried by the next trigger), auditable (one prompt, one
-  transcript per run), and trivially disabled by stopping one timer.
+- **Cron/systemd spawning ephemeral print runs** (chosen): auditable (one
+  prompt, one transcript per run), and trivially disabled by stopping one
+  timer. A later scheduled occurrence may proceed after failure; it is not a
+  guarantee of replaying a failed occurrence or exactly-once delivery.
 
 ## Consequences
 

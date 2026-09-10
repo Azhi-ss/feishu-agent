@@ -1,5 +1,25 @@
 # Unattended runs rely on prompt-level guards, not a hard read-only tool policy
 
+## Revision: managed Automation Jobs
+
+For SPEC §16.5, the owner chose task prompts and workspace standing instructions
+instead of the proposed hard per-action/target authorization or restricted
+toolset. Retain existing tools, Skills, the turn-scoped high-risk guard, and
+credential protections. The approved plan names fixed targets and identities:
+bot for ordinary messages, user for appending to existing documents. These are
+behavioral instructions, not an enforced permission boundary; model mistakes
+and prompt injection can still cause out-of-plan writes.
+
+This revises the earlier interview's code-policy prerequisite for these jobs,
+including ordinary messages to already accessible groups. The trade-off is less
+implementation and policy-maintenance code, not proof that stronger models
+cannot overstep. Timing, concurrency, timeouts, and run accounting remain code
+responsibilities. No implementation or deployment is authorized by this note.
+The existing Briefing deployment and the separate Sweep/Alert milestones and
+their enablement gates are unchanged.
+
+## Original Briefing v0 decision
+
 Unattended runs can read untrusted content (group-chat messages, at-mentions,
 document titles) and then act with the owner's local and Feishu permissions.
 We considered adding a code-level read-only guard for unattended runs

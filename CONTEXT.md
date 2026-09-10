@@ -66,16 +66,40 @@ _Avoid_: A second dedicated bridge app, storing the app secret on disk, first-DM
 
 ## Unattended Automation
 
+**Automation Job**:
+A scheduled Feishu assignment managed for execution on one explicitly selected host, with a task definition portable between supported hosts. Portability does not imply automatic synchronization, failover, or duplicate suppression across hosts.
+_Avoid_: Native Feishu task, OS timer, automatically synchronized task
+
+**Automation Authorization**:
+The owner's explicit approval of a presented Automation Job plan, including its schedule, task content, writes, fixed targets, and Lark Identity. It is a standing instruction, not a restriction of available tool or account permissions; changes affecting execution require renewed approval.
+_Avoid_: Model-inferred permission, account-wide approval, enforced per-target grant, sandbox
+
+**Automation Run**:
+An execution attempt of an Automation Job, started by its schedule or an explicit manual request; a skipped occurrence is not a run. Same-job runs do not overlap, and an unknown outcome means completion or delivery is unconfirmed, not that no effects occurred in Feishu.
+_Avoid_: Job definition, schedule, queued trigger
+
+**Automation Schedule**:
+The timing rule attached to an Automation Job: a calendar recurrence, a single scheduled occurrence, or a fixed elapsed-time interval anchored at first enablement. It defines when the assignment is due, with calendar times interpreted in the job's own timezone rather than following the host's timezone.
+_Avoid_: Cron expression for every schedule type, OS timer configuration
+
+**Automation Catch-up**:
+A delayed first start of a missed Automation Job occurrence within its permitted lateness window. It is distinct from retrying work that has already started or replaying every missed occurrence.
+_Avoid_: Execution retry, backlog replay, guaranteed delivery
+
+**Automation Expiry**:
+The terminal outcome of a one-shot Automation Job whose permitted lateness window elapsed before its execution began. The job remains recorded but is no longer eligible for automatic execution.
+_Avoid_: Execution failure, job deletion, completed work
+
 **Automation Workspace**:
-The dedicated, non-git working directory from which all unattended runs start; it owns their memory bucket, session partition, and the injected workspace instructions that encode automation policy. It is deliberately outside the Feishu Agent Home, which remains disposable runtime state.
-_Avoid_: Reusing an interactive project directory, a path inside the Agent Home, relocating the workspace after first use
+The local working context containing standing instructions and artifacts for unattended Automation Jobs. Managed jobs and the preexisting Briefing use separate workspaces so that one cannot silently redefine the other's policy.
+_Avoid_: An interactive project, Feishu Agent Home, a shared policy for unrelated automations
 
 **Trigger**:
-The only always-on part of unattended automation: an external scheduler or watcher that starts fresh one-shot runs. A Trigger never holds model context itself.
-_Avoid_: A long-lived agent process, a continuously running "brain", sleeping agent loop
+The timing authority for unattended Automation Jobs, separate from the Feishu Runtime. It starts fresh runs without retaining model context.
+_Avoid_: A retained agent session, a continuously running "brain", sleeping agent loop
 
 **Briefing**:
-A scheduled summary run that pulls the day's hard items (calendar, open tasks, pending approvals), recent work traces (recently edited docs), and at-mentions fresh at delivery time; persistent memory may personalize ordering but is never a source of facts.
+A scheduled summary that pulls the day's hard items, recent work traces, and at-mentions fresh at delivery time. Its facts come from current Feishu data rather than memory or an old conversation.
 _Avoid_: Memory-generated digest, full-text document scan, transcript archive
 
 **Sweep**:
