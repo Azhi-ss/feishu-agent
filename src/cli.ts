@@ -70,6 +70,12 @@ const HELP = `Usage:
   feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>
                                   Open or script Feishu Package resource settings
   feishu skills sync [--update]  Rebuild official Skills cache; --update also self-updates lark-cli first
+  feishu automation list         List saved Automation Jobs
+  feishu automation show <name>  Inspect one Automation Job and its latest run
+  feishu automation add --name <slug> --at <ISO-time> (--prompt-file <path> | --prompt-stdin)
+                 [--tz <IANA>] [--timeout <duration>] [--yes]
+                                  Create a one-shot Automation Job
+  feishu automation run <name>   Run a saved job once now in a fresh unattended Print
   feishu -r                      Select a session in this Feishu Project
   feishu -c                      Continue this Feishu Project's latest session
   feishu --session <id>          Resume an exact session in this Feishu Project
@@ -91,6 +97,48 @@ function invalidOptionValue(args: string[], index: number, flag: string): string
   const value = args[index + 1];
   if (!value || value.startsWith("-") || !value.trim()) fail(`${flag} requires a value.`);
   return value;
+}
+
+// Strict parser for the slice-1 automation surface (#39). Only one-shot add,
+// list, show, and run exist; later slices add update/pause/resume/rm and the
+// Trigger commands. Mutating verbs are rejected inside inherited unattended
+// runs (a narrow recursion check, not a security boundary).
+const AUTOMATION_VALUE_FLAGS = new Set(["--name", "--at", "--tz", "--timeout", "--prompt-file"]);
+const AUTOMATION_BOOL_FLAGS = new Set(["--prompt-stdin", "--yes"]);
+
+function normalizeAutomationArgs(input: string[]): string[] {
+  const verb = input[1];
+  const known = new Set(["list", "show", "add", "run"]);
+  if (!verb || !known.has(verb)) {
+    fail(`Unknown automation command: ${verb ?? ""}. Supported: feishu automation list|show|add|run.`);
+  }
+  if (verb === "list") {
+    if (input.length !== 2) fail("Usage: feishu automation list");
+    return input;
+  }
+  if (verb === "show" || verb === "run") {
+    const rest = input.slice(2);
+    if (rest.length !== 1 || rest[0].startsWith("-")) fail(`Usage: feishu automation ${verb} <name>`);
+    return input;
+  }
+  // add
+  const rest = input.slice(2);
+  const flags = new Set<string>();
+  for (let index = 0; index < rest.length; index++) {
+    const token = rest[index];
+    if (!token.startsWith("--")) fail(`Unexpected automation add argument: ${token}.`);
+    if (flags.has(token)) fail(`${token} may be specified only once; provide exactly one schedule (--at).`);
+    if (AUTOMATION_VALUE_FLAGS.has(token)) {
+      invalidOptionValue(rest, index, token);
+      flags.add(token);
+      index++;
+    } else if (AUTOMATION_BOOL_FLAGS.has(token)) {
+      flags.add(token);
+    } else {
+      fail(`Unknown option for automation add: ${token}. This slice supports one-shot jobs only (--at); cron and interval schedules arrive in a later release.`);
+    }
+  }
+  return input;
 }
 
 function normalizeAndValidateArgs(input: string[]): string[] {
@@ -153,6 +201,8 @@ function normalizeAndValidateArgs(input: string[]): string[] {
     case "skills":
       if (args[1] !== "sync" || args.length > 3 || (args.length === 3 && args[2] !== "--update")) fail("Usage: feishu skills sync [--update]");
       return args;
+    case "automation":
+      return normalizeAutomationArgs(args);
     default:
       if (args[0].startsWith("-")) fail(`Unsupported option: ${args[0]}`);
       fail(`Unknown command: ${args[0]}`);
@@ -271,6 +321,15 @@ else {
       else if (args[0] === "list") for (const entry of manager.listConfiguredPackages()) process.stdout.write(`${entry.scope}\t${entry.source}\n`);
       else fail(`${args[0]} requires a package source.`);
     } catch (error) { fail(`Feishu Package command failed: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+  else if (args[0] === "automation") {
+    const { automationCommand } = await import("./automation-commands.js");
+    automationCommand(args)
+      .then((code) => { process.exitCode = code; })
+      .catch((error: unknown) => {
+        process.stderr.write(`Automation: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 1;
+      });
   }
   else if (args[0] === "-p") {
     const cwd = realpathSync(process.cwd());
