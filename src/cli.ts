@@ -72,9 +72,10 @@ const HELP = `Usage:
   feishu skills sync [--update]  Rebuild official Skills cache; --update also self-updates lark-cli first
   feishu automation list         List saved Automation Jobs
   feishu automation show <name>  Inspect one Automation Job and its latest run
-  feishu automation add --name <slug> --at <ISO-time> (--prompt-file <path> | --prompt-stdin)
-                 [--tz <IANA>] [--catch-up <duration>] [--timeout <duration>] [--yes]
-                                  Create a one-shot Automation Job
+  feishu automation add --name <slug> (--at <ISO-time> | --cron "<5 fields>" | --every <duration>)
+                 (--prompt-file <path> | --prompt-stdin)
+                 [--tz <IANA>] [--catch-up <duration>|--no-catch-up] [--timeout <duration>] [--yes]
+                                  Create a one-shot, cron, or fixed-interval Automation Job
   feishu automation run <name>   Run a saved job once now in a fresh unattended Print
   feishu automation serve        Run the foreground scheduling Trigger (one per managed workspace)
   feishu -r                      Select a session in this Feishu Project
@@ -100,12 +101,13 @@ function invalidOptionValue(args: string[], index: number, flag: string): string
   return value;
 }
 
-// Strict parser for the #39/#40 automation surface: one-shot add, list, show,
-// run, and the foreground serve Trigger. Later slices add update/pause/resume/
-// rm and background service start/stop/status. Mutating verbs are rejected
-// inside inherited unattended runs (a narrow recursion check, not security).
-const AUTOMATION_VALUE_FLAGS = new Set(["--name", "--at", "--tz", "--timeout", "--prompt-file", "--catch-up"]);
-const AUTOMATION_BOOL_FLAGS = new Set(["--prompt-stdin", "--yes"]);
+// Strict parser for the automation surface: add (one-shot/cron/interval),
+// list, show, run, and the foreground serve Trigger. Later slices add
+// update/pause/resume/rm and background service start/stop/status. Mutating
+// verbs are rejected inside inherited unattended runs (a narrow recursion
+// check, not security).
+const AUTOMATION_VALUE_FLAGS = new Set(["--name", "--at", "--cron", "--every", "--tz", "--timeout", "--prompt-file", "--catch-up"]);
+const AUTOMATION_BOOL_FLAGS = new Set(["--prompt-stdin", "--yes", "--no-catch-up"]);
 
 function normalizeAutomationArgs(input: string[]): string[] {
   const verb = input[1];
@@ -128,17 +130,15 @@ function normalizeAutomationArgs(input: string[]): string[] {
   for (let index = 0; index < rest.length; index++) {
     const token = rest[index];
     if (!token.startsWith("--")) fail(`Unexpected automation add argument: ${token}.`);
-    if (flags.has(token)) fail(`${token} may be specified only once; provide exactly one schedule (--at).`);
+    if (flags.has(token)) fail(`${token} may be specified only once; provide exactly one schedule (--at, --cron, or --every).`);
     if (AUTOMATION_VALUE_FLAGS.has(token)) {
       invalidOptionValue(rest, index, token);
       flags.add(token);
       index++;
     } else if (AUTOMATION_BOOL_FLAGS.has(token)) {
       flags.add(token);
-    } else if (token === "--no-catch-up") {
-      fail("--no-catch-up applies to recurring schedules, which arrive in a later release. Use --catch-up <duration> to set a one-shot lateness window.");
     } else {
-      fail(`Unknown option for automation add: ${token}. This slice supports one-shot jobs only (--at); cron and interval schedules arrive in a later release.`);
+      fail(`Unknown option for automation add: ${token}. Supported schedules are --at (one-shot), --cron (five fields), and --every (interval).`);
     }
   }
   return input;

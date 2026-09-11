@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AutomationError,
+  occurrenceId,
   type JobRecord,
   type RunOutcome,
   type RunSummary,
@@ -24,7 +25,6 @@ import {
   loadScheduleState,
   mutateOccurrence,
   nowMs,
-  oneshotOccurrenceId,
   saveJob,
   scheduleEligibilityNotice,
   stopGraceMs,
@@ -81,6 +81,8 @@ export interface StartOptions {
   home?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMsOverride?: number;
+  /** Scheduled dispatch only: the planned occurrence and its lateness deadline. */
+  due?: { dueMs: number; deadlineMs: number };
 }
 
 /**
@@ -95,6 +97,7 @@ export function startAdmittedRun(
   kind: "manual" | "scheduled",
   options: StartOptions = {},
 ): AdmittedRun {
+  const scheduled = kind === "scheduled" ? options.due ?? null : null;
   const home = options.home ?? homedir();
   const startedAt = new Date(nowMs()).toISOString();
   const runId = runIdNow(kind === "manual" ? "manual" : "sched", new Date(startedAt));
@@ -107,22 +110,23 @@ export function startAdmittedRun(
   const stderrPath = join(runsDir, `${runId}.stderr.log`);
 
   const admission = admitRun(workspace, job, kind, { pid: process.pid, runId, startedAt });
-  const occurrenceId = kind === "scheduled" ? oneshotOccurrenceId(job.schedule.dueMs) : null;
-  try {
-    if (occurrenceId) {
+  const scheduledId = scheduled ? occurrenceId(job.schedule, scheduled.dueMs) : null;
+  if (scheduled) {
+    const id = occurrenceId(job.schedule, scheduled.dueMs);
+    try {
       const now = nowMs();
-      if (now < job.schedule.dueMs) throw new AutomationError("Clock moved before the scheduled instant; not admitted.", "not-due");
-      if (now > job.schedule.dueMs + job.schedule.latenessMinutes * 60000) {
+      if (now < scheduled.dueMs) throw new AutomationError("Clock moved before the scheduled instant; not admitted.", "not-due");
+      if (now > scheduled.deadlineMs) {
         throw new AutomationError("Lateness deadline passed before admission.", "expired");
       }
-      mutateOccurrence(workspace, job.name, occurrenceId, (existing) => {
+      mutateOccurrence(workspace, job.name, id, (existing) => {
         if (existing) throw new AutomationError("Scheduled occurrence was already consumed; no replay.");
-        return { id: occurrenceId, status: "running", runId, startedAt };
+        return { id, dueMs: scheduled.dueMs, status: "running", runId, startedAt };
       });
+    } catch (error) {
+      admission.releaseJobLock();
+      throw error;
     }
-  } catch (error) {
-    admission.releaseJobLock();
-    throw error;
   }
 
   const childEnv: NodeJS.ProcessEnv = { ...options.env ?? process.env };
@@ -166,12 +170,12 @@ export function startAdmittedRun(
       return;
     }
     try {
-      if (occurrenceId) {
+      if (scheduled) {
         const now = nowMs();
-        if (now < job.schedule.dueMs || now > job.schedule.dueMs + job.schedule.latenessMinutes * 60000) {
+        if (now < scheduled.dueMs || now > scheduled.deadlineMs) {
           throw new AutomationError("Scheduled time changed before Print admission; outcome remains unknown, without replay.");
         }
-        mutateOccurrence(workspace, job.name, occurrenceId, (entry) => ({ ...entry!, childPid: child.pid }));
+        mutateOccurrence(workspace, job.name, scheduledId!, (entry) => ({ ...entry!, childPid: child.pid }));
       }
       admission.replaceContents({ pid: child.pid, runId, startedAt, kind, supervisorPid: process.pid });
     } catch {
@@ -239,7 +243,7 @@ export function startAdmittedRun(
   })();
 
   return {
-    kind, name: job.name, occurrenceId, runId, startedAt, childPid: child.pid!, stop, done,
+    kind, name: job.name, occurrenceId: scheduledId, runId, startedAt, childPid: child.pid!, stop, done,
     release: admission.releaseJobLock,
   };
 }
@@ -249,12 +253,14 @@ export function settleScheduledOccurrence(
   workspace: Workspace,
   name: string,
   occurrenceId: string,
-  outcome: RunOutcome | "expired" | "overlap-skipped",
+  outcome: RunOutcome | "expired" | "overlap-skipped" | "lateness-skipped",
   runId: string | null,
   exitCode: number | null,
+  dueMs?: number,
 ): void {
   mutateOccurrence(workspace, name, occurrenceId, (entry) => ({
     id: occurrenceId,
+    dueMs: entry?.dueMs ?? dueMs ?? Number(occurrenceId.split(":").at(-1)),
     status: "settled",
     outcome,
     runId: entry?.runId ?? runId ?? undefined,

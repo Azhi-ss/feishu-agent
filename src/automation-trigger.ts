@@ -1,17 +1,25 @@
-// Foreground one-shot Trigger (#40): timing only, no retained model session.
-// All children use the same admission and Print supervision as manual runs.
+// Foreground Trigger (#40 one-shots, #41 cron and fixed intervals): timing
+// only, no retained model session. All children use the same admission and
+// Print supervision as manual runs.
 import { join } from "node:path";
 import {
   AutomationError,
   acquireWorkspaceLock,
+  createdFloorMs,
+  dueOccurrencesBetween,
   jobLockPath,
+  latestDueOccurrence,
   listJobs,
   loadScheduleState,
+  nextOccurrence,
   nowMs,
-  oneshotOccurrenceId,
+  occurrenceDeadline,
+  occurrenceId,
   processAlive,
   readLiveLock,
+  recordedFloor,
   releaseWorkspaceLock,
+  settleOccurrencesBulk,
   tickIntervalMs,
   type JobRecord,
   type Workspace,
@@ -51,16 +59,19 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
     stop();
   };
 
-  const launch = (job: JobRecord, id: string): void => {
+  const launch = (job: JobRecord, id: string, dueMs: number, deadlineMs: number): void => {
     let run: AdmittedRun;
     try {
-      run = startAdmittedRun(job, workspace, "scheduled");
+      run = startAdmittedRun(job, workspace, "scheduled", { due: { dueMs, deadlineMs } });
     } catch (error) {
       if (!(error instanceof AutomationError)) throw error;
-      if (error.reason === "overlap" || error.reason === "expired") {
-        const outcome = error.reason === "overlap" ? "overlap-skipped" : "expired";
-        settleScheduledOccurrence(workspace, job.name, id, outcome, null, null);
-        log(`Job "${job.name}" recorded ${outcome} without queuing.`);
+      if (error.reason === "overlap") {
+        settleScheduledOccurrence(workspace, job.name, id, "overlap-skipped", null, null, dueMs);
+        log(`Job "${job.name}" recorded overlap-skipped at ${new Date(dueMs).toISOString()} without queuing.`);
+      } else if (error.reason === "expired") {
+        const outcome = job.schedule.kind === "oneshot" ? "expired" : "lateness-skipped";
+        settleScheduledOccurrence(workspace, job.name, id, outcome, null, null, dueMs);
+        log(`Job "${job.name}" recorded ${outcome} at ${new Date(dueMs).toISOString()} without queuing.`);
       } else if (error.reason !== "capacity" && error.reason !== "busy" && error.reason !== "not-due") {
         warn(error.message);
       }
@@ -68,44 +79,86 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
     }
     const settled = run.done.then(({ outcome, exitCode }) => {
       const result = stopping && outcome !== "timeout" ? "unknown" : outcome;
-      settleScheduledOccurrence(workspace, job.name, id, result, run.runId, exitCode);
+      settleScheduledOccurrence(workspace, job.name, id, result, run.runId, exitCode, dueMs);
       recordRunSummary(workspace, job.name, {
         runId: run.runId, startedAt: run.startedAt, endedAt: new Date(nowMs()).toISOString(),
         outcome: result, exitCode, trigger: "scheduled",
       });
       run.release();
-      log(`Scheduled run of "${job.name}" settled as ${result}.`);
+      log(`Scheduled run of "${job.name}" (${new Date(dueMs).toISOString()}) settled as ${result}.`);
     }).catch(fatal).finally(() => { owned.delete(job.name); });
     owned.set(job.name, { run, settled });
-    log(`Scheduled one-shot "${job.name}" admitted (run ${run.runId}, child pid ${run.childPid}).`);
+    log(`Scheduled "${job.name}" admitted for ${new Date(dueMs).toISOString()} (run ${run.runId}, child pid ${run.childPid}).`);
+  };
+
+  /** Recover every running occurrence whose supervised child is gone. */
+  const recoverOrphans = (job: JobRecord, state: NonNullable<ReturnType<typeof loadScheduleState>>): void => {
+    for (const occurrence of state.occurrences) {
+      if (occurrence.status !== "running" || !occurrence.runId) continue;
+      // A live orphan occupies its existing slot. Never signal persisted PIDs;
+      // an unsupervised attempt settles unknown only once that child is gone.
+      if (occurrence.childPid && processAlive(occurrence.childPid)) continue;
+      const live = readLiveLock(jobLockPath(workspace, job.name));
+      if (live?.runId === occurrence.runId) continue;
+      const previous = job.runs.find((run) => run.runId === occurrence.runId);
+      const outcome = previous?.outcome ?? "unknown";
+      settleScheduledOccurrence(workspace, job.name, occurrence.id, outcome, occurrence.runId, previous?.exitCode ?? null, occurrence.dueMs);
+      log(`Recovered unsupervised scheduled run "${job.name}" (${new Date(occurrence.dueMs).toISOString()}); recorded ${outcome} without replay.`);
+    }
   };
 
   const evaluateJob = (job: JobRecord): void => {
-    if (owned.has(job.name)) return;
     const state = loadScheduleState(workspace, job.name);
-    const occurrence = state?.occurrences[0];
-    if (occurrence) {
-      if (occurrence.status !== "running") return;
-      // A live orphan occupies its existing slot. Never signal persisted PIDs;
-      // an unsupervised attempt settles unknown only once that child is gone.
-      if (occurrence.childPid && processAlive(occurrence.childPid)) return;
-      const live = readLiveLock(jobLockPath(workspace, job.name));
-      if (live?.runId === occurrence.runId) return;
-      const previous = job.runs.find((run) => run.runId === occurrence.runId);
-      const outcome = previous?.outcome ?? "unknown";
-      settleScheduledOccurrence(workspace, job.name, occurrence.id, outcome, occurrence.runId!, previous?.exitCode ?? null);
-      log(`Recovered unsupervised scheduled run "${job.name}"; recorded ${outcome} without replay.`);
-      return;
-    }
+    if (state) recoverOrphans(job, state);
+
     const now = nowMs();
-    if (now < job.schedule.dueMs) return;
-    const id = oneshotOccurrenceId(job.schedule.dueMs);
-    if (now > job.schedule.dueMs + job.schedule.latenessMinutes * 60000) {
-      settleScheduledOccurrence(workspace, job.name, id, "expired", null, null);
-      log(`Job "${job.name}" recorded expired without running.`);
+    // Re-read after recovery: settled or running occurrences are never started.
+    const current = loadScheduleState(workspace, job.name);
+    const floor = current ? recordedFloor(current) : -Infinity;
+    const candidate = latestDueOccurrence(job.schedule, now, floor, job);
+    if (!candidate) return;
+    const { dueMs, deadlineMs } = candidate;
+    const id = occurrenceId(job.schedule, dueMs);
+    const existing = current?.occurrences.find((entry) => entry.id === id);
+    if (existing) return;
+
+    if (now > deadlineMs) {
+      // The latest eligible never-started occurrence aged out. One-shot jobs
+      // expire; recurring jobs skip it (latest-only coalescing: nothing older
+      // is replayed or recorded).
+      if (job.schedule.kind === "oneshot") {
+        settleScheduledOccurrence(workspace, job.name, id, "expired", null, null, dueMs);
+        log(`Job "${job.name}" recorded expired without running.`);
+      } else {
+        settleScheduledOccurrence(workspace, job.name, id, "lateness-skipped", null, null, dueMs);
+        log(`Recurring job "${job.name}" missed ${new Date(dueMs).toISOString()} past its catch-up window; the occurrence is skipped without backlog replay.`);
+      }
       return;
     }
-    launch(job, id);
+    // A new due minute while this job's own previous run is still active is
+    // an overlap: skip it without queuing or starting a second child.
+    if (owned.has(job.name)) {
+      settleScheduledOccurrence(workspace, job.name, id, "overlap-skipped", null, null, dueMs);
+      log(`Job "${job.name}" is still running; ${new Date(dueMs).toISOString()} is overlap-skipped without queuing.`);
+      return;
+    }
+    // Coalesce without backlog: durably skip older *eligible* due
+    // occurrences this catch-up could otherwise admit after the latest
+    // finishes. Nothing earlier than the job's creation (or the recorded
+    // floor) and nothing already out of window is recorded.
+    if (job.schedule.kind !== "oneshot") {
+      const listFloor = Math.max(floor, createdFloorMs(job));
+      const older = dueOccurrencesBetween(job.schedule, listFloor, dueMs - 1)
+        .filter((olderDue) => now <= occurrenceDeadline(job.schedule, olderDue))
+        .filter((olderDue) => !current?.occurrences.some((entry) => entry.id === occurrenceId(job.schedule, olderDue)));
+      if (older.length > 0) {
+        settleOccurrencesBulk(workspace, job.name, older.map((olderDue) => ({
+          id: occurrenceId(job.schedule, olderDue), dueMs: olderDue, outcome: "lateness-skipped" as const,
+        })));
+        log(`Recurring job "${job.name}" coalesced ${older.length} older occurrence${older.length === 1 ? "" : "s"}; only the latest runs.`);
+      }
+    }
+    launch(job, id, dueMs, deadlineMs);
   };
 
   const evaluate = (): void => {
@@ -133,7 +186,7 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
   process.on("SIGTERM", stop);
   const interval = setInterval(evaluate, tickIntervalMs());
   try {
-    log(`Automation Trigger started (pid ${process.pid}); evaluating saved one-shot jobs.`);
+    log(`Automation Trigger started (pid ${process.pid}); evaluating saved schedules (one-shot, cron, interval).`);
     evaluate();
     await stopped;
     clearInterval(interval);
@@ -147,4 +200,9 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
     releaseWorkspaceLock(lockPath);
     log("Automation Trigger stopped.");
   }
+}
+
+/** Planned next occurrence for CLI summaries; null when none is forthcoming. */
+export function nextDueFor(job: JobRecord, now: number): number | null {
+  return nextOccurrence(job.schedule, now, job);
 }

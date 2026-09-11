@@ -364,7 +364,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 
 #### 16.5 跨平台 Automation 管理与应用级 cron
 
-**状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 分片交付中。#39 提供一次性任务创建/查看/手动运行，#40 增加显式前台 `serve`、两小时默认窗口、持久化消费与重启恢复；尚无 OS 服务、重复日程、生命周期编辑或 automation Skill，也未部署或迁移旧任务。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
+**状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 分片交付中。#39 提供一次性任务创建/查看/手动运行，#40 增加显式前台 `serve`、两小时默认窗口、持久化消费与重启恢复，#41 增加数字五字段 cron 重复与固定间隔（显式时区、DST 跳过/重叠只算一次、latest-only 补跑、同任务 overlap 跳过）；尚无 OS 服务、生命周期编辑或 automation Skill，也未部署或迁移旧任务。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
 
 ##### 分工与管理入口
 

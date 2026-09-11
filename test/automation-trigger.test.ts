@@ -970,3 +970,365 @@ test("--catch-up changes the per-job lateness window; --no-catch-up and bad dura
   assert.equal(f.model.requests.length, 0);
   await stopServe(serve);
 });
+
+// ---------------------------------------------------------------------------
+// #41: cron recurrence, fixed intervals, catch-up, DST, overlap, failure
+// ---------------------------------------------------------------------------
+
+function addCron(f: Fixture, name: string, expr: string, extraArgs: string[] = [], task = "Recurring task."): void {
+  const result = spawnSync(process.execPath, [cli, "automation", "add", "--name", name, "--cron", expr, "--prompt-stdin", ...extraArgs, "--yes"], {
+    encoding: "utf8", cwd: f.root, input: `${task}\n`, env: baseEnv(f),
+  });
+  assert.equal(result.status, 0, result.stderr);
+}
+
+function addEvery(f: Fixture, name: string, duration: string, extraArgs: string[] = [], task = "Interval task."): void {
+  const result = spawnSync(process.execPath, [cli, "automation", "add", "--name", name, "--every", duration, "--prompt-stdin", ...extraArgs, "--yes"], {
+    encoding: "utf8", cwd: f.root, input: `${task}\n`, env: baseEnv(f),
+  });
+  assert.equal(result.status, 0, result.stderr);
+}
+
+function setClockAndWait(f: Fixture, ms: number, predicate: () => boolean): Promise<void> {
+  setClock(f, ms);
+  return waitFor(predicate);
+}
+
+async function settledOccurrence(f: Fixture, name: string, dueMs: number): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const result = await runCliAsync(f, ["automation", "show", name]);
+    assert.equal(result.code, 0, result.stderr);
+    const shown = JSON.parse(result.stdout);
+    const entries: Array<Record<string, unknown>> = shown.scheduleOccurrences ?? [];
+    const match = entries.find((entry) => entry.status === "settled" && entry.dueMs === dueMs);
+    if (match) return match;
+    // Backwards compatibility for one-job summaries that expose only the latest.
+    const latest = shown.scheduleOccurrence;
+    if (latest?.status === "settled" && latest.dueMs === dueMs) return latest;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`settled occurrence ${new Date(dueMs).toISOString()} for ${name} was not reported`);
+}
+
+test("a failed recurring occurrence does not stop later normal recurrence; rollback does not replay settled occurrences", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  // Same fake lark-cli and tool pattern as the slice-2 guarded-failure test.
+  const marker = join(f.root, "cron-fail-effect.log");
+  writeFileSync(join(f.bin, "lark-cli"), `#!/bin/sh
+case "$1 $2" in
+  "profile list") printf '%s' '${profileJson()}' ;;
+  "im send") echo effect >> '${marker}'; echo sent ;;
+  *) exit 2 ;;
+esac
+`, { mode: 0o755 });
+  setClock(f, DUE_MS);
+  addCron(f, "every-minute", "* * * * *", ["--timeout", "1h"], "Summarize the documents and report the result.");
+  const tool = (command: string, id: string): string => `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id, type: "function", function: { name: "bash", arguments: JSON.stringify({ command }) } }] }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`;
+  f.model.jobs.push(
+    gate(tool("lark-cli im send --as bot", "cron-effect")),
+    gate(tool("lark-cli doc delete doc-1 --as user --yes", "cron-blocked")),
+    gate(textResponse("MINUTE-TWO-OK")),
+    gate(textResponse("MINUTE-THREE-OK")),
+  );
+
+  const serve = startServe(f);
+  await waitStarted(serve);
+  const t0 = DUE_MS;
+  await waitFor(() => f.model.requests.length === 2);
+  await waitFor(() => /settled as failed/.test(serve.stderr));
+  const first = await settledOccurrence(f, "every-minute", t0);
+  assert.equal(first.outcome, "failed");
+  assert.equal(readFileSync(marker, "utf8"), "effect\n");
+
+  setClock(f, t0 + MIN);
+  await waitFor(() => f.model.requests.length === 3, 400);
+  const second = await settledOccurrence(f, "every-minute", t0 + MIN);
+  assert.equal(second.outcome, "completed");
+
+  // Clock rollback never re-runs a settled occurrence.
+  setClock(f, t0 - 5 * MIN);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(f.model.requests.length, 3, "a settled occurrence was redispatched after rollback");
+  setClock(f, t0 + 3 * MIN); // advance two whole minutes past the latest run
+  await waitFor(() => f.model.requests.length === 4, 400);
+  await settledOccurrence(f, "every-minute", t0 + 3 * MIN);
+  const shown = JSON.parse(runCli(f, ["automation", "show", "every-minute"]).stdout);
+  assert.equal(shown.recentRuns.length, 3);
+  assert.deepEqual(shown.recentRuns.map((r: { trigger: string }) => r.trigger), ["scheduled", "scheduled", "scheduled"]);
+  await stopServe(serve);
+});
+
+test("cron does not fire before the due minute", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  setClock(f, DUE_MS - 1_000); // enabled inside the minute before t0
+  addCron(f, "early", "0 9 * * *", ["--timeout", "1h"]); // 09:00 SH = t0
+  const serve = startServe(f);
+  await waitStarted(serve);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(f.model.requests.length, 0, "cron fired before its due minute");
+  assert.equal(JSON.parse(runCli(f, ["automation", "show", "early"]).stdout).scheduledState, "future");
+  await stopServe(serve);
+});
+
+test("recovery coalesces many missed cron minutes to the latest eligible one only (default 2h catch-up)", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  setClock(f, DUE_MS - 1_000);
+  addCron(f, "downtime", "* * * * *");
+  // Trigger starts after a 90-minute downtime: only the latest missed minute catches up.
+  f.model.jobs.push(gate(textResponse("COALESCED-LATEST")));
+  setClock(f, DUE_MS + 90 * MIN);
+  const serve = startServe(f);
+  await waitStarted(serve);
+  await waitFor(() => f.model.requests.length === 1);
+  const occ = await settle(f, "downtime");
+  assert.equal(occ.dueMs, DUE_MS + 90 * MIN);
+  assert.equal(occ.outcome, "completed");
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(f.model.requests.length, 1, "missed backlog was replayed");
+  await stopServe(serve);
+});
+
+test("adjustable catch-up windows change the cutoff; out-of-window occurrences are skipped without a run", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  // Two jobs present before the due minute: a 2h window and a 5m window.
+  addCron(f, "stale", "0 9 * * *");
+  addCron(f, "short", "0 9 * * *", ["--catch-up", "5m"]);
+  f.model.jobs.push(gate(textResponse("STALE-CATCHUP")));
+
+  // 6 minutes late: stale (2h) fires; short (5m) is already out of window.
+  setClock(f, DUE_MS + 6 * MIN);
+  const serve = startServe(f);
+  await waitStarted(serve);
+  await waitFor(() => f.model.requests.length === 1);
+  const stale = await settle(f, "stale");
+  assert.equal(stale.outcome, "completed");
+  const shortSkipped = await settledOccurrence(f, "short", DUE_MS);
+  assert.equal(shortSkipped.outcome, "lateness-skipped");
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(f.model.requests.length, 1, "an out-of-window recurring occurrence was dispatched");
+  await stopServe(serve);
+});
+
+test("catch-up disabled: the due minute still fires but older missed minutes never replay", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  addCron(f, "strict", "0 9 * * *", ["--no-catch-up", "--timeout", "1h"]); // single daily fire at DUE_MS
+  setClock(f, DUE_MS + 2 * MIN); // already two minutes past the only occurrence
+  const serve = startServe(f);
+  await waitStarted(serve);
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(f.model.requests.length, 0, "an older due minute replayed with catch-up disabled");
+  const skipped = await settledOccurrence(f, "strict", DUE_MS);
+  assert.equal(skipped.outcome, "lateness-skipped");
+  await stopServe(serve);
+});
+
+test("catch-up disabled: a fresh occurrence reached on its own minute fires normally", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  addCron(f, "strict-fresh", "0 9 * * *", ["--no-catch-up", "--timeout", "1h"]);
+  setClock(f, DUE_MS - 1_000); // enabled one second before the due minute
+  const serve = startServe(f);
+  await waitStarted(serve);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(f.model.requests.length, 0, "fired before its due minute");
+  f.model.jobs.push(gate(textResponse("ON-THE-MINUTE")));
+  setClock(f, DUE_MS);
+  await waitFor(() => f.model.requests.length === 1);
+  await settledOccurrence(f, "strict-fresh", DUE_MS);
+  await stopServe(serve);
+});
+
+test("fixed intervals anchor at first enablement, survive run duration and restart, and are distinct from cron steps", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  setClock(f, DUE_MS - 90 * MIN);
+  addEvery(f, "ninety", "90m", ["--timeout", "1h"]);
+  // The anchor is the enablement instant under the same controlled clock.
+  const created = JSON.parse(runCli(f, ["automation", "show", "ninety"]).stdout);
+  const anchor = Date.parse(created.schedule.anchoredAt);
+  assert.ok(Math.abs(anchor - (DUE_MS - 90 * MIN)) < 5_000);
+  assert.equal(Date.parse(created.nextDueAt), anchor + 90 * MIN);
+
+  f.model.jobs.push(gate(textResponse("FIRST-INTERVAL")));
+  setClock(f, anchor + 90 * MIN);
+  const serve = startServe(f);
+  await waitStarted(serve);
+  await waitFor(() => f.model.requests.length === 1);
+  await settledOccurrence(f, "ninety", anchor + 90 * MIN);
+
+  // Run duration does not shift the beat: even if completion is observed much
+  // later, the next grid point stays anchor + 180m.
+  f.model.jobs.push(gate(textResponse("SECOND-INTERVAL")));
+  setClock(f, anchor + 180 * MIN);
+  await waitFor(() => f.model.requests.length === 2);
+  await settledOccurrence(f, "ninety", anchor + 180 * MIN);
+  await stopServe(serve);
+
+  // Restart keeps the same anchor and catches up only the latest grid point.
+  f.model.jobs.push(gate(textResponse("AFTER-RESTART")));
+  setClock(f, anchor + 360 * MIN); // four grid points later
+  const restarted = startServe(f);
+  await waitStarted(restarted);
+  await waitFor(() => f.model.requests.length === 3);
+  await settledOccurrence(f, "ninety", anchor + 360 * MIN);
+  assert.equal(f.model.requests.length, 3, "interval backlog was replayed");
+  await stopServe(restarted);
+});
+
+test("a recurring occurrence during an active same-job run is overlap-skipped without queuing", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  addCron(f, "slow", "* * * * *", ["--timeout", "1h"], "Hold the model response open.");
+  const held = gate(textResponse("SLOW-HELD"), true);
+  f.model.jobs.push(held);
+  setClock(f, DUE_MS - 30_000);
+  const serve = startServe(f);
+  await waitStarted(serve);
+  setClock(f, DUE_MS);
+  await waitFor(() => f.model.requests.length === 1);
+
+  // Two more minutes pass while the first run is still active.
+  setClock(f, DUE_MS + MIN);
+  const skipped1 = await settledOccurrence(f, "slow", DUE_MS + MIN);
+  assert.equal(skipped1.outcome, "overlap-skipped");
+  setClock(f, DUE_MS + 2 * MIN);
+  const skipped2 = await settledOccurrence(f, "slow", DUE_MS + 2 * MIN);
+  assert.equal(skipped2.outcome, "overlap-skipped");
+  assert.equal(f.model.requests.length, 1, "an overlap-skipped occurrence started a child");
+
+  // After completion the skipped minutes are not queued; only a genuinely new
+  // minute fires.
+  held.release();
+  await settledOccurrence(f, "slow", DUE_MS);
+  f.model.jobs.push(gate(textResponse("LATER-MINUTE")));
+  setClock(f, DUE_MS + 3 * MIN);
+  await waitFor(() => f.model.requests.length === 2);
+  await settledOccurrence(f, "slow", DUE_MS + 3 * MIN);
+  await stopServe(serve);
+});
+
+test("recurring jobs share the two-run capacity and keep original waiting deadlines", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  addCron(f, "cap-a", "* * * * *", ["--timeout", "1h"]);
+  addCron(f, "cap-b", "* * * * *", ["--timeout", "1h"]);
+  // cap-c has no catch-up: its 09:00 minute is lost while the other two hold capacity.
+  addCron(f, "cap-c", "0 9 * * *", ["--no-catch-up", "--timeout", "1h"]);
+  const heldA = gate(textResponse("CAP-A"), true);
+  const heldB = gate(textResponse("CAP-B"), true);
+  f.model.jobs.push(heldA, heldB);
+  setClock(f, DUE_MS - 1_000);
+  const serve = startServe(f);
+  await waitStarted(serve);
+  setClock(f, DUE_MS);
+  await waitFor(() => f.model.requests.length === 2);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(f.model.requests.length, 2, "a third recurring job exceeded capacity");
+
+  // cap-c's 09:00 minute ages out while capacity is full: skipped, no run.
+  setClock(f, DUE_MS + MIN);
+  const skippedC = await settledOccurrence(f, "cap-c", DUE_MS);
+  assert.equal(skippedC.outcome, "lateness-skipped");
+  assert.equal(f.model.requests.length, 2);
+
+  // Releasing both slots frees the minute jobs; a skipped occurrence is never queued.
+  f.model.jobs.push(gate(textResponse("CAP-NEXT-A")), gate(textResponse("CAP-NEXT-B")));
+  heldA.release();
+  heldB.release();
+  await new Promise((r) => setTimeout(r, 300)); // both held runs complete
+  setClock(f, DUE_MS + 2 * MIN); // a genuinely new minute after the releases
+  await waitFor(() => f.model.requests.length === 4, 400);
+  await stopServe(serve);
+});
+
+test("DST: nonexistent New York cron minutes are skipped and the repeated fall-back minute fires once", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  // 02:30 every night: absent on 2025-03-09 (spring gap), repeated on 2025-11-02.
+  setClock(f, Date.parse("2025-03-08T12:00:00Z")); // created the day before the gap
+  addCron(f, "half-two", "30 2 * * *", ["--tz", "America/New_York", "--timeout", "1h"]);
+
+  const gapDay = Date.parse("2025-03-09T04:00:00Z"); // before the 02:00 local spring gap
+  setClock(f, gapDay);
+  const serve = startServe(f);
+  await waitStarted(serve);
+  setClock(f, Date.parse("2025-03-09T08:00:00Z")); // 04:00 local, well past the missing 02:30
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(f.model.requests.length, 0, "a nonexistent DST-gap calendar minute was dispatched");
+  // The next occurrence is the following day 02:30 -04:00 = 06:30Z.
+  const shown = JSON.parse(runCli(f, ["automation", "show", "half-two"]).stdout);
+  assert.equal(shown.nextDueAt, "2025-03-10T06:30:00.000Z");
+
+  f.model.jobs.push(gate(textResponse("POST-GAP")));
+  setClock(f, Date.parse("2025-03-10T06:30:00Z"));
+  await waitFor(() => f.model.requests.length === 1);
+  await stopServe(serve);
+
+  // Fall-back day: 01:30 repeats but fires exactly once.
+  setClock(f, Date.parse("2025-11-01T12:00:00Z")); // created the day before the fold
+  addCron(f, "fold", "30 1 * * *", ["--tz", "America/New_York", "--timeout", "1h"]);
+  f.model.jobs.push(gate(textResponse("FOLD-ONCE")));
+  setClock(f, Date.parse("2025-11-02T04:00:00Z")); // just before the first 01:30 (-04:00 = 05:30Z)
+  const serving = startServe(f);
+  await waitStarted(serving);
+  setClock(f, Date.parse("2025-11-02T07:00:00Z")); // past both readings (05:30 and 06:30)
+  await waitFor(() => f.model.requests.length === 2);
+  const fold = await settle(f, "fold");
+  assert.equal(fold.dueMs, Date.parse("2025-11-02T05:30:00Z"));
+  assert.equal(fold.outcome, "completed");
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(f.model.requests.length, 2, "the repeated DST-fold minute fired twice");
+  await stopServe(serving);
+});
+
+test("manual execution of a recurring job neither consumes nor shifts its schedule", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  setClock(f, DUE_MS - 30 * MIN);
+  addCron(f, "manual-shift", "0 9 * * *", ["--timeout", "1h"]); // 09:00 SH = DUE_MS
+  f.model.jobs.push(gate(textResponse("MANUAL-REC-41")));
+  const before = JSON.parse(runCli(f, ["automation", "show", "manual-shift"]).stdout).nextDueAt;
+  assert.equal(before, new Date(DUE_MS).toISOString());
+  const manual = await runCliAsync(f, ["automation", "run", "manual-shift"]);
+  assert.equal(manual.code, 0, manual.stderr);
+  assert.match(JSON.parse(manual.stdout).scheduleNotice, /neither consumes nor shifts/i);
+
+  const after = JSON.parse(runCli(f, ["automation", "show", "manual-shift"]).stdout);
+  assert.equal(after.nextDueAt, before, "manual run shifted recurrence");
+  assert.equal(after.scheduleOccurrence, null, "a manual run created a scheduled occurrence");
+  assert.equal(after.latestRun.trigger, "manual");
+
+  // The scheduled minute still fires exactly once.
+  f.model.jobs.push(gate(textResponse("SCHEDULED-REC-41")));
+  setClock(f, DUE_MS);
+  const serve = startServe(f);
+  await waitStarted(serve);
+  await waitFor(() => f.model.requests.length === 2);
+  const scheduled = JSON.parse(runCli(f, ["automation", "show", "manual-shift"]).stdout);
+  assert.equal(scheduled.recentRuns.filter((r: { trigger: string }) => r.trigger === "scheduled").length, 1);
+  await stopServe(serve);
+});
+
+test("cron jobs persist their explicit timezone and ignore later host timezone changes", async () => {
+  const f = await fixture();
+  gateServers.push(f.model.server);
+  addCron(f, "tokyo", "0 9 * * *", ["--tz", "Asia/Tokyo"]);
+  const shown = JSON.parse(runCli(f, ["automation", "show", "tokyo"]).stdout);
+  assert.equal(shown.schedule.timeZone, "Asia/Tokyo");
+  // 09:00 Tokyo is 00:00 UTC regardless of the test host zone.
+  const nextIso: string = shown.nextDueAt;
+  assert.equal(new Date(nextIso).getUTCHours(), 0);
+  assert.equal(new Date(nextIso).getUTCMinutes(), 0);
+  // The rule text and zone are both visible in the confirmation receipt.
+  const receipt = spawnSync(process.execPath, [cli, "automation", "add", "--name", "tokyo2", "--cron", "0 9 * * *", "--tz", "Asia/Tokyo", "--prompt-stdin", "--yes"], {
+    encoding: "utf8", cwd: f.root, input: "t\n", env: baseEnv(f),
+  });
+  assert.equal(receipt.status, 0, receipt.stderr);
+  assert.match(receipt.stderr, /Asia\/Tokyo/);
+  assert.match(receipt.stderr, /cron "0 9 \* \* \*"/);
+});

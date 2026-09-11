@@ -151,11 +151,22 @@ test("add validates name, schedule, instructions, durations, and timezone before
     { args: ["--name", "Bad_Name", "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], match: /safe name/ },
     { args: ["--name", "-lead", "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], match: /safe name|requires a value/ },
     { args: ["--name", "x".repeat(33), "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], match: /safe name/ },
-    { args: ["--name", "job", "--cron", "0 9 * * *", "--prompt-stdin", "--yes"], match: /supports one-shot jobs only|later release/i },
-    { args: ["--name", "job", "--every", "90m", "--prompt-stdin", "--yes"], match: /supports one-shot jobs only|later release/i },
+    { args: ["--name", "job", "--at", "2030-06-01T09:00", "--cron", "0 9 * * *", "--prompt-stdin", "--yes"], match: /exactly one schedule/i },
+    { args: ["--name", "job", "--cron", "0 9 * * *", "--every", "90m", "--prompt-stdin", "--yes"], match: /exactly one schedule/i },
     { args: ["--name", "job", "--at", "2030-06-01T09:00", "--at", "2030-06-02T09:00", "--prompt-stdin", "--yes"], match: /exactly one schedule/i },
     { args: ["--name", "job", "--prompt-stdin", "--yes"], match: /exactly one schedule/i },
     { args: ["--name", "job", "--at", "not-a-time", "--prompt-stdin", "--yes"], match: /ISO 8601/ },
+    { args: ["--name", "job", "--cron", "0 9 * * * 2026", "--prompt-stdin", "--yes"], match: /five.*field|seconds/i },
+    { args: ["--name", "job", "--cron", "@daily", "--prompt-stdin", "--yes"], match: /macros|five.*field/i },
+    { args: ["--name", "job", "--cron", "0 9 * * MON", "--prompt-stdin", "--yes"], match: /cron.*invalid|unsupported syntax/i },
+    { args: ["--name", "job", "--cron", "Mon..Fri", "--prompt-stdin", "--yes"], match: /five.*field/i },
+    { args: ["--name", "job", "--cron", "60 9 * * *", "--prompt-stdin", "--yes"], match: /between 0 and 59/i },
+    { args: ["--name", "job", "--cron", "0 9 31 2 *", "--prompt-stdin", "--yes"], match: /never matches/i },
+    { args: ["--name", "job", "--cron", "0 9 * * *", "--tz", "Mars/Olympus", "--prompt-stdin", "--yes"], match: /unknown timezone/i },
+    { args: ["--name", "job", "--every", "45s", "--prompt-stdin", "--yes"], match: /positive duration/i },
+    { args: ["--name", "job", "--every", "0m", "--prompt-stdin", "--yes"], match: /at least one minute/i },
+    { args: ["--name", "job", "--cron", "0 9 * * *", "--prompt-stdin", "--no-catch-up", "--catch-up", "2h", "--yes"], match: /catch-up/i },
+    { args: ["--name", "job", "--at", "2030-06-01T09:00", "--prompt-stdin", "--no-catch-up", "--yes"], match: /--no-catch-up applies only to recurring/i },
     { args: ["--name", "job", "--at", "2030-06-01T09:00", "--tz", "Mars/Olympus", "--prompt-stdin", "--yes"], match: /unknown timezone/i },
     { args: ["--name", "job", "--at", "2030-06-01T09:00", "--timeout", "30s", "--prompt-stdin", "--yes"], match: /positive duration/i },
     { args: ["--name", "job", "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], input: "   \n", match: /nonempty task/ },
@@ -261,6 +272,63 @@ test("receipt, show, and list expose the stored plan; seeded standing instructio
 
   assert.equal(readFileSync(join(f.briefing, "AGENTS.md"), "utf8"), "BRIEFING-POLICY-SENTINEL do not overwrite\n");
   assert.equal(readFileSync(join(f.briefing, "systemd", "feishu-briefing.service"), "utf8"), "briefing unit\n");
+});
+
+test("cron and interval creation saves the rule, timezone, timing policies, and next occurrence; manual runs do not shift timing", async () => {
+  const f = await fixture();
+  modelServers.push(f.model.server);
+
+  const weekday = runCli(f, ["automation", "add", "--name", "weekday-morning", "--cron", "0 9 * * 1-5", "--prompt-stdin", "--yes"], { input: "weekday task\n" });
+  assert.equal(weekday.code, 0, weekday.stderr);
+  const cronReceipt = JSON.parse(weekday.stdout);
+  assert.equal(cronReceipt.schedule.kind, "cron");
+  assert.equal(cronReceipt.schedule.expr, "0 9 * * 1-5");
+  assert.equal(cronReceipt.schedule.timeZone, "Asia/Shanghai");
+  assert.equal(cronReceipt.schedule.catchUpMinutes, 120);
+  assert.match(weekday.stderr, /cron/);
+  assert.match(weekday.stderr, /Asia\/Shanghai/);
+  assert.match(weekday.stderr, /120m catch-up/);
+  // Weekday 09:00 in Shanghai: verify the CLI-reported next occurrence against
+  // an independent UTC scan rather than a hardcoded date.
+  const nextIso = cronReceipt.nextDueAt;
+  assert.ok(typeof nextIso === "string");
+  const next = new Date(nextIso);
+  const shanghai = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", hourCycle: "h23", weekday: "short", hour: "2-digit", minute: "2-digit" }).format(next);
+  assert.match(shanghai, /Mon|Tue|Wed|Thu|Fri/);
+  assert.match(shanghai, /09:00/);
+  assert.ok(next.getTime() >= Date.now() - 60_000);
+
+  const ny = runCli(f, ["automation", "add", "--name", "nyc", "--cron", "30 8,20 * * *", "--tz", "America/New_York", "--catch-up", "30m", "--prompt-stdin", "--yes"], { input: "t\n" });
+  assert.equal(ny.code, 0, ny.stderr);
+  const nyJob = JSON.parse(ny.stdout);
+  assert.equal(nyJob.schedule.timeZone, "America/New_York");
+  assert.equal(nyJob.schedule.catchUpMinutes, 30);
+
+  const noCatch = runCli(f, ["automation", "add", "--name", "time-sensitive", "--cron", "0 10 * * *", "--no-catch-up", "--prompt-stdin", "--yes"], { input: "t\n" });
+  assert.equal(noCatch.code, 0, noCatch.stderr);
+  assert.equal(JSON.parse(noCatch.stdout).schedule.catchUpMinutes, null);
+  assert.match(noCatch.stderr, /catch-up disabled/);
+
+  const before = Date.now();
+  const every = runCli(f, ["automation", "add", "--name", "ninety", "--every", "90m", "--prompt-stdin", "--yes"], { input: "t\n" });
+  assert.equal(every.code, 0, every.stderr);
+  const intervalReceipt = JSON.parse(every.stdout);
+  assert.equal(intervalReceipt.schedule.kind, "interval");
+  assert.equal(intervalReceipt.schedule.intervalMinutes, 90);
+  assert.equal(intervalReceipt.schedule.catchUpMinutes, 120);
+  const anchoredAt = Date.parse(intervalReceipt.schedule.anchoredAt);
+  assert.ok(anchoredAt >= before - 1000 && anchoredAt <= Date.now() + 1000);
+  assert.equal(Date.parse(intervalReceipt.nextDueAt), anchoredAt + 90 * 60_000);
+  assert.match(every.stderr, /every 90m/);
+
+  // list and show report the same saved rules without mutating anything.
+  const list = JSON.parse(runCli(f, ["automation", "list"]).stdout).jobs;
+  assert.deepEqual(list.map((j: { name: string }) => j.name).sort(), ["ninety", "nyc", "time-sensitive", "weekday-morning"]);
+  const shown = JSON.parse(runCli(f, ["automation", "show", "weekday-morning"]).stdout);
+  assert.equal(shown.schedule.expr, "0 9 * * 1-5");
+  assert.equal(shown.task, "weekday task");
+  assert.equal(shown.scheduleOccurrence, null);
+  assert.match(shown.scheduleNotice, /next scheduled occurrence/i);
 });
 
 test("profile resolves through selector, environment, and local default; unknown/unresolvable profiles fail without discovery", async () => {

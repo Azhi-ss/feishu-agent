@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseDurationMinutes, parseOneShot, scheduleEligibilityNotice } from "../src/automation.js";
+import {
+  intervalFirstAtOrAfter,
+  intervalLastAtOrBefore,
+  parseCronSchedule,
+  parseDurationMinutes,
+  parseInterval,
+  parseOneShot,
+  scheduleEligibilityNotice,
+  cronFirstAtOrAfter,
+  cronLastAtOrBefore,
+  type CronSchedule,
+} from "../src/automation.js";
 
 test("parseDurationMinutes accepts positive minute/hour/day values and rejects the rest", () => {
   assert.equal(parseDurationMinutes("1m"), 1);
@@ -53,4 +64,85 @@ test("offset-less ambiguous or nonexistent local times fail and point at an expl
   // Explicit offsets remain absolute even at the same wall minutes.
   assert.equal(parseOneShot("2025-11-02T01:30-04:00", "America/New_York").dueMs, Date.parse("2025-11-02T05:30:00.000Z"));
   assert.equal(parseOneShot("2025-03-09T02:30-04:00", "America/New_York").dueMs, Date.parse("2025-03-09T06:30:00.000Z"));
+});
+
+const cron = (expr: string, tz = "Asia/Shanghai"): CronSchedule => parseCronSchedule(expr, tz, 120);
+
+test("cron accepts wildcards, lists, ranges, and steps; rejects seconds, macros, names, and extensions", () => {
+  assert.equal(cronFirstAtOrAfter(cron("* * * * *"), Date.parse("2030-06-03T01:00:30Z"), 0), Date.parse("2030-06-03T01:01:00Z"));
+  for (const bad of [
+    "0 9 * * * 0", "30 0 9 * * *", "@daily", "@hourly", "0 9 * * MON", "0 9 * JAN *",
+    "0 9,10, * * *", "60 9 * * *", "0 24 * * *", "0 9 * * 8", "0 9 0 * *",
+    "0 9 32 * *", "0 9 * 13 *", "0 9 * * 1-8", "*/2/3 * * * *", "5-1 * * * *",
+    "0 9 * * 1#3", "0 9 L * *", "0 9 * * ?", "Mon,Tue-Fri", "0 9 * * *%x",
+  ]) {
+    assert.throws(() => cron(bad), /cron|five/i, bad);
+  }
+  // systemd OnCalendar must not be approximated.
+  assert.throws(() => cron("Mon..Fri 09:00"), /cron|five/i);
+});
+
+test("cron lists, ranges, and steps resolve in the job timezone, not the host zone", () => {
+  // 09:00/09:30 weekday mornings in Shanghai = 01:00/01:30 UTC.
+  const morning = cron("0,30 9 * * 1-5");
+  // 2030-06-01 is a Saturday; next Monday is 2030-06-03.
+  assert.equal(cronFirstAtOrAfter(morning, Date.parse("2030-06-01T00:00:00Z"), 0), Date.parse("2030-06-03T01:00:00Z"));
+  assert.equal(cronFirstAtOrAfter(morning, Date.parse("2030-06-03T01:00:00Z"), 0), Date.parse("2030-06-03T01:00:00Z")); // at-or-after is inclusive
+  assert.equal(cronFirstAtOrAfter(morning, Date.parse("2030-06-03T01:01:00Z"), 0), Date.parse("2030-06-03T01:30:00Z"));
+  assert.equal(cronFirstAtOrAfter(morning, Date.parse("2030-06-05T02:00:00Z"), 0), Date.parse("2030-06-06T01:00:00Z")); // Friday after 09:30 -> Monday
+
+  const step = cron("*/15 8-10 * * *");
+  assert.equal(cronFirstAtOrAfter(step, Date.parse("2030-06-03T00:50:00Z"), 0), Date.parse("2030-06-03T01:00:00Z")); // next is 09:00 SH
+  assert.equal(cronFirstAtOrAfter(step, Date.parse("2030-06-02T23:00:00Z"), 0), Date.parse("2030-06-03T00:00:00Z")); // 08:00 SH
+});
+
+test("DOM and DOW are OR when both restricted; impossible dates are rejected at creation", () => {
+  // Fire on the 1st OR on Mondays.
+  const mixed = cron("0 9 1 * 1");
+  // 2030-06-01 is Saturday (1st, matches DOM); 2030-06-03 is Monday (matches DOW).
+  assert.equal(cronFirstAtOrAfter(mixed, Date.parse("2030-05-31T00:00:00Z"), 0), Date.parse("2030-06-01T01:00:00Z"));
+  assert.equal(cronFirstAtOrAfter(mixed, Date.parse("2030-06-01T02:00:00Z"), 0), Date.parse("2030-06-03T01:00:00Z"));
+  assert.throws(() => cron("0 9 31 2 *"), /never matches/i);
+  // Feb 30 + Monday restriction is feasible via the OR/DOW side, so it is valid.
+  // February 29th exists in leap years; must be accepted.
+  assert.doesNotThrow(() => cron("0 9 29 2 *"));
+  // 0 and 7 both mean Sunday.
+  assert.equal(cronFirstAtOrAfter(cron("0 9 * * 7"), Date.parse("2030-06-01T00:00:00Z"), 0), cronFirstAtOrAfter(cron("0 9 * * 0"), Date.parse("2030-06-01T00:00:00Z"), 0));
+});
+
+test("cron latest-at-or-before coalesces missed occurrences and respects the recorded floor", () => {
+  const morning = cron("0 9 * * *");
+  const afterMonday = Date.parse("2030-06-04T05:00:00Z"); // Thursday, 13:00 Shanghai
+  // Three missed mornings (Mon-Wed) plus today's coalesce to the latest only.
+  assert.equal(cronLastAtOrBefore(morning, afterMonday, Date.parse("2030-05-31T00:00:00Z")), Date.parse("2030-06-04T01:00:00Z"));
+  // The floor is strict: a settled latest morning is not offered again.
+  assert.equal(cronLastAtOrBefore(morning, afterMonday, Date.parse("2030-06-04T01:00:00Z")), null);
+});
+
+test("DST gaps are skipped and folds fire once; timezone changes do not shift saved schedules", () => {
+  const ny = cron("30 2 * * *", "America/New_York");
+  // 2025-03-09 02:30 does not exist (spring forward): the rule simply has no
+  // occurrence that day; next match is 2025-03-10 02:30 -04:00 = 06:30Z.
+  assert.equal(cronFirstAtOrAfter(ny, Date.parse("2025-03-08T12:00:00Z"), 0), Date.parse("2025-03-10T06:30:00Z"));
+  const fold = cron("30 1 * * *", "America/New_York");
+  // 2025-11-02 01:30 repeats: exactly one planned minute (earlier instant).
+  const at = cronFirstAtOrAfter(fold, Date.parse("2025-11-01T12:00:00Z"), 0);
+  assert.equal(at, Date.parse("2025-11-02T05:30:00Z")); // -04:00, the pre-transition reading
+  const again = cronFirstAtOrAfter(fold, at + 1, 0);
+  assert.equal(again, Date.parse("2025-11-03T06:30:00Z")); // repeated -05:00 reading is not a second occurrence
+});
+
+test("fixed intervals are elapsed durations anchored at first enablement", () => {
+  const anchor = Date.parse("2030-06-01T00:00:00Z");
+  const every90 = parseInterval("90m", anchor);
+  assert.equal(intervalFirstAtOrAfter(every90, anchor), anchor + 90 * 60_000); // first run one interval later
+  assert.equal(intervalFirstAtOrAfter(every90, anchor + 30 * 60_000), anchor + 90 * 60_000);
+  assert.equal(intervalFirstAtOrAfter(every90, anchor + 90 * 60_000), anchor + 90 * 60_000);
+  assert.equal(intervalFirstAtOrAfter(every90, anchor + 91 * 60_000), anchor + 180 * 60_000);
+  assert.equal(intervalFirstAtOrAfter(every90, anchor + 200 * 60_000), anchor + 270 * 60_000);
+  // Recovery coalesces to the latest grid point only.
+  assert.equal(intervalLastAtOrBefore(every90, anchor + 200 * 60_000, anchor), anchor + 180 * 60_000);
+  assert.equal(intervalLastAtOrBefore(every90, anchor + 200 * 60_000, anchor + 180 * 60_000), null);
+  assert.throws(() => parseInterval("30s", anchor), /positive duration/i);
+  assert.throws(() => parseInterval("0m", anchor), /at least one minute/i);
 });

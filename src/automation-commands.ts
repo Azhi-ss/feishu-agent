@@ -1,4 +1,4 @@
-// feishu automation command handlers (slice 1 #39, slice 2 #40).
+// feishu automation command handlers (slice 1 #39, slice 2 #40, recurrence #41).
 // Structured results go to stdout as one JSON object; English diagnostics and
 // interactive confirmation go to stderr. All file writes happen only after
 // complete validation and affirmative confirmation.
@@ -11,37 +11,46 @@ import {
   DEFAULT_LATENESS_MINUTES,
   DEFAULT_TIMEZONE,
   DEFAULT_TIMEOUT_MINUTES,
+  createdFloorMs,
   ensureWorkspace,
-  findOccurrence,
+  latestDueOccurrence,
   listJobs,
   loadJob,
   loadScheduleState,
   managedWorkspaceHome,
+  nextOccurrence,
+  nextOccurrenceAfterFloor,
   nowMs,
-  oneshotOccurrenceId,
+  occurrenceDeadline,
+  parseCronSchedule,
   parseDurationMinutes,
+  parseInterval,
   parseOneShot,
   resolveLarkProfile,
-  resolvedLocal,
+  resolveScheduleLabel,
   saveJob,
   scheduleEligibilityNotice,
   workspacePaths,
   validateName,
   type JobRecord,
-  type OneShotSchedule,
   type OccurrenceState,
+  type OneShotSchedule,
+  type Schedule,
 } from "./automation.js";
 import { runJobManual } from "./automation-runner.js";
 import { liveTrigger, serve as serveTrigger } from "./automation-trigger.js";
 
 const RECURSION_NOTICE = "Automation management is disabled inside an inherited unattended run (loop prevention). Run this command from an ordinary Feishu session.";
 
-interface AddOptions {
+interface AddInput {
   name: string;
-  at: string;
+  at?: string;
+  cron?: string;
+  every?: string;
   timeZone: string;
   timeoutMinutes: number;
-  latenessMinutes: number;
+  catchUpRaw?: string;
+  noCatchUp: boolean;
   task: string;
   profile: string;
   yes: boolean;
@@ -102,14 +111,22 @@ function triggerNotice(root: string): string {
     : "The scheduling Trigger is not running. Start `feishu automation serve` explicitly for scheduled firing; saving a job does not start it.";
 }
 
-function planLines(options: AddOptions, schedule: OneShotSchedule, root: string): string[] {
+function catchUpPolicy(schedule: Schedule): string {
+  if (schedule.kind === "oneshot") return `${schedule.latenessMinutes}m lateness window`;
+  return schedule.catchUpMinutes === null ? "catch-up disabled (due minute only)" : `${schedule.catchUpMinutes}m catch-up`;
+}
+
+function planLines(input: AddInput, schedule: Schedule, nextDue: number | null, root: string): string[] {
+  const next = nextDue === null ? "none within the planning horizon" : new Date(nextDue).toISOString();
   return [
-    "Automation Job plan (one-shot):",
-    `  name:        ${options.name}`,
-    `  task:        ${options.task.trim().split("\n").join("\n               ")}`,
-    `  time:        ${resolvedLocal(schedule)} (lateness window ${schedule.latenessMinutes}m)`,
-    `  timeout:     ${options.timeoutMinutes} minute${options.timeoutMinutes === 1 ? "" : "s"}`,
-    `  lark profile: ${options.profile}`,
+    `Automation Job plan (${schedule.kind}):`,
+    `  name:        ${input.name}`,
+    `  task:        ${input.task.trim().split("\n").join("\n               ")}`,
+    `  schedule:    ${resolveScheduleLabel(schedule)}`,
+    `  timezone:    ${schedule.kind === "interval" ? "n/a (elapsed duration)" : schedule.timeZone}`,
+    `  timing:      ${catchUpPolicy(schedule)}; next occurrence ${next}`,
+    `  timeout:     ${input.timeoutMinutes} minute${input.timeoutMinutes === 1 ? "" : "s"}`,
+    `  lark profile: ${input.profile}`,
     "  identity:    ordinary messages as bot; document appends as user (prompt-level policy)",
     triggerNotice(root),
   ];
@@ -126,6 +143,25 @@ async function confirm(lines: string[], yes: boolean): Promise<void> {
     const answer = (await prompt.question("Create this Automation Job? [y/N] ")).trim().toLowerCase();
     if (answer !== "y" && answer !== "yes") fail("Declined; no Automation Job was created.");
   } finally { prompt.close(); }
+}
+
+/** Parse exactly one schedule kind, rejecting conflicts before mutation. */
+function buildSchedule(rest: string[], input: AddInput, createdAtMs: number): Schedule {
+  const kinds = [input.at !== undefined, input.cron !== undefined, input.every !== undefined].filter(Boolean).length;
+  if (kinds !== 1) {
+    fail("Provide exactly one schedule: --at <ISO-time> (one-shot), --cron '<five fields>' (recurring), or --every <duration> (fixed interval).");
+  }
+  if (input.catchUpRaw !== undefined && input.noCatchUp) fail("--catch-up and --no-catch-up are mutually exclusive.");
+  if (input.at !== undefined) {
+    if (input.noCatchUp) fail("--no-catch-up applies only to recurring schedules (--cron/--every); a one-shot always has a lateness window (use --catch-up to adjust it).");
+    const latenessMinutes = input.catchUpRaw === undefined ? DEFAULT_LATENESS_MINUTES : parseDurationMinutes(input.catchUpRaw);
+    return { ...parseOneShot(input.at, input.timeZone), latenessMinutes };
+  }
+  const catchUpMinutes = input.noCatchUp ? null : input.catchUpRaw === undefined ? DEFAULT_LATENESS_MINUTES : parseDurationMinutes(input.catchUpRaw);
+  if (input.cron !== undefined) return parseCronSchedule(input.cron, input.timeZone, catchUpMinutes);
+  const interval = parseInterval(input.every!, createdAtMs);
+  interval.catchUpMinutes = catchUpMinutes;
+  return interval;
 }
 
 export async function automationCommand(args: string[]): Promise<number> {
@@ -161,22 +197,32 @@ export async function automationCommand(args: string[]): Promise<number> {
     const name = flagValue(rest, "--name");
     if (!name) fail("automation add requires --name <slug>.");
     validateName(name);
-    const at = flagValue(rest, "--at");
-    if (!at) fail("Exactly one schedule is required (--at <ISO-time> for a one-shot). Cron and interval schedules arrive in a later release.");
     const timeZone = flagValue(rest, "--tz") ?? DEFAULT_TIMEZONE;
     const timeoutMinutes = flagValue(rest, "--timeout") ? parseDurationMinutes(flagValue(rest, "--timeout")!) : DEFAULT_TIMEOUT_MINUTES;
     if (timeoutMinutes < 1) fail("Execution timeout must be at least one minute.");
-    const latenessMinutes = flagValue(rest, "--catch-up") === undefined
-      ? DEFAULT_LATENESS_MINUTES : parseDurationMinutes(flagValue(rest, "--catch-up")!);
     const task = readTask(rest);
-
     if (existsSync(join(root, "jobs", name, "job.json"))) fail(`An Automation Job named "${name}" already exists; choose a different name.`);
 
-    const schedule = { ...parseOneShot(at, timeZone), latenessMinutes };
-    const profile = resolveLarkProfile(process.env.LARK_PROFILE);
+    const createdIso = new Date(nowMs()).toISOString();
+    const input: AddInput = {
+      name,
+      at: flagValue(rest, "--at"),
+      cron: flagValue(rest, "--cron"),
+      every: flagValue(rest, "--every"),
+      timeZone,
+      timeoutMinutes,
+      catchUpRaw: flagValue(rest, "--catch-up"),
+      noCatchUp: rest.includes("--no-catch-up"),
+      task: task.replace(/\s+$/, ""),
+      profile: "",
+      yes: rest.includes("--yes"),
+    };
+    // Validate the complete schedule and profile before showing the plan.
+    const schedule = buildSchedule(rest, input, Date.parse(createdIso));
+    input.profile = resolveLarkProfile(process.env.LARK_PROFILE);
+    const nextDue = nextOccurrence(schedule, nowMs(), { createdAt: createdIso } as JobRecord);
 
-    const options: AddOptions = { name, at, timeZone, timeoutMinutes, latenessMinutes, task: task.replace(/\s+$/, ""), profile, yes: rest.includes("--yes") };
-    await confirm(planLines(options, schedule, root), options.yes);
+    await confirm(planLines(input, schedule, nextDue, root), input.yes);
 
     // Everything validated and confirmed: seed the managed workspace (missing
     // standing instructions only) and atomically persist the new record.
@@ -184,9 +230,9 @@ export async function automationCommand(args: string[]): Promise<number> {
     const job: JobRecord = {
       version: 1,
       name,
-      createdAt: new Date().toISOString(),
-      profile,
-      task: options.task,
+      createdAt: createdIso,
+      profile: input.profile,
+      task: input.task,
       schedule,
       timeoutMinutes,
       state: "enabled",
@@ -221,12 +267,6 @@ export async function automationCommand(args: string[]): Promise<number> {
   return 1;
 }
 
-function oneshotOccurrence(root: string, job: JobRecord): OccurrenceState | null | undefined {
-  const state = loadScheduleStateFor(root, job.name);
-  if (state === undefined) return undefined;
-  return findOccurrence(state, oneshotOccurrenceId(job.schedule.dueMs));
-}
-
 function loadScheduleStateFor(root: string, name: string) {
   try {
     return loadScheduleState(workspacePaths(root), name);
@@ -239,38 +279,95 @@ function loadScheduleStateFor(root: string, name: string) {
   }
 }
 
+/** Latest ledger entry, if any. */
+function latestOccurrence(state: ReturnType<typeof loadScheduleStateFor>): OccurrenceState | null {
+  if (!state || state.occurrences.length === 0) return null;
+  return state.occurrences.reduce((latest, entry) => entry.dueMs > latest.dueMs ? entry : latest);
+}
+
 function scheduledStateFor(job: JobRecord, occurrence: OccurrenceState | null | undefined, now: number): string {
   if (occurrence === undefined) return "unknown";
   if (occurrence?.status === "running") return "running";
-  switch (occurrence?.outcome) {
-    case "completed":
-    case "failed":
-    case "timeout":
-    case "unknown":
-      return "consumed";
-    case "overlap-skipped":
-      return "overlap-skipped";
-    case "expired":
-      return "expired";
-    default: {
-      const windowEnd = job.schedule.dueMs + job.schedule.latenessMinutes * 60000;
-      return now < job.schedule.dueMs ? "future" : now <= windowEnd ? "due" : "expired";
-    }
+  const outcome = occurrence?.outcome;
+  if (job.schedule.kind === "oneshot") {
+    // A one-shot ledger outcome is terminal and authoritative even if the
+    // clock later rolls back before the due instant (no replay, no "future").
+    if (outcome === "expired") return "expired";
+    if (outcome === "overlap-skipped") return "overlap-skipped";
+    if (outcome) return "consumed";
+    const dueMinute = Math.floor(job.schedule.dueMs / 60_000) * 60_000;
+    if (now < dueMinute) return "future";
+    return now <= occurrenceDeadline(job.schedule, job.schedule.dueMs) ? "due" : "expired";
   }
+  // Recurring: an in-window occurrence the Trigger has not processed yet is
+  // "due"; otherwise report the genuinely forthcoming minute. A settled
+  // current minute never transiently reads as "expired".
+  const floor = occurrence?.dueMs ?? createdFloorMs(job);
+  const pending = latestDueOccurrence(job.schedule, now, floor, job);
+  if (pending && now >= pending.dueMs) return "due";
+  const next = nextOccurrenceAfterFloor(job.schedule, now, Math.max(floor, createdFloorMs(job)), job);
+  return next === null ? "active" : "future";
+}
+
+function scheduleSummary(schedule: Schedule) {
+  if (schedule.kind === "oneshot") {
+    return {
+      kind: "oneshot" as const,
+      resolvedLocal: resolveOneShotLabel(schedule),
+      timeZone: schedule.timeZone,
+      offset: schedule.offset,
+      latenessMinutes: schedule.latenessMinutes,
+    };
+  }
+  if (schedule.kind === "cron") {
+    return {
+      kind: "cron" as const,
+      expr: schedule.expr,
+      resolvedLocal: resolveScheduleLabel(schedule),
+      timeZone: schedule.timeZone,
+      catchUpMinutes: schedule.catchUpMinutes,
+    };
+  }
+  return {
+    kind: "interval" as const,
+    resolvedLocal: resolveScheduleLabel(schedule),
+    intervalMinutes: schedule.intervalMinutes,
+    anchoredAt: new Date(schedule.anchorMs).toISOString(),
+    catchUpMinutes: schedule.catchUpMinutes,
+  };
+}
+
+function resolveOneShotLabel(schedule: OneShotSchedule): string {
+  // Local wrapper kept out of automation.ts to preserve its one-shot-only API.
+  const dtf = new Intl.DateTimeFormat("en-CA", {
+    timeZone: schedule.timeZone, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+  if (schedule.offset) {
+    return `${dtf.format(new Date(schedule.dueMs)).replace(", ", " ")} ${schedule.timeZone} (absolute ${schedule.offset})`;
+  }
+  return `${schedule.wall.replace("T", " ")} ${schedule.timeZone}`;
 }
 
 function jobSummary(root: string, job: JobRecord) {
   const latest = job.runs.at(-1) ?? null;
   const trigger = liveTrigger(workspacePaths(root));
-  const occurrence = oneshotOccurrence(root, job);
-  const scheduledState = scheduledStateFor(job, occurrence, nowMs());
+  // undefined = ledger unreadable/corrupt (fail closed); null = no entry yet.
+  const state = loadScheduleStateFor(root, job.name);
+  const occurrence: OccurrenceState | null | undefined = state === undefined ? undefined : latestOccurrence(state);
+  const now = nowMs();
+  const scheduledState = scheduledStateFor(job, occurrence, now);
+  const floor = occurrence?.dueMs ?? createdFloorMs(job);
+  const nextDueMs = state === undefined ? null
+    : nextOccurrenceAfterFloor(job.schedule, now, Math.max(floor, createdFloorMs(job)), job);
+  const showNext = scheduledState === "future" || scheduledState === "due";
   return {
     name: job.name,
     state: job.state,
     scheduledState,
-    nextDueAt: scheduledState === "future" || scheduledState === "due" ? new Date(job.schedule.dueMs).toISOString() : null,
+    nextDueAt: showNext && nextDueMs !== null ? new Date(nextDueMs).toISOString() : null,
     profile: job.profile,
-    schedule: { kind: job.schedule.kind, resolvedLocal: resolvedLocal(job.schedule), timeZone: job.schedule.timeZone, offset: job.schedule.offset, latenessMinutes: job.schedule.latenessMinutes },
+    schedule: scheduleSummary(job.schedule),
     timeoutMinutes: job.timeoutMinutes,
     createdAt: job.createdAt,
     latestRun: latest ? { outcome: latest.outcome, startedAt: latest.startedAt, trigger: latest.trigger } : null,
@@ -281,14 +378,32 @@ function jobSummary(root: string, job: JobRecord) {
 
 function jobView(root: string, job: JobRecord) {
   const state = loadScheduleStateFor(root, job.name);
+  const latest: OccurrenceState | null | undefined = state === undefined ? undefined : latestOccurrence(state);
+  let scheduleNotice: string;
+  if (state === undefined) {
+    scheduleNotice = "Schedule state is unavailable; cannot determine eligibility. Evidence is preserved.";
+  } else {
+    try {
+      scheduleNotice = scheduleEligibilityNotice(job.schedule, nowMs(), state);
+    } catch (error) {
+      if (!(error instanceof AutomationError)) throw error;
+      scheduleNotice = "Schedule state is unavailable; cannot determine eligibility. Evidence is preserved.";
+    }
+  }
   return {
     ...jobSummary(root, job),
     task: job.task,
     latestRun: job.runs.at(-1) ?? null,
     recentRuns: job.runs.slice(-10),
-    scheduleOccurrence: oneshotOccurrence(root, job) ?? null,
-    scheduleNotice: state === undefined
-      ? "Schedule state is unavailable; cannot determine eligibility. Evidence is preserved."
-      : scheduleEligibilityNotice(job.schedule, nowMs(), state),
+    scheduleOccurrence: latest ?? null,
+    // Recurring ledgers grow one entry per planned minute; expose the recent
+    // tail so tests (and future lifecycle commands) can inspect any outcome
+    // without asserting on private storage internals. One-shot ledgers have
+    // exactly one entry, which is also the scheduleOccurrence.
+    scheduleOccurrences: state === undefined ? undefined : (state?.occurrences.slice(-50) ?? []),
+    scheduleNotice,
   };
 }
+
+// The command layer only reads ledger entries through the storage module; it
+// never parses private schedule or queue fields directly.
