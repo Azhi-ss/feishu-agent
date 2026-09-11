@@ -16,6 +16,7 @@ import { settingsManagerFor } from "./settings.js";
 import { corePolicyExtension } from "./core-extension.js";
 import { startupBannerExtension } from "./startup-banner.js";
 import { findSkillExtension } from "./find-skill.js";
+import { reasoningTrimExtension } from "./reasoning-trim-extension.js";
 import { isAllowlistedRemoteExtension } from "./remote-package.js";
 import type { SkillsStatus } from "./tui-status.js";
 import { DEFAULT_SYSTEM } from "./init.js";
@@ -102,6 +103,7 @@ export class FeishuResourceLoader implements ResourceLoader {
           { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic, this) },
           { name: "feishu-startup-banner", hidden: true, factory: startupBannerExtension() },
           { name: "feishu-find-skill", hidden: true, factory: findSkillExtension(this.agentHome) },
+          { name: "feishu-reasoning-trim", hidden: true, factory: reasoningTrimExtension() },
         ],
       });
     }
