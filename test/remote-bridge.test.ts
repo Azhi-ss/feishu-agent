@@ -458,7 +458,9 @@ test("tool execution shows a transient friendly status — even when the card is
     const cardStatuses = stats.cards.statuses.filter((status) => status.cardId === cardId);
     const statusTexts = cardStatuses.map((status) => status.text);
     assert.ok(statusTexts.some((text) => /command|bash/i.test(text) && /[\u{1F300}-\u{1FAFF}]/u.test(text)), `tool status must land on the card even while it was still opening: ${JSON.stringify(statusTexts)}`);
-    assert.ok(statusTexts.includes(""), "the status line is cleared before the card finalizes");
+    // CardKit rejects empty content (HTTP 400 / 99992402 "the min len is 1"); the strip clears with a space.
+    assert.ok(statusTexts.includes(" "), "the status line is cleared before the card finalizes");
+    assert.ok(!statusTexts.includes(""), "empty content must never be sent to CardKit");
     assert.doesNotMatch(JSON.stringify(stats), /RAW_TOOL_OUTPUT_SHOULD_STAY_LOCAL/);
     assert.equal(stats.cards.closes[0]?.text, "TOOL-STATUS-DONE", "the finalized reply has no status line");
     assert.doesNotMatch(result.output, new RegExp(SECRET));
@@ -497,8 +499,9 @@ test("reasoning before the answer keeps the tool status until visible assistant 
     assert.equal(result.code, 0, result.output);
     const stats = await f.feishu.stats();
     const firstAppendAt = Math.min(...stats.cards.appends.map((append) => append.at));
-    const cleared = stats.cards.statuses.filter((status) => status.text === "");
+    const cleared = stats.cards.statuses.filter((status) => status.text === " ");
     assert.ok(cleared.length, "the status line is cleared eventually");
+    assert.ok(!stats.cards.statuses.some((status) => status.text === ""), "empty content must never be sent to CardKit");
     for (const clear of cleared) assert.ok(firstAppendAt - clear.at < 200, `status must clear when visible text starts, not at message_start: clear=${clear.at} firstAppend=${firstAppendAt}`);
     assert.doesNotMatch(JSON.stringify(stats.cards.appends), /THOUGHT-/, "reasoning never reaches the card");
   } finally {

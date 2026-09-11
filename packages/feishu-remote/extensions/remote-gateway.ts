@@ -319,8 +319,16 @@ function parseTextContent(content: string | undefined): string {
   }
 }
 
+function feishuErrorDetail(error: unknown): string | undefined {
+  const body = (error as { response?: { data?: { code?: number; msg?: string } } })?.response?.data;
+  if (!body || typeof body.code !== "number") return undefined;
+  return body.msg ? `Feishu code ${body.code}: ${body.msg}` : `Feishu code ${body.code}`;
+}
+
 function safeGatewayError(error: unknown, appSecret?: string): Error {
-  const message = error instanceof Error ? error.message : String(error);
+  const detail = feishuErrorDetail(error);
+  const base = error instanceof Error ? error.message : String(error);
+  const message = detail ? `${detail} (HTTP ${(error as { response?: { status?: number } })?.response?.status ?? "?"})` : base;
   return new Error(appSecret ? message.split(appSecret).join("[credential]") : message);
 }
 

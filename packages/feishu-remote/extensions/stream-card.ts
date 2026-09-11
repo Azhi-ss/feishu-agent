@@ -152,9 +152,12 @@ export class StreamCardSession {
   }
 
   private enqueueStatus(text: string): void {
+    // CardKit rejects empty content with HTTP 400 / 99992402 "the min len is 1":
+    // a single space clears the strip visually while satisfying the constraint.
+    const wireText = text || " ";
     this.queue = this.queue.then(async () => {
       try {
-        await this.ops.setStatus(this.cardId, text);
+        await this.ops.setStatus(this.cardId, wireText);
       } catch (error) {
         this.onWriteError(error); // status writes are best-effort
       }

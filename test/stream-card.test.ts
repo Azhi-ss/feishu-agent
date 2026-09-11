@@ -7,6 +7,7 @@ import {
   shouldFlushStreamUpdate,
   STREAM_SIGNIFICANT_DELTA_CHARS,
   STREAM_UPDATE_THROTTLE_MS,
+  StreamCardSession,
   visibleAssistantText,
 } from "../packages/feishu-remote/extensions/stream-card.js";
 
@@ -54,6 +55,45 @@ test("visibleAssistantText tolerates non-array, legacy, and malformed content", 
   assert.equal(visibleAssistantText([{ type: "text", text: "  hi  " }]), "hi");
   assert.equal(visibleAssistantText([{ type: "text", text: "ok", textSignature: "legacy-plain-id" }]), "ok");
   assert.equal(visibleAssistantText([{ type: "text", text: "kept", textSignature: "{not json" }]), "kept");
+});
+
+function recordingOps(): {
+  ops: ConstructorParameters<typeof StreamCardSession>[1];
+  statusWrites: string[];
+  appendWrites: string[];
+  fail: ((error: Error) => void) | undefined;
+} {
+  const statusWrites: string[] = [];
+  const appendWrites: string[] = [];
+  const rec = {
+    statusWrites,
+    appendWrites,
+    fail: undefined as ((error: Error) => void) | undefined,
+    ops: {
+      append: async (_id: string, text: string) => { appendWrites.push(text); },
+      setStatus: async (_id: string, text: string) => { statusWrites.push(text); },
+      closeCard: async () => {},
+    },
+  };
+  return rec;
+}
+
+test("clearing the status strip sends a space, never empty content (CardKit rejects empty with HTTP 400 / 99992402)", async () => {
+  const rec = recordingOps();
+  const session = new StreamCardSession("card-1", rec.ops, () => { throw new Error("status writes must not fail"); });
+  session.setStatus("🛠️ Running bash");
+  session.setStatus(""); // first visible assistant text clears the strip
+  await new Promise((done) => setTimeout(done, 0));
+  assert.deepEqual(rec.statusWrites, ["🛠️ Running bash", " "]);
+});
+
+test("finalize also clears a lingering status strip with a space, not empty content", async () => {
+  const rec = recordingOps();
+  const session = new StreamCardSession("card-2", rec.ops, () => {});
+  session.setStatus("🛠️ Running bash");
+  await session.finalize("the answer");
+  assert.ok(rec.statusWrites.includes(" "));
+  assert.ok(!rec.statusWrites.some((text) => text === ""));
 });
 
 test("shardText passes short replies through as a single shard", () => {
