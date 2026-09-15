@@ -5,7 +5,7 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -18,7 +18,7 @@ export const MAX_CONCURRENT_RUNS = 2;
 const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
 export class AutomationError extends Error {
-  constructor(message: string, readonly reason?: "busy" | "overlap" | "capacity" | "not-due" | "expired") {
+  constructor(message: string, readonly reason?: "busy" | "overlap" | "capacity" | "not-due" | "expired" | "stale") {
     super(message);
   }
 }
@@ -65,11 +65,14 @@ export interface JobRecord {
   task: string;
   schedule: Schedule;
   timeoutMinutes: number;
-  state: "enabled";
+  state: JobLifecycleState;
   runs: RunSummary[];
 }
 
-export type RunOutcome = "completed" | "failed" | "timeout" | "unknown";
+/** enabled = schedule live; paused = no admission; removed = retained record, no execution. */
+export type JobLifecycleState = "enabled" | "paused" | "removed";
+
+export type RunOutcome = "completed" | "failed" | "timeout" | "cancelled" | "unknown";
 
 export interface RunSummary {
   runId: string;
@@ -629,12 +632,19 @@ export function latestDueOccurrence(
  * consumes the schedule; the wording reflects the durable occurrence state
  * produced by the Trigger when available (#40).
  */
-export function scheduleEligibilityNotice(schedule: Schedule, nowMsValue: number, state?: ScheduleState | null): string {
+export function scheduleEligibilityNotice(schedule: Schedule, nowMsValue: number, state?: ScheduleState | null, lifecycleState: "enabled" | "paused" | "removed" = "enabled"): string {
+  const pausedPrefix = lifecycleState === "paused"
+    ? "The job is paused: this manual run does not resume or re-arm its schedule. "
+    : "";
   if (schedule.kind !== "oneshot") {
     const next = nextOccurrence(schedule, nowMsValue);
     const due = next === null ? "no further occurrence within the planning horizon" : new Date(next).toISOString();
-    return `This is a separate manual attempt: it neither consumes nor shifts ${schedule.kind} recurrence. The next scheduled occurrence is ${due}.`;
+    return `${pausedPrefix}This is a separate manual attempt: it neither consumes nor shifts ${schedule.kind} recurrence. The next scheduled occurrence is ${due}.`;
   }
+  return pausedPrefix + oneshotManualNotice(schedule, nowMsValue, state);
+}
+
+function oneshotManualNotice(schedule: OneShotSchedule, nowMsValue: number, state: ScheduleState | null | undefined): string {
   const due = new Date(schedule.dueMs).toISOString();
   const occurrence = state ? findOccurrence(state, oneshotOccurrenceId(schedule.dueMs)) : null;
   if (occurrence?.status === "running") {
@@ -806,7 +816,7 @@ export function readLiveLock(lockPath: string): Record<string, unknown> | null {
 // ----------------------------------------------------------------------------
 
 export type OccurrenceOutcome =
-  | "completed" | "failed" | "timeout" | "unknown"
+  | "completed" | "failed" | "timeout" | "cancelled" | "unknown"
   | "expired" | "overlap-skipped" | "lateness-skipped";
 
 export interface OccurrenceState {
@@ -865,8 +875,12 @@ export function loadScheduleState(workspace: Workspace, name: string): ScheduleS
   const ids = new Set<string>();
   let normalized = false;
   for (const entry of state.occurrences) {
-    // Legacy #39/#40 ledgers predate the dueMs field; only one-shot jobs existed.
-    if (entry.dueMs === undefined && job.schedule.kind === "oneshot") {
+    // Legacy #39/#40 ledgers predate the dueMs field; only one-shot jobs
+    // existed and those entries carried the settled outcome shape. Do not use
+    // this path to paper over a genuinely malformed entry.
+    if (entry.dueMs === undefined && job.schedule.kind === "oneshot"
+      && entry.status === "settled" && typeof entry.endedAt === "string"
+      && typeof entry.runId === "undefined") {
       entry.dueMs = job.schedule.dueMs;
       normalized = true;
     }
@@ -875,20 +889,54 @@ export function loadScheduleState(workspace: Workspace, name: string): ScheduleS
     }
     ids.add(entry.id);
   }
-  if (job.schedule.kind === "oneshot" && state.occurrences.length !== 1) {
-    throw new AutomationError(`Schedule state for "${name}" is corrupt; it has been preserved at ${path}.`);
+  // A one-shot schedule keeps at most one *current* occurrence (running, or
+  // settled for the current due instant). Settled entries for previous due
+  // instants (retained after an approved --at edit) are valid history; so is a
+  // still-running snapshot from before an approved edit (it settles under its
+  // original occurrence id). Duplicate current ids and multiple running
+  // entries remain corruption.
+  if (job.schedule.kind === "oneshot") {
+    const currentId = oneshotOccurrenceId(job.schedule.dueMs);
+    if (state.occurrences.filter((entry) => entry.id === currentId).length > 1
+      || state.occurrences.filter((entry) => entry.status === "running").length > 1) {
+      throw new AutomationError(`Schedule state for "${name}" is corrupt; it has been preserved at ${path}.`);
+    }
   }
   if (normalized) saveScheduleState(workspace, state);
   return state;
 }
 
-const OCCURRENCE_OUTCOMES = ["completed", "failed", "timeout", "unknown", "expired", "overlap-skipped", "lateness-skipped"];
+/**
+ * Validate an occurrence id structurally, independent of the CURRENT schedule
+ * (the entry may predate a later approved edit). Accepted forms:
+ *  - oneshot:<dueMs>
+ *  - cron:<dueMs>
+ *  - interval:<minutes>:<dueMs>
+ * The embedded timestamp must equal the entry's own dueMs, so a replaced id
+ * cannot silently stand in for a different instant.
+ */
+export function validOccurrenceId(id: string, dueMs: number): boolean {
+  const one = /^oneshot:(-?\d+)$/.exec(id);
+  if (one) return Number(one[1]) === dueMs;
+  const cron = /^cron:(-?\d+)$/.exec(id);
+  if (cron) return Number(cron[1]) === dueMs;
+  const interval = /^interval:(\d+):(-?\d+)$/.exec(id);
+  if (interval) return Number(interval[1]) > 0 && Number(interval[2]) === dueMs;
+  return false;
+}
+
+const OCCURRENCE_OUTCOMES = ["completed", "failed", "timeout", "cancelled", "unknown", "expired", "overlap-skipped", "lateness-skipped"];
 
 function validOccurrence(entry: OccurrenceState | null, schedule: Schedule, ids: Set<string>): boolean {
   if (!entry || typeof entry !== "object") return false;
   if (typeof entry.id !== "string" || !entry.id || ids.has(entry.id)) return false;
   if (!Number.isSafeInteger(entry.dueMs) || !Number.isFinite(new Date(entry.dueMs).getTime())) return false;
-  if (entry.id !== occurrenceId(schedule, entry.dueMs)) return false;
+  // Every id must be a structurally valid occurrence identity whose embedded
+  // timestamp matches its own dueMs. Historical settled entries may carry a
+  // schedule prefix (oneshot:/cron:/interval:) different from the current
+  // schedule after an approved edit, but they cannot be arbitrary text: a
+  // foreign/garbage id is corruption evidence, not retained history.
+  if (!validOccurrenceId(entry.id, entry.dueMs)) return false;
   if (entry.childPid !== undefined && (!Number.isSafeInteger(entry.childPid) || entry.childPid <= 0)) return false;
   if (entry.runId !== undefined && (typeof entry.runId !== "string" || !entry.runId)) return false;
   if (entry.startedAt !== undefined && (typeof entry.startedAt !== "string" || !Number.isFinite(Date.parse(entry.startedAt)))) return false;
@@ -914,17 +962,19 @@ export function recordedFloor(state: ScheduleState | null): number {
 }
 
 export function mutateOccurrence(workspace: Workspace, name: string, id: string, mutate: (entry: OccurrenceState | null) => OccurrenceState | null): OccurrenceState | null {
-  const state = loadScheduleState(workspace, name) ?? { version: STATE_VERSION, name, occurrences: [] };
-  const index = state.occurrences.findIndex((entry) => entry.id === id);
-  const before = index >= 0 ? state.occurrences[index] : null;
-  const after = mutate(before ? { ...before } : null);
-  if (after) {
-    if (index >= 0) state.occurrences[index] = after;
-    else state.occurrences.push(after);
-    // Never prune occurrence consumption as log cleanup.
-    saveScheduleState(workspace, state);
-  }
-  return after;
+  return withLifecycleLock(workspace, () => {
+    const state = loadScheduleState(workspace, name) ?? { version: STATE_VERSION, name, occurrences: [] };
+    const index = state.occurrences.findIndex((entry) => entry.id === id);
+    const before = index >= 0 ? state.occurrences[index] : null;
+    const after = mutate(before ? { ...before } : null);
+    if (after) {
+      if (index >= 0) state.occurrences[index] = after;
+      else state.occurrences.push(after);
+      // Never prune occurrence consumption as log cleanup.
+      saveScheduleState(workspace, state);
+    }
+    return after;
+  });
 }
 
 /**
@@ -934,18 +984,20 @@ export function mutateOccurrence(workspace: Workspace, name: string, id: string,
  */
 export function settleOccurrencesBulk(workspace: Workspace, name: string, entries: Array<{ id: string; dueMs: number; outcome: OccurrenceOutcome }>): void {
   if (entries.length === 0) return;
-  const state = loadScheduleState(workspace, name) ?? { version: STATE_VERSION, name, occurrences: [] };
-  const known = new Set(state.occurrences.map((entry) => entry.id));
-  const endedAt = new Date(nowMs()).toISOString();
-  for (const entry of entries) {
-    if (known.has(entry.id)) continue;
-    state.occurrences.push({
-      id: entry.id, dueMs: entry.dueMs, status: "settled", outcome: entry.outcome,
-      endedAt, exitCode: null,
-    });
-  }
-  state.occurrences.sort((a, b) => a.dueMs - b.dueMs);
-  saveScheduleState(workspace, state);
+  withLifecycleLock(workspace, () => {
+    const state = loadScheduleState(workspace, name) ?? { version: STATE_VERSION, name, occurrences: [] };
+    const known = new Set(state.occurrences.map((entry) => entry.id));
+    const endedAt = new Date(nowMs()).toISOString();
+    for (const entry of entries) {
+      if (known.has(entry.id)) continue;
+      state.occurrences.push({
+        id: entry.id, dueMs: entry.dueMs, status: "settled", outcome: entry.outcome,
+        endedAt, exitCode: null,
+      });
+    }
+    state.occurrences.sort((a, b) => a.dueMs - b.dueMs);
+    saveScheduleState(workspace, state);
+  });
 }
 
 export const STANDING_INSTRUCTIONS = `# Feishu Automation Workspace
@@ -986,12 +1038,34 @@ export function ensureWorkspace(root: string): Workspace {
   return paths;
 }
 
+/**
+ * True when a filename in a job directory is a regular (non-symlink)
+ * directory entry directly inside the managed jobs tree. Job directory names
+ * are validated safe names, and this blocks following a symlinked entry out
+ * of managed state during scans and cleanup.
+ */
+function isOwnedJobDir(jobsDir: string, name: string): boolean {
+  try {
+    validateName(name);
+  } catch {
+    return false;
+  }
+  try {
+    return lstatSync(join(jobsDir, name)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function listJobs(root: string): { jobs: JobRecord[]; warnings: string[] } {
   const jobsDir = workspacePaths(root).jobs;
   if (!existsSync(jobsDir)) return { jobs: [], warnings: [] };
   const jobs: JobRecord[] = [];
   const warnings: string[] = [];
   for (const name of readdirSync(jobsDir)) {
+    // Never traverse a symlinked or malformed job directory; only the managed
+    // layout is evidence, and corrupt/unsupported records are preserved.
+    if (!isOwnedJobDir(jobsDir, name)) continue;
     const path = join(jobsDir, name, "job.json");
     if (!existsSync(path)) continue;
     try {
@@ -1025,7 +1099,7 @@ export function loadJob(root: string, name: string): JobRecord {
     throw new AutomationError(`Job record "${name}" uses an unsupported record version; it has been preserved at ${path}.`);
   }
   const schedule = record.schedule;
-  if (record.name !== name || record.state !== "enabled"
+  if (record.name !== name || !["enabled", "paused", "removed"].includes(record.state)
     || typeof record.profile !== "string" || !record.profile.trim()
     || typeof record.task !== "string" || !record.task.trim()
     || typeof record.createdAt !== "string" || !Number.isFinite(Date.parse(record.createdAt))
@@ -1069,7 +1143,7 @@ function validRunSummary(run: RunSummary | null): boolean {
     && typeof run.runId === "string" && !!run.runId
     && typeof run.startedAt === "string" && Number.isFinite(Date.parse(run.startedAt))
     && (run.endedAt === null || (typeof run.endedAt === "string" && Number.isFinite(Date.parse(run.endedAt))))
-    && ["completed", "failed", "timeout", "unknown"].includes(run.outcome)
+    && ["completed", "failed", "timeout", "cancelled", "unknown"].includes(run.outcome)
     && ["manual", "scheduled"].includes(run.trigger)
     && (run.exitCode === null || Number.isInteger(run.exitCode));
 }
@@ -1078,6 +1152,233 @@ export function saveJob(root: string, job: JobRecord): void {
   const dir = join(workspacePaths(root).jobs, job.name);
   mkdirSync(dir, { recursive: true });
   atomicWriteJson(jobPath(root, job.name), job);
+}
+
+// ----------------------------------------------------------------------------
+// Lifecycle primitives (#42): one shared lifecycle lock coordinates job
+// mutations, occurrence settlement, admission decisions, cancellation and
+// purge — so lifecycle edits, run settlement, and Trigger admission cannot
+// overwrite each other or race an active run. The lock is re-entrant within
+// this process (settlement helpers nest under callers that already hold it).
+// ----------------------------------------------------------------------------
+
+const lifecycleDepth = new Map<string, number>();
+
+export function lifecycleLockPath(workspace: Workspace): string {
+  return join(workspace.root, "lifecycle.lock");
+}
+
+export function withLifecycleLock<T>(workspace: Workspace, fn: () => T): T {
+  const lockPath = lifecycleLockPath(workspace);
+  const depth = lifecycleDepth.get(lockPath) ?? 0;
+  if (depth > 0) {
+    lifecycleDepth.set(lockPath, depth + 1);
+    try { return fn(); } finally { lifecycleDepth.set(lockPath, depth); }
+  }
+  // The lock is held only across quick local record writes, never across
+  // confirmation waits; bounded spin waits for a sibling process.
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      acquireWorkspaceLock(lockPath, { pid: process.pid }, () =>
+        "Another Automation lifecycle operation is in progress; retry in a moment.");
+      break;
+    } catch (error) {
+      if (error instanceof AutomationError && Date.now() < deadline) {
+        // ponytail: bounded same-thread park; contention is milliseconds (record writes only).
+        const park = new Int32Array(new SharedArrayBuffer(4));
+        Atomics.wait(park, 0, 0, 50);
+        continue;
+      }
+      throw error;
+    }
+  }
+  lifecycleDepth.set(lockPath, 1);
+  try { return fn(); } finally {
+    lifecycleDepth.delete(lockPath);
+    releaseWorkspaceLock(lockPath);
+  }
+}
+
+/** Load, mutate under the lifecycle lock, and atomically save one job record. */
+export function mutateJobRecord(root: string, name: string, mutate: (job: JobRecord) => JobRecord): JobRecord {
+  const workspace = workspacePaths(root);
+  return withLifecycleLock(workspace, () => {
+    const current = loadJob(root, name);
+    const updated = mutate(current);
+    if (updated.name !== name) throw new AutomationError(`Internal error: job name changed during "${name}" update.`);
+    saveJob(root, updated);
+    return updated;
+  });
+}
+
+/**
+ * Discard every never-started occurrence whose minute has already passed,
+ * under the shared lifecycle lock. Already running or settled entries are
+ * left untouched. Pause discards now and resume discards again afterward, so
+ * the deliberately paused period is never replayed.
+ */
+export function discardPendingOccurrences(workspace: Workspace, job: JobRecord, now: number): Array<{ id: string; dueMs: number; outcome: OccurrenceOutcome }> {
+  return withLifecycleLock(workspace, () => {
+    const state = loadScheduleState(workspace, job.name);
+    const floor = state ? recordedFloor(state) : -Infinity;
+    const candidate = latestDueOccurrence(job.schedule, now, floor, job);
+    if (!candidate) return [];
+    const known = new Set((state?.occurrences ?? []).map((entry) => entry.id));
+    const discarded: Array<{ id: string; dueMs: number; outcome: OccurrenceOutcome }> = [];
+    if (job.schedule.kind === "oneshot") {
+      const id = occurrenceId(job.schedule, candidate.dueMs);
+      if (!known.has(id)) discarded.push({ id, dueMs: candidate.dueMs, outcome: "expired" });
+    } else {
+      const listFloor = Math.max(floor, createdFloorMs(job));
+      for (const dueMs of dueOccurrencesBetween(job.schedule, listFloor, now)) {
+        const id = occurrenceId(job.schedule, dueMs);
+        if (!known.has(id)) discarded.push({ id, dueMs, outcome: "lateness-skipped" });
+      }
+    }
+    settleOccurrencesBulk(workspace, job.name, discarded);
+    return discarded;
+  });
+}
+
+/** Bounded request file used to ask a run's owner to cancel its supervised child. */
+export function cancelRequestPath(workspace: Workspace, name: string): string {
+  return join(workspace.jobs, name, "cancel.json");
+}
+
+/** The active run lock for a job, or null when none is live. */
+export function activeRun(workspace: Workspace, name: string): Record<string, unknown> | null {
+  return readLiveLock(jobLockPath(workspace, name));
+}
+
+/**
+ * Publish a cancellation request bound to the named run and its owner. The
+ * runner polls this file, so the management command never signals a PID from
+ * a persisted record: a recycled or unrelated PID can never be touched.
+ */
+export function publishCancelRequest(workspace: Workspace, name: string, runId: string, supervisorPid: number): void {
+  withLifecycleLock(workspace, () => {
+    const held = activeRun(workspace, name);
+    if (!held || held.runId !== runId) {
+      throw new AutomationError(`The active run of "${name}" ended before its cancel request was published; no signal was sent.`, "busy");
+    }
+    const path = cancelRequestPath(workspace, name);
+    mkdirSync(dirname(path), { recursive: true });
+    atomicWriteJson(path, { runId, supervisorPid, requestedAt: new Date(nowMs()).toISOString() });
+  });
+}
+
+export function clearCancelRequest(workspace: Workspace, name: string): void {
+  try { rmSync(cancelRequestPath(workspace, name), { force: true }); }
+  catch (error) {
+    // best-effort cleanup: a leftover request is run-bound, so the next
+    // admission ignores and removes it; failing to unlink cannot lose results.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") process.stderr.write(`Warning: could not remove ${cancelRequestPath(workspace, name)}: ${(error as Error).message}\n`);
+  }
+}
+
+/** True only when a well-formed request names THIS run; stale files are inert. */
+export function cancelRequested(workspace: Workspace, name: string, runId: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(cancelRequestPath(workspace, name), "utf8");
+  } catch {
+    return false; // missing or unreadable request is no authorization to stop a child
+  }
+  try {
+    const request = JSON.parse(raw) as { runId?: unknown };
+    return request.runId === runId;
+  } catch {
+    return false; // a corrupt request is evidence, never an authorization
+  }
+}
+
+/** Run ids are timestamped stamps ending in a UUID; retained outputs key by them. */
+const RUN_ID_RE = /^\d{8}T\d{6}Z-(?:manual|sched)-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const RUN_ARTIFACT_RE = RUN_ID_RE;
+
+/** A runs/scratch artifact is owned when its basename is a real run id. */
+function artifactOwned(entry: string): boolean {
+  return RUN_ID_RE.test(entry);
+}
+
+const RETENTION_DAYS = 30;
+
+/**
+ * Bounded 30-day retention for run outputs/diagnostics and per-run scratch.
+ * Ownership comes from the artifact filename (a real run id), so an old
+ * output stays prunable even after its summary rolls out of the bounded
+ * recent-runs list. Definitions, ledgers, locks, active work, unknown files,
+ * symlinks, and corrupt/unsupported records are never touched; bad records
+ * are reported through listJobs, never destructively repaired.
+ */
+export function pruneRetainedArtifacts(
+  root: string,
+  now: number = nowMs(),
+): { pruned: number; warnings: string[] } {
+  const cutoffMs = now - RETENTION_DAYS * 86_400_000;
+  const { jobs, warnings } = listJobs(root);
+  const workspace = workspacePaths(root);
+  // Never traverse a jobs container that is itself a symlink.
+  if (existsSync(workspace.jobs) && !lstatSync(workspace.jobs).isDirectory()) {
+    return { pruned: 0, warnings };
+  }
+  let pruned = 0;
+  for (const job of jobs) { // valid records only: corrupt/unsupported dirs are never traversed
+    const name = job.name;
+    // A valid job.json with a corrupt/unsupported ledger is preserved: skip
+    // its artifacts entirely rather than pruning diagnostics we cannot trust.
+    try {
+      loadScheduleState(workspace, name);
+    } catch (error) {
+      if (error instanceof AutomationError) { warnings.push(error.message); continue; }
+      throw error;
+    }
+    let active: Record<string, unknown> | null;
+    try {
+      active = activeRun(workspace, name);
+    } catch (error) {
+      if (error instanceof AutomationError) { warnings.push(error.message); continue; }
+      throw error;
+    }
+    if (active) continue; // active work and its artifacts are never retention targets
+    const runsDir = join(workspace.jobs, name, "runs");
+    if (existsSync(runsDir) && lstatSync(runsDir).isDirectory()) {
+      for (const entry of readdirSync(runsDir)) {
+        const path = join(runsDir, entry);
+        try {
+          const st = lstatSync(path); // never follow a symlink outside managed state
+          if (!st.isFile()) continue;
+          // Owned only by a real run-id basename (stdout/stderr logs). Unknown
+          // names — and stray non-log files — are never retention targets.
+          const match = /^(.+)\.(stdout|stderr)\.log$/.exec(entry);
+          if (!match || !artifactOwned(match[1]!)) continue;
+          if (st.mtimeMs < cutoffMs) { rmSync(path, { force: true }); pruned++; }
+        } catch (error) {
+          // Preserve rather than guessing: an unreadable diagnostic is evidence.
+          warnings.push(`Could not inspect retained output ${path}; it was left in place: ${(error as Error).message}`);
+        }
+      }
+    }
+    const scratchDir = join(workspace.jobs, name, "scratch");
+    if (existsSync(scratchDir) && lstatSync(scratchDir).isDirectory()) {
+      for (const entry of readdirSync(scratchDir)) {
+        const path = join(scratchDir, entry);
+        try {
+          const st = lstatSync(path);
+          // Per-run scratch dirs only; never follow symlinks, never touch
+          // unfamiliar names even when old.
+          if (st.isDirectory() && RUN_ARTIFACT_RE.test(entry) && st.mtimeMs < cutoffMs) {
+            rmSync(path, { recursive: true, force: true }); pruned++;
+          }
+        } catch (error) {
+          warnings.push(`Could not inspect scratch directory ${path}; it was left in place: ${(error as Error).message}`);
+        }
+      }
+    }
+    // job.json/schedule.json/locks are never touched by log retention.
+  }
+  return { pruned, warnings };
 }
 
 // ----------------------------------------------------------------------------
@@ -1105,65 +1406,115 @@ function liveJobLocks(workspace: Workspace, except?: string): Array<{ name: stri
 
 export interface Admission {
   jobLockPath: string;
+  /** The job record reloaded under the lifecycle lock — the snapshot this run executes. */
+  fresh: JobRecord;
+  /** The exact occurrence this scheduled run admitted (scheduled callers only). */
+  occurrenceId?: string;
   /** Replace the lock payload (supervisor PID -> supervised child PID). */
   replaceContents: (contents: Record<string, unknown>) => void;
   releaseJobLock: () => void;
 }
 
 /**
- * Take the workspace admission mutex, then the per-job O_EXCL lock. Scheduled
- * callers receive an overlap-skip error instead of an already-running one;
- * manual callers get the already-running error. Capacity saturation fails
- * honestly rather than queuing; the Trigger treats that as "wait and recheck
- * the deadline". The admission mutex is released before this function
- * returns; the per-job lock stays owned until releaseJobLock().
+ * Take the shared lifecycle lock (coordinating with pause/resume/update/rm and
+ * run settlement), reload the job under it, then take the per-job O_EXCL lock.
+ * A job paused/removed after the caller read it fails as "stale"; scheduled
+ * callers also pass the occurrence they expect to admit so an approved edit
+ * between evaluation and admission is not executed on a stale plan. Capacity
+ * saturation fails honestly rather than queuing; the Trigger treats that as
+ * "wait and recheck the deadline". The per-job lock stays owned until
+ * releaseJobLock().
  */
 export function admitRun(
   workspace: Workspace,
   job: JobRecord,
   kind: "manual" | "scheduled",
   lockContents: { pid: number; runId: string; startedAt: string },
+  expectOccurrence?: { id: string; dueMs: number; deadlineMs: number },
 ): Admission {
-  const admissionLockPath = join(workspace.root, "admission.lock");
-  try {
-    acquireWorkspaceLock(admissionLockPath, { pid: process.pid, runId: lockContents.runId, kind }, () =>
-      "Another Automation admission is in progress; retry in a moment.");
-  } catch (error) {
-    if (error instanceof AutomationError && error.message.startsWith("Another Automation admission")) {
-      throw new AutomationError(error.message, "busy");
+  return withLifecycleLock(workspace, () => {
+    const fresh = loadJob(workspace.root, job.name);
+    if (kind === "scheduled" && fresh.state !== "enabled") {
+      throw new AutomationError(`Automation Job "${job.name}" is ${fresh.state}; only enabled jobs admit scheduled runs.`, "stale");
     }
-    throw error;
-  }
-  try {
+    if (kind === "manual" && fresh.state === "removed") {
+      throw new AutomationError(`Automation Job "${job.name}" is removed and cannot be manually run.`, "stale");
+    }
+    if (expectOccurrence) {
+      const now = nowMs();
+      // The expected occurrence id must name an occurrence the CURRENT schedule
+      // still contains at that instant. Cron ids carry only a timestamp, so an
+      // expression/timezone edit could otherwise admit the old schedule's
+      // minute; oneshots must keep the same due instant and intervals the same
+      // duration grid point.
+      const currentId = occurrenceId(fresh.schedule, expectOccurrence.dueMs);
+      const belongs = fresh.schedule.kind === "oneshot"
+        ? currentId === expectOccurrence.id && fresh.schedule.dueMs === expectOccurrence.dueMs
+        : currentId === expectOccurrence.id
+          && dueOccurrencesBetween(fresh.schedule, expectOccurrence.dueMs - 1, expectOccurrence.dueMs).length === 1;
+      if (!belongs
+        || now < expectOccurrence.dueMs || now > expectOccurrence.deadlineMs
+        || occurrenceDeadline(fresh.schedule, expectOccurrence.dueMs) !== expectOccurrence.deadlineMs) {
+        throw new AutomationError(`The schedule for "${job.name}" changed before admission; the stale occurrence was not started.`, "stale");
+      }
+    }
     const targetLock = jobLockPath(workspace, job.name);
-    const target = readLiveLock(targetLock);
-    if (target) {
-      const message = `An Automation Run of job "${job.name}" is already running (run ${String(target.runId)}, pid ${String(target.pid)}). Wait for it to finish before starting another run.`;
-      throw new AutomationError(message, "overlap");
-    }
+      const target = readLiveLock(targetLock);
+      if (target) {
+        const message = `An Automation Run of job "${job.name}" is already running (run ${String(target.runId)}, pid ${String(target.pid)}). Wait for it to finish before starting another run.`;
+        throw new AutomationError(message, "overlap");
+      }
 
-    const others = liveJobLocks(workspace, job.name);
-    if (others.length >= MAX_CONCURRENT_RUNS) {
-      throw new AutomationError(`Automation workspace capacity is full: ${others.length} runs of different jobs are active (at most ${MAX_CONCURRENT_RUNS}). Wait for a slot; scheduled waiting never extends its lateness deadline.`, "capacity");
-    }
+      const others = liveJobLocks(workspace, job.name);
+      if (others.length >= MAX_CONCURRENT_RUNS) {
+        throw new AutomationError(`Automation workspace capacity is full: ${others.length} runs of different jobs are active (at most ${MAX_CONCURRENT_RUNS}). Wait for a slot; scheduled waiting never extends its lateness deadline.`, "capacity");
+      }
 
-    acquireWorkspaceLock(targetLock, { ...lockContents, kind }, (held) =>
-      `An Automation Run of job "${job.name}" is already running (run ${String(held.runId)}, pid ${String(held.pid)}). Wait for it to finish before starting another run.`);
-
-    return {
-      jobLockPath: targetLock,
-      replaceContents: (contents) => {
-        const token = lockOwners.get(targetLock);
-        if (!token || readLockRecord(targetLock)?.token !== token) {
-          throw new AutomationError(`Automation run ownership changed at ${targetLock}; evidence is preserved.`);
+      acquireWorkspaceLock(targetLock, { ...lockContents, kind }, (held) =>
+        `An Automation Run of job "${job.name}" is already running (run ${String(held.runId)}, pid ${String(held.pid)}). Wait for it to finish before starting another run.`);
+      // A cancel request is run-bound; once this new run owns the job lock any
+      // leftover file can only name a previous run. Remove it here, under the
+      // lifecycle lock and BEFORE the new child is supervised, so a concurrent
+      // cancel published for the new run is never erased after admission.
+      try {
+        rmSync(cancelRequestPath(workspace, job.name), { force: true });
+      } catch {
+        // best-effort: a request that cannot be removed is still matched by
+        // run id and therefore inert for the new admission.
+      }
+      // Scheduled callers: record the running occurrence INSIDE this same
+      // lock section, so a concurrent pause can never expire/skip an
+      // occurrence that has already been admitted. Throwing here releases
+      // both the job lock and the lifecycle lock.
+      if (expectOccurrence) {
+        const state = loadScheduleState(workspace, job.name);
+        if (state?.occurrences.some((item) => item.id === expectOccurrence!.id)) {
+          releaseWorkspaceLock(targetLock);
+          throw new AutomationError("Scheduled occurrence was already consumed; no replay.");
         }
-        atomicWriteJson(targetLock, { ...contents, version: 1, token });
-      },
-      releaseJobLock: () => releaseWorkspaceLock(targetLock),
-    };
-  } finally {
-    releaseWorkspaceLock(admissionLockPath);
-  }
+        saveScheduleState(workspace, {
+          ...state ?? { version: STATE_VERSION, name: job.name, occurrences: [] },
+          occurrences: [
+            ...(state?.occurrences ?? []),
+            { id: expectOccurrence.id, dueMs: expectOccurrence.dueMs, status: "running", runId: lockContents.runId, startedAt: lockContents.startedAt },
+          ],
+        });
+      }
+
+      return {
+        jobLockPath: targetLock,
+        fresh,
+        occurrenceId: expectOccurrence?.id,
+        replaceContents: (contents) => {
+          const token = lockOwners.get(targetLock);
+          if (!token || readLockRecord(targetLock)?.token !== token) {
+            throw new AutomationError(`Automation run ownership changed at ${targetLock}; evidence is preserved.`);
+          }
+          atomicWriteJson(targetLock, { ...contents, version: 1, token });
+        },
+        releaseJobLock: () => releaseWorkspaceLock(targetLock),
+      };
+  });
 }
 
 // ---------------------------------------------------------------------------

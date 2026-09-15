@@ -6,6 +6,7 @@ import {
   AutomationError,
   acquireWorkspaceLock,
   createdFloorMs,
+  discardPendingOccurrences,
   dueOccurrencesBetween,
   jobLockPath,
   latestDueOccurrence,
@@ -15,6 +16,7 @@ import {
   nowMs,
   occurrenceDeadline,
   occurrenceId,
+  pruneRetainedArtifacts,
   processAlive,
   readLiveLock,
   recordedFloor,
@@ -72,13 +74,19 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
         const outcome = job.schedule.kind === "oneshot" ? "expired" : "lateness-skipped";
         settleScheduledOccurrence(workspace, job.name, id, outcome, null, null, dueMs);
         log(`Job "${job.name}" recorded ${outcome} at ${new Date(dueMs).toISOString()} without queuing.`);
+      } else if (error.reason === "stale") {
+        // The job was paused/removed or its plan changed between evaluation and
+        // admission. Nothing was started; the next tick evaluates the fresh plan.
+        log(`Job "${job.name}" admission was skipped: ${error.message}`);
       } else if (error.reason !== "capacity" && error.reason !== "busy" && error.reason !== "not-due") {
         warn(error.message);
       }
       return;
     }
     const settled = run.done.then(({ outcome, exitCode }) => {
-      const result = stopping && outcome !== "timeout" ? "unknown" : outcome;
+      // An explicit cancellation request wins over a coincident Trigger stop;
+      // ordinary stop bounding stays unknown.
+      const result = outcome === "cancelled" ? "cancelled" : stopping && outcome !== "timeout" ? "unknown" : outcome;
       settleScheduledOccurrence(workspace, job.name, id, result, run.runId, exitCode, dueMs);
       recordRunSummary(workspace, job.name, {
         runId: run.runId, startedAt: run.startedAt, endedAt: new Date(nowMs()).toISOString(),
@@ -108,10 +116,29 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
   };
 
   const evaluateJob = (job: JobRecord): void => {
+    // Removed jobs never admit. Paused jobs admit nothing; newly arriving
+    // not-started occurrences are discarded once each (settled entries make
+    // the next tick a no-op, so no ledger busy-loop). An in-progress run that
+    // survives a Trigger restart is still recovered below.
+    if (job.state === "removed") return;
+    const now = nowMs();
     const state = loadScheduleState(workspace, job.name);
     if (state) recoverOrphans(job, state);
+    if (job.state === "paused") {
+      try {
+        const current = loadScheduleState(workspace, job.name);
+        const floor = current ? recordedFloor(current) : -Infinity;
+        const candidate = latestDueOccurrence(job.schedule, now, floor, job);
+        if (candidate && !(current?.occurrences.some((entry) => entry.id === occurrenceId(job.schedule, candidate.dueMs)))) {
+          discardPendingOccurrences(workspace, job, now);
+        }
+      } catch (error) {
+        if (!(error instanceof AutomationError)) throw error;
+        warn(error.message);
+      }
+      return;
+    }
 
-    const now = nowMs();
     // Re-read after recovery: settled or running occurrences are never started.
     const current = loadScheduleState(workspace, job.name);
     const floor = current ? recordedFloor(current) : -Infinity;
@@ -185,7 +212,20 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   const interval = setInterval(evaluate, tickIntervalMs());
+  // 30-day bounded output/diagnostic retention: once at startup, then daily.
+  const reportPruning = (): void => {
+    try {
+      const { pruned, warnings } = pruneRetainedArtifacts(workspace.root, nowMs());
+      for (const warning of warnings) warn(warning);
+      if (pruned > 0) log(`Retention cleanup removed ${pruned} retained output/scratch entr${pruned === 1 ? "y" : "ies"} older than the bounded window.`);
+    } catch (error) {
+      warn(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const pruningTimer = setInterval(reportPruning, 24 * 3600_000);
+  pruningTimer.unref();
   try {
+    reportPruning();
     log(`Automation Trigger started (pid ${process.pid}); evaluating saved schedules (one-shot, cron, interval).`);
     evaluate();
     await stopped;
@@ -195,6 +235,7 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
     return failed ? 1 : 0;
   } finally {
     clearInterval(interval);
+    clearInterval(pruningTimer);
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
     releaseWorkspaceLock(lockPath);

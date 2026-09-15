@@ -7,15 +7,8 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { runInteractive, runPrint } from "./runtime.js";
-import { syncOfficialSkills } from "./official-skills.js";
-import { packageManager } from "./packages.js";
-import { dispatchConfig, setPackageResourceEnabled, type PackageResourceType } from "./config.js";
-import { existingIdentity, initializeHome } from "./init.js";
-import { checkReadiness } from "./readiness.js";
+import type { PackageResourceType } from "./config.js";
 import { CORE_TOOLS, projectKeyFor } from "./policy.js";
-import { REMOTE_PACKAGE_SOURCE, isRemotePackageConfigured } from "./remote-package.js";
 
 function projectRoot(cwd: string): string {
   try {
@@ -76,6 +69,13 @@ const HELP = `Usage:
                  (--prompt-file <path> | --prompt-stdin)
                  [--tz <IANA>] [--catch-up <duration>|--no-catch-up] [--timeout <duration>] [--yes]
                                   Create a one-shot, cron, or fixed-interval Automation Job
+  feishu automation update <name> [any add option except --name] [--yes]
+                                  Change an existing job; unspecified values are retained
+  feishu automation pause <name>  Stop new admission (a current run continues)
+  feishu automation resume <name> Skip the paused period without replay and re-enable
+  feishu automation cancel <name> Cancel the job's active run through its owner
+  feishu automation rm <name> [--purge] [--yes]
+                                  Remove a job (records retained; --purge deletes them)
   feishu automation run <name>   Run a saved job once now in a fresh unattended Print
   feishu automation serve        Run the foreground scheduling Trigger (one per managed workspace)
   feishu -r                      Select a session in this Feishu Project
@@ -101,53 +101,82 @@ function invalidOptionValue(args: string[], index: number, flag: string): string
   return value;
 }
 
-// Strict parser for the automation surface: add (one-shot/cron/interval),
-// list, show, run, and the foreground serve Trigger. Later slices add
-// update/pause/resume/rm and background service start/stop/status. Mutating
-// verbs are rejected inside inherited unattended runs (a narrow recursion
-// check, not security).
-const AUTOMATION_VALUE_FLAGS = new Set(["--name", "--at", "--cron", "--every", "--tz", "--timeout", "--prompt-file", "--catch-up"]);
-const AUTOMATION_BOOL_FLAGS = new Set(["--prompt-stdin", "--yes", "--no-catch-up"]);
+// Strict per-verb parser for the automation surface. Unknown options (for
+// example update --name, or add/update --purge) fail before any mutation.
+// Later slices add background service start/stop/status.
+const ADD_UPDATE_VALUE_FLAGS = new Set(["--name", "--at", "--cron", "--every", "--tz", "--timeout", "--prompt-file", "--catch-up", "--lark-profile"]);
+const ADD_UPDATE_BOOL_FLAGS = new Set(["--prompt-stdin", "--yes", "--no-catch-up"]);
+const RM_VALUE_FLAGS = new Set<string>();
+const RM_BOOL_FLAGS = new Set(["--purge", "--yes"]);
 
 function normalizeAutomationArgs(input: string[]): string[] {
   const verb = input[1];
-  const known = new Set(["list", "show", "add", "run", "serve"]);
+  const known = new Set(["list", "show", "add", "run", "serve", "update", "pause", "resume", "cancel", "rm"]);
   if (!verb || !known.has(verb)) {
-    fail(`Unknown automation command: ${verb ?? ""}. Supported: feishu automation list|show|add|run|serve.`);
+    fail(`Unknown automation command: ${verb ?? ""}. Supported: feishu automation list|show|add|update|run|pause|resume|cancel|rm|serve.`);
   }
   if (verb === "list" || verb === "serve") {
     if (input.length !== 2) fail(`Usage: feishu automation ${verb}`);
     return input;
   }
-  if (verb === "show" || verb === "run") {
+  if (["show", "run", "pause", "resume", "cancel"].includes(verb)) {
     const rest = input.slice(2);
     if (rest.length !== 1 || rest[0].startsWith("-")) fail(`Usage: feishu automation ${verb} <name>`);
     return input;
   }
+  if (verb === "rm") {
+    const rest = input.slice(2);
+    if (rest.length < 1 || rest[0].startsWith("-")) fail(`Usage: feishu automation rm <name> [--purge] [--yes]`);
+    const options = rest.slice(1);
+    // --yes confirms only the destructive purge; ordinary retained removal
+    // needs no confirmation, so a bare --yes is an unsupported combination.
+    if (options.includes("--yes") && !options.includes("--purge")) {
+      fail("Use --yes only with --purge; ordinary feishu automation rm needs no confirmation.");
+    }
+    validateAutomationFlags(options, verb, RM_VALUE_FLAGS, RM_BOOL_FLAGS);
+    return input;
+  }
+  if (verb === "update") {
+    const rest = input.slice(2);
+    if (rest.length < 1 || rest[0].startsWith("-")) fail(`Usage: feishu automation update <name> [options] [--yes]`);
+    // --name is add-only: an update can never rename a job; --purge belongs to rm.
+    validateAutomationFlags(rest.slice(1), verb, new Set([...ADD_UPDATE_VALUE_FLAGS].filter((flag) => flag !== "--name")), ADD_UPDATE_BOOL_FLAGS);
+    return input;
+  }
   // add
-  const rest = input.slice(2);
+  validateAutomationFlags(input.slice(2), verb, ADD_UPDATE_VALUE_FLAGS, ADD_UPDATE_BOOL_FLAGS);
+  return input;
+}
+
+function validateAutomationFlags(rest: string[], verb: string, valueFlags: Set<string>, boolFlags: Set<string>): void {
   const flags = new Set<string>();
   for (let index = 0; index < rest.length; index++) {
     const token = rest[index];
-    if (!token.startsWith("--")) fail(`Unexpected automation add argument: ${token}.`);
-    if (flags.has(token)) fail(`${token} may be specified only once; provide exactly one schedule (--at, --cron, or --every).`);
-    if (AUTOMATION_VALUE_FLAGS.has(token)) {
+    if (!token.startsWith("--")) fail(`Unexpected automation ${verb} argument: ${token}.`);
+    if (flags.has(token)) {
+      if (token === "--at" || token === "--cron" || token === "--every") {
+        fail(`${token} may be specified only once; provide exactly one schedule (--at, --cron, or --every).`);
+      }
+      fail(`${token} may be specified only once.`);
+    }
+    if (valueFlags.has(token)) {
       invalidOptionValue(rest, index, token);
       flags.add(token);
       index++;
-    } else if (AUTOMATION_BOOL_FLAGS.has(token)) {
+    } else if (boolFlags.has(token)) {
       flags.add(token);
     } else {
-      fail(`Unknown option for automation add: ${token}. Supported schedules are --at (one-shot), --cron (five fields), and --every (interval).`);
+      fail(`Unknown option for automation ${verb}: ${token}. Supported schedules are --at (one-shot), --cron (five fields), and --every (interval).`);
     }
   }
-  return input;
 }
 
 function normalizeAndValidateArgs(input: string[]): string[] {
   const args = [...input];
-  const profiles = args.reduce<number[]>((found, arg, index) => arg === "--lark-profile" ? [...found, index] : found, []);
-  if (profiles.length > 1) fail("--lark-profile may be specified only once.");
+  const profiles = args[0] === "automation" ? [] : args.reduce<number[]>((found, arg, index) => arg === "--lark-profile" ? [...found, index] : found, []);
+  // Automation subcommands consume --lark-profile themselves (add binds it;
+  // update changes it only with confirmation) so it must not be lifted into an
+  // ambient invocation default that could silently replace a saved profile.
   if (profiles.length) {
     const index = profiles[0];
     process.env.LARK_PROFILE = invalidOptionValue(args, index, "--lark-profile");
@@ -213,6 +242,7 @@ function normalizeAndValidateArgs(input: string[]): string[] {
 }
 
 async function promptInitChoices(home: string, agentHome: string, identity: string | undefined, model: string | undefined, resetIdentity: boolean, resetModel: boolean): Promise<{ identity: string; model?: string }> {
+  const { existingIdentity } = await import("./init.js");
   const savedIdentity = existingIdentity(agentHome);
   const settings = existsSync(join(agentHome, "settings.json")) ? JSON.parse(readFileSync(join(agentHome, "settings.json"), "utf8") || "{}") as { defaultProvider?: string; defaultModel?: string } : {};
   const savedModel = settings.defaultProvider && settings.defaultModel ? `${settings.defaultProvider}/${settings.defaultModel}` : undefined;
@@ -230,6 +260,7 @@ async function promptInitChoices(home: string, agentHome: string, identity: stri
     if (!identity) fail("Init requires a non-empty stable Memory Identity.");
     if (!model) {
       const piHome = join(home, ".pi", "agent");
+      const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
       const runtime = await ModelRuntime.create({ authPath: join(piHome, "auth.json"), modelsPath: join(piHome, "models.json"), allowModelNetwork: false });
       const models = (await runtime.getAvailable()).map((entry) => `${entry.provider}/${entry.id}`);
       if (!models.length) fail("No authenticated model is available; manage credentials through ordinary Pi.");
@@ -259,19 +290,24 @@ else {
       args.includes("--reset-identity"),
       args.includes("--reset-model"),
     );
+    const { initializeHome } = await import("./init.js");
     const result = initializeHome(agentHome, choices.identity, { identity: args.includes("--reset-identity"), system: args.includes("--reset-system") });
     const thinkingIndex = args.indexOf("--thinking");
     const thinking = thinkingIndex >= 0 ? args[thinkingIndex + 1] as ThinkingLevel : undefined;
+    const { checkReadiness } = await import("./readiness.js");
     const readiness = await checkReadiness(home, agentHome, choices.model, { resetModel: args.includes("--reset-model"), thinkingLevel: thinking })
       .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
     const root = projectRoot(realpathSync(process.cwd()));
+    const { packageManager } = await import("./packages.js");
     const manager = packageManager(agentHome, root, projectKeyFor(root));
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source === MEM0_PACKAGE && entry.installedPath)) {
       await manager.installAndPersist(MEM0_PACKAGE);
     }
+    const { isRemotePackageConfigured, REMOTE_PACKAGE_SOURCE } = await import("./remote-package.js");
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && isRemotePackageConfigured(entry, agentHome))) {
       await manager.installAndPersist(REMOTE_PACKAGE_SOURCE);
     }
+    const { syncOfficialSkills } = await import("./official-skills.js");
     const skills = await syncOfficialSkills(join(agentHome, "official-skills"));
     if (skills.warning) {
       if (!existsSync(join(skills.cacheDir, ".success"))) fail(skills.warning);
@@ -284,6 +320,7 @@ else {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
     try {
       if (update) process.stdout.write("Updating lark-cli…\n");
+      const { syncOfficialSkills } = await import("./official-skills.js");
       const result = await syncOfficialSkills(join(agentHome, "official-skills"), true, process.env, { updateLarkCli: update });
       if (result.source !== "current") fail(result.warning ?? "Official Skill synchronization failed.");
       process.stdout.write(`Synchronized official Skills for ${result.version}.\n`);
@@ -302,9 +339,11 @@ else {
       const resource = args[setIndex + 2] as PackageResourceType | undefined;
       const state = args[setIndex + 3];
       if (!source || !resource || !["extensions", "skills", "prompts", "themes"].includes(resource) || !["on", "off"].includes(state ?? "")) fail("Usage: feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>");
+      const { setPackageResourceEnabled } = await import("./config.js");
       await setPackageResourceEnabled({ agentHome, projectRoot: root, projectKey: projectKeyFor(root), local, source, resource, enabled: state === "on" });
       process.stdout.write(`${local ? "Project" : "Global"} Feishu Package ${source} ${resource}: ${state}\n`);
     } else {
+      const { dispatchConfig } = await import("./config.js");
       const code = await dispatchConfig({ agentHome, projectRoot: root, projectKey: projectKeyFor(root), args: args.slice(1) });
       process.exitCode = code;
     }
@@ -313,6 +352,7 @@ else {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    const { packageManager } = await import("./packages.js");
     const manager = packageManager(agentHome, root, projectKeyFor(root));
     const local = args.includes("-l");
     const source = args.slice(1).find((arg) => !arg.startsWith("-"));
@@ -357,6 +397,7 @@ else {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    const { runPrint } = await import("./runtime.js");
     runPrint(args[1], cwd, root, projectKeyFor(root), agentHome)
       .then((code) => { process.exitCode = code; })
       .catch((error: unknown) => {
@@ -368,6 +409,7 @@ else {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    const { runInteractive } = await import("./runtime.js");
     runInteractive(cwd, root, projectKeyFor(root), agentHome, args[0] === "-c", args[0] === "-r", args[0] === "--session" ? args[1] : undefined)
       .catch((error: unknown) => { process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
   } else {

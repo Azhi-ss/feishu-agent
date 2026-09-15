@@ -21,8 +21,11 @@ import {
   type RunSummary,
   type Workspace,
   admitRun,
+  cancelRequested,
+  clearCancelRequest,
   loadJob,
   loadScheduleState,
+  mutateJobRecord,
   mutateOccurrence,
   nowMs,
   saveJob,
@@ -109,25 +112,26 @@ export function startAdmittedRun(
   const stdoutPath = join(runsDir, `${runId}.stdout.log`);
   const stderrPath = join(runsDir, `${runId}.stderr.log`);
 
-  const admission = admitRun(workspace, job, kind, { pid: process.pid, runId, startedAt });
+  // The admission snapshot is reloaded under the shared lifecycle lock, so a
+  // pause/remove/edit racing this dispatch cannot be half-seen. Manual runs
+  // of retained paused/completed/expired jobs keep the job argument; the
+  // enabled-only gate applies only to scheduled admission.
   const scheduledId = scheduled ? occurrenceId(job.schedule, scheduled.dueMs) : null;
+  let snapshot: JobRecord;
+  let admission: ReturnType<typeof admitRun>;
   if (scheduled) {
-    const id = occurrenceId(job.schedule, scheduled.dueMs);
-    try {
-      const now = nowMs();
-      if (now < scheduled.dueMs) throw new AutomationError("Clock moved before the scheduled instant; not admitted.", "not-due");
-      if (now > scheduled.deadlineMs) {
-        throw new AutomationError("Lateness deadline passed before admission.", "expired");
-      }
-      mutateOccurrence(workspace, job.name, id, (existing) => {
-        if (existing) throw new AutomationError("Scheduled occurrence was already consumed; no replay.");
-        return { id, dueMs: scheduled.dueMs, status: "running", runId, startedAt };
-      });
-    } catch (error) {
-      admission.releaseJobLock();
-      throw error;
-    }
+    // admitRun reloads the plan and records the running occurrence atomically
+    // under the shared lifecycle lock; nothing (pause/another admission) can
+    // expire/skip an occurrence that has already been admitted.
+    admission = admitRun(workspace, job, kind, { pid: process.pid, runId, startedAt }, { id: scheduledId!, dueMs: scheduled.dueMs, deadlineMs: scheduled.deadlineMs });
+    snapshot = admission.fresh;
+  } else {
+    admission = admitRun(workspace, job, kind, { pid: process.pid, runId, startedAt });
+    snapshot = admission.fresh; // re-checked under the lifecycle lock
   }
+  // cancel.json left by a previous run is removed inside admitRun under the
+  // lifecycle lock, bound to this new run id.
+  job = snapshot; // every later decision and the child prompt use the admission snapshot
 
   const childEnv: NodeJS.ProcessEnv = { ...options.env ?? process.env };
   for (const key of SECRET_ENV) delete childEnv[key];
@@ -163,6 +167,18 @@ export function startAdmittedRun(
   }
   let admissionFailed = false;
   let stopped = false;
+  let cancelled = false;
+  const checkCancel = (): void => {
+    if (stopped || cancelled) return;
+    if (!cancelRequested(workspace, job.name, runId)) return;
+    cancelled = true;
+    stop();
+  };
+  // The cancel CLI publishes a run-bound cancel.json; the supervisor polls it
+  // on a short interval. No PID from a persisted record is ever signaled, so a
+  // recycled or unrelated process cannot be killed.
+  const cancelWatcher = setInterval(checkCancel, 100);
+  cancelWatcher.unref();
   child.once("message", (message: unknown) => {
     if (!message || typeof message !== "object" || !("type" in message) || message.type !== "automation-ready") return;
     if (stopped) {
@@ -171,6 +187,10 @@ export function startAdmittedRun(
     }
     try {
       if (scheduled) {
+        // The occurrence and snapshot were validated atomically under the
+        // lifecycle lock during admitRun. A later approved edit must NOT abort
+        // this already-admitted run (it keeps the start-time plan snapshot);
+        // only the controlled-clock deadline still guards this checkpoint.
         const now = nowMs();
         if (now < scheduled.dueMs || now > scheduled.deadlineMs) {
           throw new AutomationError("Scheduled time changed before Print admission; outcome remains unknown, without replay.");
@@ -238,7 +258,9 @@ export function startAdmittedRun(
     clearTimeout(timer);
     if (clockTimer) clearInterval(clockTimer);
     if (killEscalation) clearTimeout(killEscalation);
-    const outcome: RunOutcome = timedOut ? "timeout" : admissionFailed || exitSignal !== null ? "unknown" : exitCode === 0 ? "completed" : "failed";
+    clearInterval(cancelWatcher);
+    clearCancelRequest(workspace, job.name);
+    const outcome: RunOutcome = cancelled ? "cancelled" : timedOut ? "timeout" : admissionFailed || exitSignal !== null ? "unknown" : exitCode === 0 ? "completed" : "failed";
     return { outcome, exitCode };
   })();
 
@@ -273,15 +295,17 @@ export function settleScheduledOccurrence(
 
 /** Append a run summary while the caller still owns the per-job lock. */
 export function recordRunSummary(workspace: Workspace, name: string, summary: RunSummary): void {
-  // Persist the durable result while the run lock is held so a crash or
-  // concurrent supervisor cannot observe a finished run as never started.
-  const updated = loadJob(workspace.root, name);
-  const index = updated.runs.findIndex((run) => run.runId === summary.runId);
-  if (index < 0) updated.runs.push(summary);
-  else updated.runs[index] = summary;
-  // ponytail: bounded summary retention per job; 30-day artifact retention is enforced by later slices.
-  updated.runs = updated.runs.slice(-50);
-  saveJob(workspace.root, updated);
+  // Persist the durable result under the lifecycle lock while the run lock is
+  // held, so a concurrent lifecycle edit cannot overwrite a finished run.
+  mutateJobRecord(workspace.root, name, (current) => {
+    const updated = current;
+    const index = updated.runs.findIndex((run) => run.runId === summary.runId);
+    if (index < 0) updated.runs.push(summary);
+    else updated.runs[index] = summary;
+    // ponytail: bounded summary retention per job; 30-day artifact retention is enforced separately.
+    updated.runs = updated.runs.slice(-50);
+    return updated;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +335,9 @@ export async function runJobManual(
     timeoutMsOverride?: number;
   } = {},
 ): Promise<ManualRunResult> {
+  if (job.state === "removed") {
+    throw new AutomationError(`Job "${job.name}" is removed and cannot run. Purge its retained record with "feishu automation rm ${job.name} --purge" and add it again if needed.`);
+  }
   const admitted = startAdmittedRun(job, workspace, "manual", options);
 
   let interrupted = false;
@@ -333,7 +360,7 @@ export async function runJobManual(
 
   let scheduleNotice: string;
   try {
-    scheduleNotice = scheduleEligibilityNotice(job.schedule, nowMs(), loadScheduleState(workspace, job.name));
+    scheduleNotice = scheduleEligibilityNotice(job.schedule, nowMs(), loadScheduleState(workspace, job.name), job.state);
   } catch (error) {
     if (!(error instanceof AutomationError)) throw error;
     process.stderr.write(`Warning: ${error.message}\n`);
