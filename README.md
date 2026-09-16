@@ -135,7 +135,7 @@ is inclusive; an unstarted one-shot beyond it becomes **expired**, not failed or
 deleted. Definitions, run output, and per-run scratch areas live in `~/feishu-jobs`,
 separate from the legacy Briefing workspace.
 
-Only one foreground Trigger admits scheduled work in a managed workspace. It shares
+Only one Trigger (foreground or background) admits scheduled work in a managed workspace. It shares
 same-job exclusion and a two-run capacity limit with independent manual callers.
 Waiting never extends the original lateness deadline. Every run is a fresh
 `FEISHU_UNATTENDED=1` Print child without Mem0, using the saved Lark profile and
@@ -147,10 +147,27 @@ external effects; inspect their receipts and logs.
 
 Ctrl-C stops foreground admission and bounds only Trigger-owned children. Independent
 manual runs remain supervised by their own callers and continue occupying capacity.
-Normal Interactive/Print/init never install, start, or probe the Trigger. No OS
-service installation, cron/interval scheduling, lifecycle editing, or automation
-Skill is included in this slice; the existing Briefing is untouched. Corrupt state
-is diagnosed and retained for inspection, never guessed safe to replay.
+For independent background execution, explicitly run:
+
+```bash
+feishu automation start   # launchd on macOS; systemd --user on Linux/WSL
+feishu automation status  # live Trigger owner, not just an installed artifact
+feishu automation stop    # disable restart; retain jobs/history and manual runs
+```
+
+Start checks local prerequisites and installs only the dedicated managed service.
+Its configuration contains resolved executable paths and a minimal nonsecret
+HOME/PATH environment; credentials remain in their existing local stores. After
+moving/upgrading Node or this package, explicitly run start again to refresh it.
+A failed setup restores the previous configuration in a stopped state; inspect
+status and the named user service before retrying a reported rollback failure.
+
+The host and Trigger must stay alive: sleep, power-off, WSL shutdown, and logout
+without an active user manager are not solved here. If no user manager is
+available, use foreground `serve`; no root, linger, login, or wake changes are made.
+Normal Interactive/Print/init never install, start, wait for, or probe the service.
+The automation Skill is a later slice; the existing Briefing is untouched. Corrupt
+state is diagnosed and retained for inspection, never guessed safe to replay.
 
 ## Packages and Skills
 

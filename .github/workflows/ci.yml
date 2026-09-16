@@ -28,3 +28,23 @@ jobs:
           (cd "$TEST_DIR" && git init -q && "$PI_BIN" install npm:@azhi-ss/feishu-remote -l)
           test -f "$TEST_DIR/.pi/settings.json"
           rm -rf "$TEST_DIR"
+
+  automation:
+    name: Offline automation (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Shared hermetic automation behavior (fake user managers only)
+        run: node --test dist/test/automation-*.test.js
+      - run: git diff --check

@@ -117,8 +117,8 @@ function fail(message: string): never {
 function triggerNotice(root: string): string {
   const owner = liveTrigger(workspacePaths(root));
   return owner
-    ? `The scheduling Trigger is running (pid ${owner.pid}); scheduled execution requires this foreground process to remain alive.`
-    : "The scheduling Trigger is not running. Start `feishu automation serve` explicitly for scheduled firing; saving a job does not start it.";
+    ? `The scheduling Trigger is running (pid ${owner.pid}); scheduled execution requires the host and Trigger to remain alive.`
+    : "The scheduling Trigger is not running. Start `feishu automation start` or foreground `feishu automation serve` explicitly for scheduled firing; saving a job does not start it.";
 }
 
 function catchUpPolicy(schedule: Schedule): string {
@@ -295,6 +295,14 @@ export async function automationCommand(args: string[]): Promise<number> {
   if (unattended && verb !== "list" && verb !== "show") fail(RECURSION_NOTICE);
 
   const root = managedWorkspaceHome();
+
+  if (verb === "start" || verb === "stop" || verb === "status") {
+    const { automationService } = await import("./automation-service.js");
+    const result = await automationService(root, verb);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.stderr.write(`${result.notice}\n${result.managerError ? `${result.managerError}\n` : ""}`);
+    return 0;
+  }
 
   if (verb === "serve") {
     const workspace = ensureWorkspace(root);

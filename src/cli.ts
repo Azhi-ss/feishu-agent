@@ -77,6 +77,9 @@ const HELP = `Usage:
   feishu automation rm <name> [--purge] [--yes]
                                   Remove a job (records retained; --purge deletes them)
   feishu automation run <name>   Run a saved job once now in a fresh unattended Print
+  feishu automation start        Explicitly install/start the user-service Trigger
+  feishu automation stop         Disable background restart; retain jobs and history
+  feishu automation status       Inspect live Trigger and user-service ownership
   feishu automation serve        Run the foreground scheduling Trigger (one per managed workspace)
   feishu -r                      Select a session in this Feishu Project
   feishu -c                      Continue this Feishu Project's latest session
@@ -103,7 +106,7 @@ function invalidOptionValue(args: string[], index: number, flag: string): string
 
 // Strict per-verb parser for the automation surface. Unknown options (for
 // example update --name, or add/update --purge) fail before any mutation.
-// Later slices add background service start/stop/status.
+// Service commands accept no flags and never run on ordinary startup.
 const ADD_UPDATE_VALUE_FLAGS = new Set(["--name", "--at", "--cron", "--every", "--tz", "--timeout", "--prompt-file", "--catch-up", "--lark-profile"]);
 const ADD_UPDATE_BOOL_FLAGS = new Set(["--prompt-stdin", "--yes", "--no-catch-up"]);
 const RM_VALUE_FLAGS = new Set<string>();
@@ -111,11 +114,11 @@ const RM_BOOL_FLAGS = new Set(["--purge", "--yes"]);
 
 function normalizeAutomationArgs(input: string[]): string[] {
   const verb = input[1];
-  const known = new Set(["list", "show", "add", "run", "serve", "update", "pause", "resume", "cancel", "rm"]);
+  const known = new Set(["list", "show", "add", "run", "serve", "update", "pause", "resume", "cancel", "rm", "start", "stop", "status"]);
   if (!verb || !known.has(verb)) {
-    fail(`Unknown automation command: ${verb ?? ""}. Supported: feishu automation list|show|add|update|run|pause|resume|cancel|rm|serve.`);
+    fail(`Unknown automation command: ${verb ?? ""}. Supported: feishu automation list|show|add|update|run|pause|resume|cancel|rm|serve|start|stop|status.`);
   }
-  if (verb === "list" || verb === "serve") {
+  if (["list", "serve", "start", "stop", "status"].includes(verb)) {
     if (input.length !== 2) fail(`Usage: feishu automation ${verb}`);
     return input;
   }
