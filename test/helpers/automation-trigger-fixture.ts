@@ -126,6 +126,9 @@ export function createTriggerHarness() {
         try { serve.kill("SIGKILL"); } catch { /* already gone */ }
       }
     }
+    for (const server of gateServers) {
+      server.closeAllConnections?.();
+    }
     await Promise.all(gateServers.map((server) => new Promise<void>((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()))));
   });
 

@@ -58,10 +58,12 @@ export function startModelServer(): Promise<ModelServer> {
     request.on("end", () => {
       state.requests.push(body);
       const payload = state.responses.shift() ?? textResponse("UNEXPECTED-EXTRA-MODEL-REQUEST");
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(payload);
       }, state.delayMs);
+      timer.unref();
+      response.on("close", () => clearTimeout(timer));
     });
   });
   state.server = server;
@@ -112,6 +114,9 @@ export async function fixture(profiles: Array<[string, boolean]> = [["local-defa
 export function createCliHarness() {
   const modelServers: Server[] = [];
   test.after(async () => {
+    for (const server of modelServers) {
+      server.closeAllConnections?.();
+    }
     await Promise.all(modelServers.map((server) => new Promise<void>((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()))));
   });
 
