@@ -90,15 +90,21 @@ function readTaskValue(args: string[], required: boolean): string | undefined {
       fail("Provide task instructions with --prompt-file <path> when running interactively; --prompt-stdin requires piped input and explicit --yes.");
     }
     const chunks: Buffer[] = [];
+    // [DEBUG-44-macos] Temporary diagnostic branch only; never log task contents.
+    const diagnostic = process.env.FEISHU_AUTOMATION_DIAGNOSTIC === "1";
+    let diagnosticReads = 0;
+    if (diagnostic) process.stderr.write(`[DEBUG-44-macos] stdin begin tty=${Boolean(process.stdin.isTTY)} readableLength=${process.stdin.readableLength}\n`);
     const fd = 0;
     try {
       let bytesRead: number;
       const buffer = Buffer.alloc(65536);
       do {
         bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+        if (diagnostic && diagnosticReads++ < 12) process.stderr.write(`[DEBUG-44-macos] stdin read bytes=${bytesRead}\n`);
         if (bytesRead > 0) chunks.push(buffer.subarray(0, bytesRead));
       } while (bytesRead > 0);
     } catch (error) {
+      if (diagnostic) process.stderr.write(`[DEBUG-44-macos] stdin error code=${(error as NodeJS.ErrnoException).code} chunks=${chunks.length}\n`);
       if ((error as NodeJS.ErrnoException).code !== "EAGAIN") throw error;
     }
     const task = Buffer.concat(chunks).toString("utf8");

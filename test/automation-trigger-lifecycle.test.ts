@@ -278,15 +278,24 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
     "if pid==0:",
     " os.chdir(cwd); os.execvpe(exe,[exe]+argv,dict(os.environ))",
     "out=b''; replied=False; end=time.time()+60",
+    "debug=os.environ.get('FEISHU_AUTOMATION_DIAGNOSTIC')=='1'; reads=0; writes=0",
+    "if debug: print('[DEBUG-44-macos] PTY child started',flush=True)",
     "while time.time()<end:",
     " r,_,_=select.select([fd],[],[],0.1)",
     " if r:",
-    "  try: out+=os.read(fd,65536)",
-    "  except OSError:",
+    "  try:",
+    "   chunk=os.read(fd,65536); out+=chunk; reads+=1",
+    "   if debug and reads<=12: print('[DEBUG-44-macos] PTY read bytes='+str(len(chunk))+' total='+str(len(out)),flush=True)",
+    "   if debug and chunk: open(marker+'.trace','wb').write(out[-4096:])",
+    "  except OSError as error:",
+    "   if debug: print('[DEBUG-44-macos] PTY read errno='+str(error.errno),flush=True)",
     "   _,st=os.waitpid(pid,0); open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
     " if not replied and re.search(pattern,out.decode('utf-8','replace'),re.I):",
     "  replied=True; open(marker+'.ready','w').write('ready')",
+    "  if debug: print('[DEBUG-44-macos] PTY confirmation detected',flush=True)",
     " if os.path.exists(marker+'.proceed'):",
+    "  writes+=1",
+    "  if debug and writes<=12: print('[DEBUG-44-macos] PTY sending confirmation',flush=True)",
     "  time.sleep(0.2); os.write(fd,b'y\\n')",
     " p,st=os.waitpid(pid,os.WNOHANG)",
     " if p:",
@@ -299,6 +308,17 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
   });
   let exitCode: number | null = null;
   child.on("close", (code) => { exitCode = code; });
+  // [DEBUG-44-macos] Only this synthetic fixture's PTY transcript is exposed.
+  if (process.env.FEISHU_AUTOMATION_DIAGNOSTIC === "1") {
+    child.stdout.on("data", (chunk) => process.stderr.write(chunk));
+    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+    child.on("close", (code, signal) => console.error("[DEBUG-44-macos] PTY close", { code, signal }));
+    test.after(() => console.error("[DEBUG-44-macos] PTY final", {
+      exitCode, signal: child.signalCode,
+      ready: existsSync(marker + ".ready"), proceed: existsSync(marker + ".proceed"),
+      transcript: existsSync(marker + ".trace") ? readFileSync(marker + ".trace", "utf8") : "absent",
+    }));
+  }
   await waitFor(() => existsSync(marker + ".ready"));
 
   // Advance one old-grid minute while the confirmation prompt is still open.
