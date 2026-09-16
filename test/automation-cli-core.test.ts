@@ -463,3 +463,15 @@ test("creation neither runs a task nor starts a service; inherited unattended pr
   const list = runCli(f, ["automation", "list"], { env: { FEISHU_UNATTENDED: "1" } });
   assert.equal(list.code, 0);
 });
+
+test("update of an interval job rejects --tz (elapsed durations are timezone-independent)", async () => {
+  const f = await fixture();
+  modelServers.push(f.model.server);
+  const add = runCli(f, ["automation", "add", "--name", "tz-interval", "--every", "30m", "--prompt-stdin", "--yes"], { input: "t\n" });
+  assert.equal(add.code, 0, add.stderr);
+  const bad = runCli(f, ["automation", "update", "tz-interval", "--tz", "America/New_York", "--timeout", "20m", "--yes"], { input: "" });
+  assert.notEqual(bad.code, 0);
+  assert.match(bad.stderr, /--tz|timezone/i);
+  const unchanged = JSON.parse(runCli(f, ["automation", "show", "tz-interval"]).stdout);
+  assert.equal(unchanged.timeoutMinutes, 10);
+});

@@ -229,7 +229,16 @@ function buildUpdatedSchedule(
   const noCatchUp = rest.includes("--no-catch-up");
   const catchUpRaw = flagValue(rest, "--catch-up");
   if (noCatchUp && catchUpRaw !== undefined) fail("--catch-up and --no-catch-up are mutually exclusive.");
-  const tz = flagValue(rest, "--tz") ?? (oldSchedule.kind === "interval" ? DEFAULT_TIMEZONE : oldSchedule.timeZone);
+  const tzRaw = flagValue(rest, "--tz");
+  const tz = tzRaw ?? (oldSchedule.kind === "interval" ? DEFAULT_TIMEZONE : oldSchedule.timeZone);
+  // Fixed elapsed intervals carry no zone: an explicit non-default --tz is
+  // invalid whether it targets an existing interval or an --every rebuild.
+  const resultingKind = explicitKinds
+    ? (rest.includes("--every") ? "interval" : rest.includes("--cron") ? "cron" : "oneshot")
+    : oldSchedule.kind;
+  if (resultingKind === "interval" && tzRaw !== undefined && tzRaw !== DEFAULT_TIMEZONE) {
+    fail("--tz applies only to --at and --cron schedules; fixed elapsed intervals (--every) do not change with timezone.");
+  }
 
   if (!explicitKinds) {
     // Same kind; tz/catch-up may change. A disabled window (null) is retained.
@@ -534,9 +543,11 @@ async function updateCommand(root: string, restInput: string[]): Promise<number>
   let saved: JobRecord;
   try {
     saved = mutateJobRecord(root, name, (current) => {
-      // An edit cannot resurrect a job paused/removed while confirmation was open.
-      if (current.state !== "enabled") {
-        throw new AutomationError(`Job "${name}" was ${current.state} while the update awaited confirmation; no change was applied. Review it and re-confirm if needed.`, "busy");
+      // An edit cannot resurrect a REMOVED job. A pause during confirmation is
+      // allowed (editing a paused job keeps it paused); pausing admission is
+      // independently atomic, and an active run keeps its start-time snapshot.
+      if (current.state === "removed") {
+        throw new AutomationError(`Job "${name}" was removed while the update awaited confirmation; no change was applied.`, "busy");
       }
       const untouched = current.timeoutMinutes === existing.timeoutMinutes
         && current.profile === existing.profile

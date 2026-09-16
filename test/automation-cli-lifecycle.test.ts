@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -225,7 +225,7 @@ test("cancel stops the named active run through its owner and records cancellati
   const active = spawn(process.execPath, [cli, "automation", "run", "daily-reminder"], { cwd: f.root, env: baseEnv(f), stdio: ["ignore", "pipe", "pipe"] });
   let activeStderr = "";
   active.stderr.on("data", (chunk) => { activeStderr += chunk; });
-  await waitFor(() => gate.requests.length === 1);
+  await waitFor(() => gate.requests.length === 1, 300);
   assert.match(lastUserPrompt(gate), /CANCEL-SNAPSHOT-TASK/);
 
   const cancel = runCli(f, ["automation", "cancel", "daily-reminder"]);
@@ -461,12 +461,13 @@ test("the stored mutateJobRecord merge keeps run history written while a confirm
   void before;
 });
 
-test("an approved edit cannot resurrect a job paused while confirmation was open", async () => {
+test("an approved edit is rejected when the job is removed while confirmation was open", async () => {
   const f = await fixture();
   modelServers.push(f.model.server);
   assert.equal(addJob(f, ["--timeout", "10m"]).code, 0);
-  // Drive the TTY confirmation externally: hold the prompt open, pause from a
-  // second CLI while it waits, then answer y. The approval must be rejected.
+  // Drive the TTY confirmation externally: hold the prompt open, remove the
+  // job from a second CLI while it waits, then answer y. The approval must be
+  // rejected and cannot resurrect a removed job.
   const python = [
     "import os,pty,re,select,sys,time",
     "cwd=sys.argv[1]; exe=sys.argv[2]; argv=eval(sys.argv[3]); marker=sys.argv[4]",
@@ -489,19 +490,20 @@ test("an approved edit cannot resurrect a job paused while confirmation was open
     "  open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
     "open(marker,'wb').write(b'timeout')",
   ].join("\n");
-  const marker = join(f.root, "pause-race-pty");
+  const marker = join(f.root, "remove-race-pty");
   const pending = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, "automation", "update", "daily-reminder", "--timeout", "20m"]), marker], {
     env: baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }),
   });
   let code: number | null = null;
   pending.on("close", (c) => { code = c; });
   await waitFor(() => existsSync(marker + ".ready"));
-  assert.equal(runCli(f, ["automation", "pause", "daily-reminder"]).code, 0);
+  // Ordinary retained removal needs no confirmation and does not run.
+  assert.equal(runCli(f, ["automation", "rm", "daily-reminder"]).code, 0);
   writeFileSync(marker + ".proceed", "go");
   await waitFor(() => code !== null, 200);
   assert.notEqual(code, 0, "the stale confirmation should be rejected");
   const shown = JSON.parse(runCli(f, ["automation", "show", "daily-reminder"]).stdout);
-  assert.equal(shown.state, "paused");
+  assert.equal(shown.state, "removed");
   assert.equal(shown.timeoutMinutes, 10);
 });
 
@@ -527,4 +529,19 @@ test("a new explicit --at retains the saved lateness window unless --catch-up is
   const moved = runCli(f, ["automation", "update", "daily-reminder", "--at", "2030-07-01T09:00", "--yes"], { input: "" });
   assert.equal(moved.code, 0, moved.stderr);
   assert.equal(JSON.parse(moved.stdout).schedule.latenessMinutes, 45);
+});
+
+test("a dangling schedule.json symlink is rejected and preserved, not treated as absent", async () => {
+  const f = await fixture();
+  modelServers.push(f.model.server);
+  assert.equal(addJob(f).code, 0);
+  const ledger = join(f.jobs, "jobs", "daily-reminder", "schedule.json");
+  rmSync(ledger, { force: true });
+  symlinkSync(join(f.jobs, "does-not-exist-target"), ledger);
+  // show tolerates an unreadable ledger but must surface the non-regular
+  // evidence on stderr (not silently behave as an absent/null ledger).
+  const shown = runCli(f, ["automation", "show", "daily-reminder"]);
+  assert.equal(shown.code, 0);
+  assert.match(shown.stderr, /not a regular file|preserved/i);
+  assert.ok(lstatSync(ledger).isSymbolicLink(), "the dangling symlink evidence must be preserved");
 });

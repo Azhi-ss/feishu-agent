@@ -851,11 +851,26 @@ export function scheduleStatePath(workspace: Workspace, name: string): string {
 export function loadScheduleState(workspace: Workspace, name: string): ScheduleState | null {
   const path = scheduleStatePath(workspace, name);
   const job = loadJob(workspace.root, name);
-  if (!existsSync(path)) {
+  // lstat first: a dangling symlink (or any non-regular entry) must be
+  // rejected/preserved, not treated as an absent ledger.
+  let entryStat: import("node:fs").Stats | null;
+  try {
+    entryStat = lstatSync(path);
+  } catch (error) {
+    // Only genuine absence (ENOENT) means "no ledger"; EACCES/EIO are not.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new AutomationError(`Schedule state for "${name}" cannot be read; it has been preserved at ${path}.`);
+    }
+    entryStat = null;
+  }
+  if (entryStat === null) {
     if (job.runs.some((run) => run.trigger === "scheduled")) {
       throw new AutomationError(`Schedule state for "${name}" is missing after a scheduled attempt; run evidence is preserved. Restore the ledger before any scheduling decisions.`);
     }
     return null;
+  }
+  if (!entryStat.isFile()) {
+    throw new AutomationError(`Schedule state for "${name}" is not a regular file; it has been preserved at ${path}.`);
   }
   let state: ScheduleState;
   try {
@@ -1038,6 +1053,15 @@ export function ensureWorkspace(root: string): Workspace {
   return paths;
 }
 
+/** True only for a regular (non-symlink) directory. */
+function lstatSafeIsDir(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * True when a filename in a job directory is a regular (non-symlink)
  * directory entry directly inside the managed jobs tree. Job directory names
@@ -1085,7 +1109,18 @@ export function jobPath(root: string, name: string): string {
 export function loadJob(root: string, name: string): JobRecord {
   validateName(name);
   const path = jobPath(root, name);
-  if (!existsSync(path)) throw new AutomationError(`No Automation Job named "${name}". Run "feishu automation list" to see saved jobs.`);
+  // lstat first: a dangling symlink or other non-regular entry is rejected
+  // rather than reported as "no such job"; only ENOENT means absent.
+  let entryStat: import("node:fs").Stats | null;
+  try {
+    entryStat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new AutomationError(`Job record "${name}" cannot be read; it has been preserved at ${path}.`);
+    }
+    throw new AutomationError(`No Automation Job named "${name}". Run "feishu automation list" to see saved jobs.`);
+  }
+  if (!entryStat.isFile()) throw new AutomationError(`Job record "${name}" is not a regular file; it has been preserved at ${path}.`);
   let record: JobRecord;
   try {
     record = JSON.parse(readFileSync(path, "utf8")) as JobRecord;
@@ -1295,13 +1330,6 @@ export function cancelRequested(workspace: Workspace, name: string, runId: strin
 
 /** Run ids are timestamped stamps ending in a UUID; retained outputs key by them. */
 const RUN_ID_RE = /^\d{8}T\d{6}Z-(?:manual|sched)-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const RUN_ARTIFACT_RE = RUN_ID_RE;
-
-/** A runs/scratch artifact is owned when its basename is a real run id. */
-function artifactOwned(entry: string): boolean {
-  return RUN_ID_RE.test(entry);
-}
-
 const RETENTION_DAYS = 30;
 
 /**
@@ -1317,12 +1345,14 @@ export function pruneRetainedArtifacts(
   now: number = nowMs(),
 ): { pruned: number; warnings: string[] } {
   const cutoffMs = now - RETENTION_DAYS * 86_400_000;
-  const { jobs, warnings } = listJobs(root);
   const workspace = workspacePaths(root);
+  const warnings: string[] = [];
   // Never traverse a jobs container that is itself a symlink.
-  if (existsSync(workspace.jobs) && !lstatSync(workspace.jobs).isDirectory()) {
+  if (existsSync(workspace.jobs) && !lstatSafeIsDir(workspace.jobs)) {
     return { pruned: 0, warnings };
   }
+  const { jobs, warnings: listWarnings } = listJobs(root);
+  warnings.push(...listWarnings);
   let pruned = 0;
   for (const job of jobs) { // valid records only: corrupt/unsupported dirs are never traversed
     const name = job.name;
@@ -1352,7 +1382,7 @@ export function pruneRetainedArtifacts(
           // Owned only by a real run-id basename (stdout/stderr logs). Unknown
           // names — and stray non-log files — are never retention targets.
           const match = /^(.+)\.(stdout|stderr)\.log$/.exec(entry);
-          if (!match || !artifactOwned(match[1]!)) continue;
+          if (!match || !RUN_ID_RE.test(match[1]!)) continue;
           if (st.mtimeMs < cutoffMs) { rmSync(path, { force: true }); pruned++; }
         } catch (error) {
           // Preserve rather than guessing: an unreadable diagnostic is evidence.
@@ -1368,7 +1398,7 @@ export function pruneRetainedArtifacts(
           const st = lstatSync(path);
           // Per-run scratch dirs only; never follow symlinks, never touch
           // unfamiliar names even when old.
-          if (st.isDirectory() && RUN_ARTIFACT_RE.test(entry) && st.mtimeMs < cutoffMs) {
+          if (st.isDirectory() && RUN_ID_RE.test(entry) && st.mtimeMs < cutoffMs) {
             rmSync(path, { recursive: true, force: true }); pruned++;
           }
         } catch (error) {
@@ -1472,33 +1502,38 @@ export function admitRun(
 
       acquireWorkspaceLock(targetLock, { ...lockContents, kind }, (held) =>
         `An Automation Run of job "${job.name}" is already running (run ${String(held.runId)}, pid ${String(held.pid)}). Wait for it to finish before starting another run.`);
-      // A cancel request is run-bound; once this new run owns the job lock any
-      // leftover file can only name a previous run. Remove it here, under the
-      // lifecycle lock and BEFORE the new child is supervised, so a concurrent
-      // cancel published for the new run is never erased after admission.
+      // From here until Admission is returned, release the acquired job lock
+      // on every exceptional path so a ledger failure cannot strand a live
+      // lock for a run that never started.
       try {
-        rmSync(cancelRequestPath(workspace, job.name), { force: true });
-      } catch {
-        // best-effort: a request that cannot be removed is still matched by
-        // run id and therefore inert for the new admission.
-      }
-      // Scheduled callers: record the running occurrence INSIDE this same
-      // lock section, so a concurrent pause can never expire/skip an
-      // occurrence that has already been admitted. Throwing here releases
-      // both the job lock and the lifecycle lock.
-      if (expectOccurrence) {
-        const state = loadScheduleState(workspace, job.name);
-        if (state?.occurrences.some((item) => item.id === expectOccurrence!.id)) {
-          releaseWorkspaceLock(targetLock);
-          throw new AutomationError("Scheduled occurrence was already consumed; no replay.");
+        // A cancel request is run-bound; once this new run owns the job lock
+        // any leftover file can only name a previous run. Remove it here,
+        // under the lifecycle lock and BEFORE the new child is supervised.
+        try {
+          rmSync(cancelRequestPath(workspace, job.name), { force: true });
+        } catch {
+          // best-effort: a request that cannot be removed is still matched
+          // by run id and therefore inert for the new admission.
         }
-        saveScheduleState(workspace, {
-          ...state ?? { version: STATE_VERSION, name: job.name, occurrences: [] },
-          occurrences: [
-            ...(state?.occurrences ?? []),
-            { id: expectOccurrence.id, dueMs: expectOccurrence.dueMs, status: "running", runId: lockContents.runId, startedAt: lockContents.startedAt },
-          ],
-        });
+        // Scheduled callers: record the running occurrence INSIDE this same
+        // lock section, so a concurrent pause can never expire/skip an
+        // occurrence that has already been admitted.
+        if (expectOccurrence) {
+          const state = loadScheduleState(workspace, job.name);
+          if (state?.occurrences.some((item) => item.id === expectOccurrence!.id)) {
+            throw new AutomationError("Scheduled occurrence was already consumed; no replay.");
+          }
+          saveScheduleState(workspace, {
+            ...state ?? { version: STATE_VERSION, name: job.name, occurrences: [] },
+            occurrences: [
+              ...(state?.occurrences ?? []),
+              { id: expectOccurrence.id, dueMs: expectOccurrence.dueMs, status: "running", runId: lockContents.runId, startedAt: lockContents.startedAt },
+            ],
+          });
+        }
+      } catch (error) {
+        releaseWorkspaceLock(targetLock);
+        throw error;
       }
 
       return {

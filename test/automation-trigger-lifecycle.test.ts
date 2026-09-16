@@ -128,6 +128,10 @@ test("pausing while a run is active leaves that run on its start-time plan snaps
   assert.equal(f.model.requests.length, 1, "the new timeout was applied retroactively to the running snapshot");
   assert.match(f.model.requests[0], /SNAPSHOT-ORIGINAL-TASK/);
   assert.doesNotMatch(f.model.requests[0], /TIMEOUT-1/);
+  // The run is still genuinely active (not yet settled) past the new 1m limit.
+  const stillActive = JSON.parse(runCli(f, ["automation", "show", "snapshot-job"]).stdout);
+  assert.equal(stillActive.latestRun.outcome, "unknown");
+  assert.equal(stillActive.latestRun.endedAt, null);
 
   // Past the original two-minute snapshot the active run times out honestly.
   setClock(f, DUE_MS - 89 * MIN + 125_000);
@@ -209,10 +213,14 @@ test("a paused queued job discards its pending minute even when a slot frees, wi
   // Capacity is full; the waiter's minute is still pending. Pause it: that
   // minute is discarded as lateness-skipped and is never admitted afterward.
   assert.equal(runCli(f, ["automation", "pause", "paused-waiter"]).code, 0);
-  setClock(f, DUE_MS + 30_000);
   // Pause discards the not-started pending minute (no queue, no backlog).
-  const skipped = await settledOccurrence(f, "paused-waiter", DUE_MS);
-  assert.equal(skipped.outcome, "lateness-skipped");
+  await waitFor(() => {
+    const view = JSON.parse(runCli(f, ["automation", "show", "paused-waiter"]).stdout);
+    const entry = (view.scheduleOccurrences as Array<Record<string, unknown>>).find((e) => Number(e.dueMs) === DUE_MS);
+    return entry?.outcome === "lateness-skipped";
+  }, 200);
+  const skipped = (JSON.parse(runCli(f, ["automation", "show", "paused-waiter"]).stdout).scheduleOccurrences as Array<Record<string, unknown>>).find((e) => Number(e.dueMs) === DUE_MS);
+  assert.equal(skipped?.outcome, "lateness-skipped");
   gateA.release();
   gateB.release();
   assert.equal(f.model.requests.length, 2, "a paused queued job was admitted after capacity freed");

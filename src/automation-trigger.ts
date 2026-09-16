@@ -11,6 +11,7 @@ import {
   jobLockPath,
   latestDueOccurrence,
   listJobs,
+  loadJob,
   loadScheduleState,
   nextOccurrence,
   nowMs,
@@ -23,6 +24,7 @@ import {
   releaseWorkspaceLock,
   settleOccurrencesBulk,
   tickIntervalMs,
+  withLifecycleLock,
   type JobRecord,
   type Workspace,
 } from "./automation.js";
@@ -115,77 +117,75 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
     }
   };
 
-  const evaluateJob = (job: JobRecord): void => {
-    // Removed jobs never admit. Paused jobs admit nothing; newly arriving
-    // not-started occurrences are discarded once each (settled entries make
-    // the next tick a no-op, so no ledger busy-loop). An in-progress run that
-    // survives a Trigger restart is still recovered below.
-    if (job.state === "removed") return;
-    const now = nowMs();
-    const state = loadScheduleState(workspace, job.name);
-    if (state) recoverOrphans(job, state);
-    if (job.state === "paused") {
-      try {
-        const current = loadScheduleState(workspace, job.name);
-        const floor = current ? recordedFloor(current) : -Infinity;
-        const candidate = latestDueOccurrence(job.schedule, now, floor, job);
-        if (candidate && !(current?.occurrences.some((entry) => entry.id === occurrenceId(job.schedule, candidate.dueMs)))) {
-          discardPendingOccurrences(workspace, job, now);
+  const evaluateJob = (jobArg: JobRecord): void => {
+    // Decide AND settle inside one locked transaction against a freshly
+    // reloaded record, so an edit landing after evaluation cannot be
+    // overwritten by a stale expiry/skip decision. The locked callback
+    // returns the action to perform; the launch itself is outside the lock.
+    const decision = withLifecycleLock(workspace, () => {
+      const job = loadJob(workspace.root, jobArg.name);
+      if (job.state === "removed") return { kind: "none" as const };
+      const now = nowMs();
+      const state = loadScheduleState(workspace, job.name);
+      if (state) recoverOrphans(job, state);
+      if (job.state === "paused") {
+        try {
+          const current = loadScheduleState(workspace, job.name);
+          const floor = current ? recordedFloor(current) : -Infinity;
+          const candidate = latestDueOccurrence(job.schedule, now, floor, job);
+          if (candidate && !(current?.occurrences.some((entry) => entry.id === occurrenceId(job.schedule, candidate.dueMs)))) {
+            discardPendingOccurrences(workspace, job, now);
+          }
+        } catch (error) {
+          if (!(error instanceof AutomationError)) throw error;
+          warn(error.message);
         }
-      } catch (error) {
-        if (!(error instanceof AutomationError)) throw error;
-        warn(error.message);
+        return { kind: "none" as const };
       }
-      return;
-    }
 
-    // Re-read after recovery: settled or running occurrences are never started.
-    const current = loadScheduleState(workspace, job.name);
-    const floor = current ? recordedFloor(current) : -Infinity;
-    const candidate = latestDueOccurrence(job.schedule, now, floor, job);
-    if (!candidate) return;
-    const { dueMs, deadlineMs } = candidate;
-    const id = occurrenceId(job.schedule, dueMs);
-    const existing = current?.occurrences.find((entry) => entry.id === id);
-    if (existing) return;
+      // Re-read after recovery: settled or running occurrences are never started.
+      const current = loadScheduleState(workspace, job.name);
+      const floor = current ? recordedFloor(current) : -Infinity;
+      const candidate = latestDueOccurrence(job.schedule, now, floor, job);
+      if (!candidate) return { kind: "none" as const };
+      const { dueMs, deadlineMs } = candidate;
+      const id = occurrenceId(job.schedule, dueMs);
+      const existing = current?.occurrences.find((entry) => entry.id === id);
+      if (existing) return { kind: "none" as const };
 
-    if (now > deadlineMs) {
-      // The latest eligible never-started occurrence aged out. One-shot jobs
-      // expire; recurring jobs skip it (latest-only coalescing: nothing older
-      // is replayed or recorded).
-      if (job.schedule.kind === "oneshot") {
-        settleScheduledOccurrence(workspace, job.name, id, "expired", null, null, dueMs);
-        log(`Job "${job.name}" recorded expired without running.`);
-      } else {
+      if (now > deadlineMs) {
+        // Latest eligible never-started occurrence aged out under the
+        // CURRENT policy. One-shot expires; recurring skips (latest-only).
+        if (job.schedule.kind === "oneshot") {
+          settleScheduledOccurrence(workspace, job.name, id, "expired", null, null, dueMs);
+          return { kind: "log" as const, text: `Job "${job.name}" recorded expired without running.` };
+        }
         settleScheduledOccurrence(workspace, job.name, id, "lateness-skipped", null, null, dueMs);
-        log(`Recurring job "${job.name}" missed ${new Date(dueMs).toISOString()} past its catch-up window; the occurrence is skipped without backlog replay.`);
+        return { kind: "log" as const, text: `Recurring job "${job.name}" missed ${new Date(dueMs).toISOString()} past its catch-up window; the occurrence is skipped without backlog replay.` };
       }
-      return;
-    }
-    // A new due minute while this job's own previous run is still active is
-    // an overlap: skip it without queuing or starting a second child.
-    if (owned.has(job.name)) {
-      settleScheduledOccurrence(workspace, job.name, id, "overlap-skipped", null, null, dueMs);
-      log(`Job "${job.name}" is still running; ${new Date(dueMs).toISOString()} is overlap-skipped without queuing.`);
-      return;
-    }
-    // Coalesce without backlog: durably skip older *eligible* due
-    // occurrences this catch-up could otherwise admit after the latest
-    // finishes. Nothing earlier than the job's creation (or the recorded
-    // floor) and nothing already out of window is recorded.
-    if (job.schedule.kind !== "oneshot") {
-      const listFloor = Math.max(floor, createdFloorMs(job));
-      const older = dueOccurrencesBetween(job.schedule, listFloor, dueMs - 1)
-        .filter((olderDue) => now <= occurrenceDeadline(job.schedule, olderDue))
-        .filter((olderDue) => !current?.occurrences.some((entry) => entry.id === occurrenceId(job.schedule, olderDue)));
-      if (older.length > 0) {
-        settleOccurrencesBulk(workspace, job.name, older.map((olderDue) => ({
-          id: occurrenceId(job.schedule, olderDue), dueMs: olderDue, outcome: "lateness-skipped" as const,
-        })));
-        log(`Recurring job "${job.name}" coalesced ${older.length} older occurrence${older.length === 1 ? "" : "s"}; only the latest runs.`);
+      // A new due minute while this job's own previous run is still active is
+      // an overlap: skip it without queuing or starting a second child.
+      if (owned.has(job.name)) {
+        settleScheduledOccurrence(workspace, job.name, id, "overlap-skipped", null, null, dueMs);
+        return { kind: "log" as const, text: `Job "${job.name}" is still running; ${new Date(dueMs).toISOString()} is overlap-skipped without queuing.` };
       }
-    }
-    launch(job, id, dueMs, deadlineMs);
+      // Coalesce without backlog: durably skip older eligible due occurrences.
+      if (job.schedule.kind !== "oneshot") {
+        const listFloor = Math.max(floor, createdFloorMs(job));
+        const older = dueOccurrencesBetween(job.schedule, listFloor, dueMs - 1)
+          .filter((olderDue) => now <= occurrenceDeadline(job.schedule, olderDue))
+          .filter((olderDue) => !current?.occurrences.some((entry) => entry.id === occurrenceId(job.schedule, olderDue)));
+        if (older.length > 0) {
+          settleOccurrencesBulk(workspace, job.name, older.map((olderDue) => ({
+            id: occurrenceId(job.schedule, olderDue), dueMs: olderDue, outcome: "lateness-skipped" as const,
+          })));
+          log(`Recurring job "${job.name}" coalesced ${older.length} older occurrence${older.length === 1 ? "" : "s"}; only the latest runs.`);
+        }
+      }
+      return { kind: "launch" as const, job, id, dueMs, deadlineMs };
+    });
+    if (decision.kind === "launch") launch(decision.job, decision.id, decision.dueMs, decision.deadlineMs);
+    else if (decision.kind === "log") log(decision.text);
   };
 
   const evaluate = (): void => {
