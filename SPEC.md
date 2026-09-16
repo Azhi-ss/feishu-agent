@@ -262,6 +262,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - Feishu Command Policy Editor 在提交前拒绝 `/share`、`/import`、`/login`、`/logout` 及其参数形式，并显示明确原因。
 - Pi 自动补全仍可能展示禁用命令；首版接受此限制。
 - 禁用内置命令仅防误用，不限制 Bash 的网络或文件能力。
+- **Replay Reasoning Trim（#45）**：在发送给模型的历史上下文准备阶段，内置自动裁剪已正常完成（`stopReason: "stop"`）、不含 toolCall、具备最终文本回答且无不可省略标记（如 `redacted`、加密签名或非纯文本签名）的 Assistant 消息中的推理内容；回答正文、工具调用与结果、工具步骤推理、报错/截断/取消状态及磁盘原始会话记录保持完整不变。同一语义规则统一覆盖后续对话请求、自动压缩、手动压缩（`/compact`）与分支摘要（`/tree` 切换）。计算失败时原子回退到原始输入并输出安全诊断，不设任何用户开关、配置项或模型名称分支。
 
 ### 14. Initialization
 

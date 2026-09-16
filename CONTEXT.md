@@ -110,4 +110,8 @@ _Avoid_: Bot-in-group monitoring, full chat-history ingestion, unconditional mod
 An escalation of a Sweep result judged P0, delivered through Feishu urgent channels (in-app, then SMS/phone), subject to an explicit policy: severity threshold, quiet hours, and per-day cap. Alerts are the last layer built, never the default output of a Sweep.
 _Avoid_: Routine phone buzz, model-self-authorized urgent calls, unbounded escalation frequency
 
+**Replay Reasoning Trim**:
+The automatic omission of reasoning blocks from verified-complete, text-only final assistant answers when preparing history for subsequent model requests (normal conversations, automatic/manual compaction, and branch summarization). On-disk session records, answer text, tool calls, tool results, tool-step reasoning, in-progress/error/aborted output, and signed/redacted reasoning structures remain intact.
+_Avoid_: Prompt stripping, transcript pruning, rewriting session logs, blanket thinking deletion
+
 
