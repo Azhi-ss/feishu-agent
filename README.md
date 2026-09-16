@@ -48,6 +48,30 @@ npm run build
 npm link          # exposes the `feishu` binary (or run `node dist/src/cli.js` directly)
 ```
 
+### Development tests
+
+Use Node 24 for focused iteration and Node 22 for the pre-commit full suite;
+CI covers both versions. SDK upgrades still require full local runs on both.
+
+```bash
+npm run build
+node --test dist/test/package-cli.test.js  # select the file relevant to the change
+# With Node 22 active:
+npm test
+git diff --check
+```
+
+After pulling a change that renames or deletes TypeScript files, clean generated
+output before rebuilding: `tsc` does not remove obsolete JavaScript files, and
+`npm test` discovers every `dist/test/*.test.js`. In particular, the test split
+removes `remote-bridge.test.ts` and `automation-trigger-recurring.test.ts`; their
+old compiled files must not run alongside their replacements.
+
+```bash
+node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+npm run build
+```
+
 ### Optional: install the Host Agent bridge Skill
 
 The repository also contains `skills/feishu-control/`, a host-side bridge that lets another Pi-compatible Agent delegate work to `feishu`. It is **not** a Feishu Runtime Skill: do not put it under `~/.feishu-agent/skills/` and do not expect `feishu init` to install it.

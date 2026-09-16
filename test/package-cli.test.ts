@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,3 +60,50 @@ test("public package CLIs keep Feishu packages invisible to Pi and update --exte
   assert.equal(JSON.parse(readFileSync(join(home, ".feishu-agent", "npm", "node_modules", "fixture-update", "package.json"), "utf8")).version, "2.0.0");
   assert.deepEqual(readFileSync(join(home, ".pi", "agent", "settings.json")), piSettingsBefore);
 });
+
+// Inject the competing publication at the filesystem boundary, while exercising
+// the real CLI. Ordinary parallel launches rarely hit this exact TOCTOU window.
+for (const competing of ["same-target", "wrong-target", "directory"] as const) {
+  test(`package CLI handles a concurrent compatibility mapping: ${competing}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "feishu-package-race-"));
+    const home = join(root, "home"), project = join(root, "project");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    const target = join(project, ".feishu-agent");
+    const preload = join(root, "competing-mapping.cjs");
+    const published = join(root, "published.json");
+    writeFileSync(preload, `
+const fs = require("node:fs");
+const original = fs.symlinkSync;
+fs.symlinkSync = function(target, path, type) {
+  if (target === ${JSON.stringify(target)}) {
+    ${competing === "directory" ? 'fs.mkdirSync(path);' : `original(${competing === "same-target" ? "target" : JSON.stringify(root)}, path, type);`}
+    fs.writeFileSync(${JSON.stringify(published)}, JSON.stringify({ path }));
+  }
+  return original(target, path, type);
+};
+require("node:module").syncBuiltinESMExports();
+`);
+    const child = spawn(process.execPath, ["--require", preload, feishuCli, "list"], {
+      cwd: project, env: { ...process.env, HOME: home, PI_OFFLINE: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stdout.resume();
+    child.stderr.on("data", (chunk) => stderr += chunk);
+    const code = await new Promise<number | null>((done, reject) => {
+      child.on("error", reject);
+      child.on("close", done);
+    });
+    assert(existsSync(published), "the real CLI must exercise competing publication");
+    const { path } = JSON.parse(readFileSync(published, "utf8"));
+    if (competing === "same-target") {
+      assert.equal(code, 0, stderr);
+      assert.equal(readlinkSync(path), target);
+    } else {
+      assert.notEqual(code, 0, "an incompatible mapping must never be accepted");
+      if (competing === "wrong-target") assert.equal(readlinkSync(path), root);
+    }
+    assert(!existsSync(join(project, ".pi")), "never create ordinary Pi project storage");
+  });
+}
