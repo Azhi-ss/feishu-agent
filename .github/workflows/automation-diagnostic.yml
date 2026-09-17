@@ -17,8 +17,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         node: [22, 24]
-    env:
-      FEISHU_AUTOMATION_DIAGNOSTIC: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,7 +29,8 @@ jobs:
         run: |
           for round in 1 2 3; do
             echo "Diagnostic round $round"
-            node --test --test-name-pattern='the old plan keeps firing|a failed recurring occurrence' dist/test/automation-trigger-cron.test.js dist/test/automation-trigger-lifecycle.test.js || exit $?
+            node --test dist/test/automation-stdin.test.js || exit $?
+            node --test --test-name-pattern='the old plan keeps firing|a failed recurring occurrence|an approved edit is rejected|an approved cron expression edit' dist/test/automation-trigger-cron.test.js dist/test/automation-trigger-lifecycle.test.js dist/test/automation-cli-lifecycle.test.js || exit $?
           done
       - name: Shared offline suite (only after focused reproduction passes)
         run: node --test dist/test/automation-*.test.js

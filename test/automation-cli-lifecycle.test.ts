@@ -474,7 +474,7 @@ test("an approved edit is rejected when the job is removed while confirmation wa
     "pid,fd=pty.fork()",
     "if pid==0:",
     " os.chdir(cwd); os.execvpe(exe,[exe]+argv,dict(os.environ))",
-    "out=b''; replied=False; end=time.time()+30",
+    "out=b''; replied=False; sent=False; end=time.time()+30",
     "while time.time()<end:",
     " r,_,_=select.select([fd],[],[],0.1)",
     " if r:",
@@ -483,8 +483,8 @@ test("an approved edit is rejected when the job is removed while confirmation wa
     "   _,st=os.waitpid(pid,0); open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
     " if not replied and re.search(b'Apply this update',out,re.I):",
     "  replied=True; open(marker+'.ready','w').write('ready')",
-    " if os.path.exists(marker+'.proceed'):",
-    "  time.sleep(0.2); os.write(fd,b'y\\n')",
+    " if not sent and os.path.exists(marker+'.proceed'):",
+    "  time.sleep(0.2); os.write(fd,b'y\\n'); sent=True",
     " p,st=os.waitpid(pid,os.WNOHANG)",
     " if p:",
     "  open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
@@ -502,6 +502,8 @@ test("an approved edit is rejected when the job is removed while confirmation wa
   writeFileSync(marker + ".proceed", "go");
   await waitFor(() => code !== null, 200);
   assert.notEqual(code, 0, "the stale confirmation should be rejected");
+  assert.ok(existsSync(marker), "the PTY driver must retain the CLI rejection, not crash");
+  assert.match(readFileSync(marker, "utf8"), /removed while the update awaited confirmation/i);
   const shown = JSON.parse(runCli(f, ["automation", "show", "daily-reminder"]).stdout);
   assert.equal(shown.state, "removed");
   assert.equal(shown.timeoutMinutes, 10);

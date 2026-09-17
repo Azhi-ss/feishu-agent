@@ -4,7 +4,8 @@
 // file writes happen only after complete validation and, for execution-
 // affecting edits, affirmative confirmation.
 
-import { existsSync, readFileSync, readSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { text } from "node:stream/consumers";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
@@ -70,7 +71,7 @@ function flagValue(args: string[], flag: string): string | undefined {
   return index < 0 ? undefined : args[index + 1];
 }
 
-function readTaskValue(args: string[], required: boolean): string | undefined {
+async function readTaskValue(args: string[], required: boolean): Promise<string | undefined> {
   const file = flagValue(args, "--prompt-file");
   if (file && args.includes("--prompt-stdin")) fail("Use either --prompt-file or --prompt-stdin, not both.");
   if (file) {
@@ -89,25 +90,7 @@ function readTaskValue(args: string[], required: boolean): string | undefined {
     if (process.stdin.isTTY) {
       fail("Provide task instructions with --prompt-file <path> when running interactively; --prompt-stdin requires piped input and explicit --yes.");
     }
-    const chunks: Buffer[] = [];
-    // [DEBUG-44-macos] Temporary diagnostic branch only; never log task contents.
-    const diagnostic = process.env.FEISHU_AUTOMATION_DIAGNOSTIC === "1";
-    let diagnosticReads = 0;
-    if (diagnostic) process.stderr.write(`[DEBUG-44-macos] stdin begin tty=${Boolean(process.stdin.isTTY)} readableLength=${process.stdin.readableLength}\n`);
-    const fd = 0;
-    try {
-      let bytesRead: number;
-      const buffer = Buffer.alloc(65536);
-      do {
-        bytesRead = readSync(fd, buffer, 0, buffer.length, null);
-        if (diagnostic && diagnosticReads++ < 12) process.stderr.write(`[DEBUG-44-macos] stdin read bytes=${bytesRead}\n`);
-        if (bytesRead > 0) chunks.push(buffer.subarray(0, bytesRead));
-      } while (bytesRead > 0);
-    } catch (error) {
-      if (diagnostic) process.stderr.write(`[DEBUG-44-macos] stdin error code=${(error as NodeJS.ErrnoException).code} chunks=${chunks.length}\n`);
-      if ((error as NodeJS.ErrnoException).code !== "EAGAIN") throw error;
-    }
-    const task = Buffer.concat(chunks).toString("utf8");
+    const task = await text(process.stdin);
     if (!task.trim()) fail("Task instructions from stdin are empty; provide nonempty task instructions.");
     return task;
   }
@@ -339,7 +322,7 @@ export async function automationCommand(args: string[]): Promise<number> {
     const timeZone = flagValue(rest, "--tz") ?? DEFAULT_TIMEZONE;
     const timeoutMinutes = flagValue(rest, "--timeout") ? parseDurationMinutes(flagValue(rest, "--timeout")!) : DEFAULT_TIMEOUT_MINUTES;
     if (timeoutMinutes < 1) fail("Execution timeout must be at least one minute.");
-    const task = readTaskValue(rest, true)!;
+    const task = (await readTaskValue(rest, true))!;
     if (existsSync(join(root, "jobs", name, "job.json"))) {
       fail(`An Automation Job named "${name}" already exists (including retained removed jobs). Choose a different name or purge it first with "feishu automation rm ${name} --purge".`);
     }
@@ -505,7 +488,7 @@ async function updateCommand(root: string, restInput: string[]): Promise<number>
   const existing = loadJob(root, name);
   if (existing.state === "removed") fail(`Job "${name}" is removed; add it again after purging instead of updating it.`);
 
-  const taskFlag = readTaskValue(rest, false);
+  const taskFlag = await readTaskValue(rest, false);
   const timeoutMinutes = flagValue(rest, "--timeout") !== undefined
     ? parseDurationMinutes(flagValue(rest, "--timeout")!)
     : existing.timeoutMinutes;
