@@ -322,6 +322,8 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
 
 #### 16.2 v0：Briefing
 
+**交付状态：#30 的 Briefing v0 已由 #31–#33 完成。** 无记忆模式、真实手动投递及 owner 排版确认、systemd 定时/补跑/cutoff 与北京时间修正的验收证据见各子票；这是既有部署记录，不代表本轮重新检查了线上运行状态。Sweep/Alert 不属于 v0 完成条件，仍按 §16.4 的独立门槛推进。
+
 - systemd user timer，工作日北京时间 08:30 触发（timer 用内联时区 `…08:30:00 Asia/Shanghai`，与机器系统时区无关），`Persistent=true`；登录补跑仅在北京时间 11:00 cutoff 前发生，逾期跳过。手动出口始终保留：在工位目录运行同一 print prompt 可随时出简报。
 - 事实每次以 user 身份实时拉取，记忆不作为事实来源：今日日程（calendar +agenda）、逾期/今明到期的未完成任务（task +get-my-tasks，其余折叠为数量）、待审批、近 48 小时真人 @我（im +messages-search --is-at-me，过滤 @所有人 与机器人卡片）、近 7 天本人编辑文档（drive +search --edited-since，只列标题与链接）。
 - 交付：bot 以富文本 post 发到 owner 与 bot 的单聊；每条事项带飞书直达链接。部分数据源失败时简报照发，结尾注明失败的数据源；完全静默不是允许的失败模式。user token 过期导致拉取失败时，以 bot 通道通知 owner 重新登录 lark-cli。
@@ -365,7 +367,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 
 #### 16.5 跨平台 Automation 管理与应用级 cron
 
-**状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 分片交付中。#39 提供一次性任务创建/查看/手动运行，#40 增加显式前台 `serve`、两小时默认窗口、持久化消费与重启恢复，#41 增加数字五字段 cron 重复与固定间隔（显式时区、DST 跳过/重叠只算一次、latest-only 补跑、同任务 overlap 跳过）；#42 已提供生命周期编辑，#43 增加显式 launchd/user-systemd `start/stop/status` 托管同一 `serve`；#44 补齐私有 automation Skill 的完整计划→确认→创建/编辑回执及管理流程，复用默认安装器，真实 CLI/fake 模型覆盖交互确认与手动/定时 Print；未部署真实服务或迁移旧任务。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
+**状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 的 #39–#44 六个分片已交付，并通过共享离线 macOS/Linux × Node 22/24 验收（提交 `a430a86`，[CI 35186457536](https://github.com/Azhi-ss/feishu-agent/actions/runs/35186457536) 六项全绿）。#39 提供一次性任务创建/查看/手动运行，#40 增加显式前台 `serve`、两小时默认窗口、持久化消费与重启恢复，#41 增加数字五字段 cron 重复与固定间隔（显式时区、DST 跳过/重叠只算一次、latest-only 补跑、同任务 overlap 跳过）；#42 已提供生命周期编辑，#43 增加显式 launchd/user-systemd `start/stop/status` 托管同一 `serve`；#44 补齐私有 automation Skill 的完整计划→确认→创建/编辑回执及管理流程，复用默认安装器，真实 CLI/fake 模型覆盖交互确认与手动/定时 Print；未部署真实服务或迁移旧任务。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
 
 ##### 分工与管理入口
 
