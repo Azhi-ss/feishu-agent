@@ -176,7 +176,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 已存在的私有 Skill 必须经过第二次明确确认才能覆盖。源树中的符号链接和路径穿越会被拒绝；安装先 staging，目标变更完成后再清理临时树。
 - 复制成功后，当前 Runtime 重新加载 Resources，使 Skill 立即可用。已安装 Skill 仍以当前用户权限运行，确认流程不构成沙箱。
 - Print 模式可以输出搜索结果；没有 UI 时安装必须快速失败，不能等待确认。
-- 当前实现的全新 Home 有 9 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer`、`feishu-package-curator` 与 `volc-devinstance`。本规格 §16.5 待实现的 `feishu-automation` 将成为第 10 个，沿用显式 init 补齐流程；公共资源只能使用脱敏占位符，个人标识留在用户本地。
+- 全新 Home 有 10 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer`、`feishu-package-curator`、`volc-devinstance` 与 `feishu-automation`（§16.5），沿用显式 init 补齐流程；公共资源只能使用脱敏占位符，个人标识留在用户本地。
 
 ### 7. Package management
 
@@ -365,7 +365,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 
 #### 16.5 跨平台 Automation 管理与应用级 cron
 
-**状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 分片交付中。#39 提供一次性任务创建/查看/手动运行，#40 增加显式前台 `serve`、两小时默认窗口、持久化消费与重启恢复，#41 增加数字五字段 cron 重复与固定间隔（显式时区、DST 跳过/重叠只算一次、latest-only 补跑、同任务 overlap 跳过）；#42 已提供生命周期编辑，#43 增加显式 launchd/user-systemd `start/stop/status` 托管同一 `serve`；automation Skill 留待 #44，未部署真实服务或迁移旧任务。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
+**状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 分片交付中。#39 提供一次性任务创建/查看/手动运行，#40 增加显式前台 `serve`、两小时默认窗口、持久化消费与重启恢复，#41 增加数字五字段 cron 重复与固定间隔（显式时区、DST 跳过/重叠只算一次、latest-only 补跑、同任务 overlap 跳过）；#42 已提供生命周期编辑，#43 增加显式 launchd/user-systemd `start/stop/status` 托管同一 `serve`；#44 补齐私有 automation Skill 的完整计划→确认→创建/编辑回执及管理流程，复用默认安装器，真实 CLI/fake 模型覆盖交互确认与手动/定时 Print；未部署真实服务或迁移旧任务。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
 
 ##### 分工与管理入口
 

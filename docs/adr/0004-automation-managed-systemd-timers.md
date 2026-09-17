@@ -4,7 +4,7 @@
 > the [ADR-0003 policy revision](0003-unattended-prompt-level-guards.md), and
 > SPEC §16.5. The systemd-only language, resident-process ban, per-job timers,
 > owner-only write prerequisite, and trial-run workflow below are historical.
-> The replacement specification is settled but not yet implemented.
+> Implementation and acceptance status of the replacement are tracked in SPEC §16.5 and #38.
 
 The Briefing deployment (ADR-0002) is hand-built: the workspace scripts and
 systemd units live outside the repository and are installed by copying files
