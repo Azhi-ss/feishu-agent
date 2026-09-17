@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import type { ModelResponder } from "./helpers/remote-bridge-fixture.js";
 import {
@@ -195,16 +197,28 @@ test("non-text inbound messages (images/files/stickers) receive a v1 acknowledge
 test("tool execution shows a transient friendly status — even when the card is still opening — and clears it before finalizing", async () => {
   const toolResponses = [
     `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "status-tool-1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf RAW_TOOL_OUTPUT_SHOULD_STAY_LOCAL" }) } }] }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`,
-    sse("TOOL-STATUS-DONE"),
   ];
-  const f = await fixture(() => ({ sse: toolResponses.shift() ?? sse("NO-RESPONSE") }), [
+  const f = await fixture(() => {
+    const tool = toolResponses.shift();
+    return tool ? { sse: tool } : { stream: [
+      { line: sseDelta({ content: "TOOL-STATUS-DONE" }), delayMs: 1000 },
+      { line: sseDone(), delayMs: 0 },
+    ] };
+  }, [
     { delayMs: 100, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "status-1", messageType: "text", text: "run-tool" } },
   ], { cardOpenDelayMs: 150 });
+  const finalized = join(f.root, "card-finalized");
+  f.feishu.server.on("request", (request, response) => {
+    if (request.url === "/close-stream-card") {
+      response.once("finish", () => writeFileSync(finalized, "closed"));
+    }
+  });
   try {
     const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
       { wait: "fake-model", send: "" },
       { wait: "remote:connected", send: "" },
-      { wait: "TOOL-STATUS-DONE", send: "/quit\r" },
+      // Visible streamed text is not evidence of turn/card completion.
+      { waitFile: finalized, send: "/quit\r" },
     ]);
     assert.equal(result.code, 0, result.output);
     const stats = await f.feishu.stats();

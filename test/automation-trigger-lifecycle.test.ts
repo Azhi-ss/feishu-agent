@@ -277,7 +277,7 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
     "pid,fd=pty.fork()",
     "if pid==0:",
     " os.chdir(cwd); os.execvpe(exe,[exe]+argv,dict(os.environ))",
-    "out=b''; replied=False; end=time.time()+60",
+    "out=b''; replied=False; sent=False; end=time.time()+60",
     "while time.time()<end:",
     " r,_,_=select.select([fd],[],[],0.1)",
     " if r:",
@@ -286,8 +286,8 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
     "   _,st=os.waitpid(pid,0); open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
     " if not replied and re.search(pattern,out.decode('utf-8','replace'),re.I):",
     "  replied=True; open(marker+'.ready','w').write('ready')",
-    " if os.path.exists(marker+'.proceed'):",
-    "  time.sleep(0.2); os.write(fd,b'y\\n')",
+    " if not sent and os.path.exists(marker+'.proceed'):",
+    "  time.sleep(0.2); os.write(fd,b'y\\n'); sent=True",
     " p,st=os.waitpid(pid,os.WNOHANG)",
     " if p:",
     "  open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
@@ -299,6 +299,8 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
   });
   let exitCode: number | null = null;
   child.on("close", (code) => { exitCode = code; });
+  let diagnostic = "";
+  child.stderr.on("data", (chunk) => diagnostic += chunk);
   await waitFor(() => existsSync(marker + ".ready"));
 
   // Advance one old-grid minute while the confirmation prompt is still open.
@@ -315,7 +317,10 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
   const approvalAt = DUE_MS + 3 * MIN;
   setClock(f, approvalAt);
   writeFileSync(marker + ".proceed", "go");
-  await waitFor(() => existsSync(marker));
+  await waitFor(() => exitCode !== null);
+  assert.equal(exitCode, 0, diagnostic);
+  assert.ok(existsSync(marker), "the PTY driver must retain the CLI receipt");
+  assert.match(readFileSync(marker, "utf8"), /Updated "pending-edit"\./);
   const approved = JSON.parse(runCli(f, ["automation", "show", "pending-edit"]).stdout);
   assert.equal(approved.schedule.intervalMinutes, 5);
   const anchor = Date.parse(approved.schedule.anchoredAt);
@@ -436,22 +441,26 @@ test("an approved cron expression edit makes the pre-edit due minute stale (no r
   gateServers.push(f.model.server);
   // Old rule fires every minute at DUE_MS; the approved change moves it to 10:00 only.
   addCron(f, "expr-edit", "* * * * *", ["--timeout", "1h"]);
+  // Every minute includes the fixture's current minute. Pause BEFORE starting
+  // the Trigger, otherwise a valid pre-edit run races with this test's pause.
+  assert.equal(runCli(f, ["automation", "pause", "expr-edit"]).code, 0);
   const serve = startServe(f);
   await waitStarted(serve);
-  // Pause before the minute, approve a new expression while paused.
-  assert.equal(runCli(f, ["automation", "pause", "expr-edit"]).code, 0);
   setClock(f, DUE_MS);
-  await new Promise((r) => setTimeout(r, 200));
+  const skipped = await settledOccurrence(f, "expr-edit", DUE_MS);
+  assert.equal(skipped.outcome, "lateness-skipped");
   assert.equal(f.model.requests.length, 0, "a paused job admitted work");
   const changed = runCli(f, ["automation", "update", "expr-edit", "--cron", "0 10 * * *", "--yes"]);
   assert.equal(changed.code, 0, changed.stderr);
   assert.equal(runCli(f, ["automation", "resume", "expr-edit"]).code, 0);
-  // The Trigger already emitted a skip for the old minute before the edit; the
-  // new expression does not contain 09:00, so even if a stale launch lingers it
-  // must not start a child. Advance through 09:00..09:59: no requests.
   setClock(f, DUE_MS + 30 * MIN);
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(f.model.requests.length, 0, "the old cron minute fired after an expression edit");
+  f.model.jobs.push(gate(textResponse("EDITED-CRON-FIRE")));
+  setClock(f, DUE_MS + 60 * MIN);
+  const fired = await settledOccurrence(f, "expr-edit", DUE_MS + 60 * MIN);
+  assert.equal(fired.outcome, "completed");
+  assert.equal(f.model.requests.length, 1, "the edited 10:00 occurrence must fire exactly once");
   await stopServe(serve);
 });
 

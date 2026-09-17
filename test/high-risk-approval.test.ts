@@ -154,12 +154,16 @@ test("Print: destructive write without --yes fast-fails nonzero instead of hangi
 
 test("Print: approval is turn-scoped — two --yes deletes in one turn both execute", async () => {
   const second = "lark-cli doc delete doc-2 --as bot --yes";
-  const f = await fixture([toolResponse([exactCommand, second], "multi-1"), textResponse("MULTI-DONE")]);
+  // Make completion order differ from tool-call order; approval is not consumed
+  // by the first call, and the contract does not serialize independent tools.
+  const f = await fixture([toolResponse([`sleep 0.5; ${exactCommand}`, second], "multi-1"), textResponse("MULTI-DONE")]);
   try {
     const result = await runBounded(f.project, f.env, ["-p", "delete doc-1 and doc-2"]);
     assert.equal(result.timedOut, false);
     assert.equal(result.code, 0, result.stderr);
-    assert.deepEqual(larkCalls(f.trace), ["CALL|doc delete doc-1 --as user --yes", "CALL|doc delete doc-2 --as bot --yes"]);
+    assert.match(result.stdout, /MULTI-DONE/);
+    // Compare the full multiset, not a Set: duplicates and missing calls fail.
+    assert.deepEqual(larkCalls(f.trace).sort(), ["CALL|doc delete doc-1 --as user --yes", "CALL|doc delete doc-2 --as bot --yes"]);
   } finally { await closeServer(f.server); }
 });
 
