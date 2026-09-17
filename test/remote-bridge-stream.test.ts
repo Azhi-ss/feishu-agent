@@ -74,13 +74,16 @@ test("High-risk Approval guard still applies to phone-originated turns", async (
       { wait: "整理一下文档", send: "" },
       { wait: "Blocked lark-cli --yes", send: "" },
       { wait: "GUARD-DONE", send: "/quit\r" },
-    ]);
+    ], 60, f.timeoutProgress);
     assert.equal(result.code, 0, result.output);
     const calls = existsSync(f.larkTrace) ? readFileSync(f.larkTrace, "utf8").trim().split("\n").filter((line) => !line.endsWith("--version") && !line.endsWith("skills list --json")) : [];
     assert.deepEqual(calls, [], "blocked command must never reach lark-cli");
     const stats = await f.feishu.stats();
     assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
     assert.equal(stats.cards.closes[0].text, "GUARD-DONE");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+    for (const session of f.sessionFiles()) assert.doesNotMatch(session, new RegExp(SECRET));
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);
@@ -126,7 +129,14 @@ test("a phone turn streams assistant text into ONE card in segments, finalizes i
       const gap = appends[i].at - appends[i - 1].at;
       if (gap < 140) {
         const forced = /[\n。！？!?；;：:]$/.test(appends[i].text) || appends[i].text.length - appends[i - 1].text.length >= 18;
-        assert.ok(forced, `writes ${i - 1}->${i} were ${gap}ms apart without a boundary or delta force`);
+        assert.ok(forced, `writes ${i - 1}->${i} were ${gap}ms apart without a boundary or delta force; snapshots=${JSON.stringify(appends.slice(0, 20).map((append, index) => ({
+          sequence: append.sequence,
+          elapsedMs: append.at - appends[0].at,
+          gapMs: index ? append.at - appends[index - 1].at : null,
+          length: append.text.length,
+          delta: index ? append.text.length - appends[index - 1].text.length : null,
+          boundary: /[\n。！？!?；;：:]$/.test(append.text),
+        })))}`);
       }
     }
     assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));

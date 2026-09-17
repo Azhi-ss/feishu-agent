@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import { projectKeyFor } from "../../src/policy.js";
 import { packageManager } from "../../src/packages.js";
 
@@ -14,14 +15,41 @@ export const SECRET = "FEISHU-SECRET-supersecret-42";
 
 export interface PtyAction { wait?: string; waitFile?: string; send?: string; }
 
-export function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[], timeoutSec = 60): Promise<{ code: number | null; output: string }> {
-  const python = `import json,os,pty,select,sys,time\nactions=json.loads(sys.argv[4]); timeout=float(sys.argv[6]); pid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3],*json.loads(sys.argv[5])],os.environ)\nout=b''; checkpoint=0; action=0; resends=0; end=time.time()+timeout; last_resend=0; last_send=None; last_sent_at=0; stall_resends=0\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n ready=False\n if action<len(actions):\n  a=actions[action]\n  if a.get('waitFile'): ready=os.path.exists(a['waitFile'])\n  elif a.get('wait') and a['wait'].encode() in out[checkpoint:]: ready=True\n if ready:\n  time.sleep(.15); s=actions[action].get('send') or ''\n  if s: os.write(fd,s.encode())\n  last_send=s.encode() if s else None; last_sent_at=time.time(); stall_resends=0\n  checkpoint=len(out); action+=1\n elif action<len(actions) and last_send and stall_resends<1 and time.time()-last_sent_at>5:\n  os.write(fd,last_send); last_sent_at=time.time(); stall_resends=1\n elif action==len(actions) and actions and resends<15 and time.time()-last_resend>2 and actions[-1].get('send'):\n  try: os.write(fd,actions[-1]['send'].encode())\n  except OSError: pass\n  resends+=1; last_resend=time.time()\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if action==len(actions) else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
+export function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[], timeoutSec = 60, timeoutProgress?: () => Record<string, number>): Promise<{ code: number | null; output: string }> {
+  const python = `import json,os,pty,select,sys,time\nactions=json.loads(sys.argv[4]); timeout=float(sys.argv[6]); pid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3],*json.loads(sys.argv[5])],os.environ)\nout=b''; checkpoint=0; action=0; resends=0; started=time.time(); end=started+timeout; last_resend=0; last_send=None; last_sent_at=0; stall_resends=0\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n ready=False\n if action<len(actions):\n  a=actions[action]\n  if a.get('waitFile'): ready=os.path.exists(a['waitFile'])\n  elif a.get('wait') and a['wait'].encode() in out[checkpoint:]: ready=True\n if ready:\n  time.sleep(.15); s=actions[action].get('send') or ''\n  if s: os.write(fd,s.encode())\n  last_send=s.encode() if s else None; last_sent_at=time.time(); stall_resends=0\n  checkpoint=len(out); action+=1\n elif action<len(actions) and last_send and stall_resends<1 and time.time()-last_sent_at>5:\n  os.write(fd,last_send); last_sent_at=time.time(); stall_resends=1\n elif action==len(actions) and actions and resends<15 and time.time()-last_resend>2 and actions[-1].get('send'):\n  try: os.write(fd,actions[-1]['send'].encode())\n  except OSError: pass\n  resends+=1; last_resend=time.time()\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if action==len(actions) else 125)\nelapsed=time.time()-started\n# Ask the fixture to snapshot progress before cleanup can finalize a card.\nos.write(3,b'timeout')\nready,_,_=select.select([0],[],[],1)\nprogress_captured=bool(ready and os.read(0,1)==b'1')\nos.kill(pid,15)\n# Reap the timed-out CLI; SIGKILL bounds cleanup if SIGTERM is ignored.\ncleanup_end=time.time()+1\nwhile True:\n p,status=os.waitpid(pid,os.WNOHANG)\n if p: break\n if time.time()>=cleanup_end:\n  os.kill(pid,9); os.waitpid(pid,0); break\n time.sleep(.01)\na=actions[action] if action<len(actions) else {}\nprint('PTY_TIMEOUT '+json.dumps(dict(action=action,totalActions=len(actions),expected=a.get('waitFile') or a.get('wait') or '<process exit>',elapsedSec=round(elapsed,3),progressCaptured=progress_captured,tail=out.decode('utf-8','replace')))); sys.exit(124)`;
   return new Promise((done) => {
-    const child = spawn("python3", ["-c", python, cwd, process.execPath, cli, JSON.stringify(actions), JSON.stringify(args), String(timeoutSec)], { env });
+    const child = spawn("python3", ["-c", python, cwd, process.execPath, cli, JSON.stringify(actions), JSON.stringify(args), String(timeoutSec)], { env, stdio: ["pipe", "pipe", "pipe", "pipe"] });
+    let progress: Record<string, number> | undefined;
+    // Dedicated pipe avoids mixing the handshake with terminal content or credentials.
+    child.stdio[3]!.once("data", () => {
+      progress = timeoutProgress?.();
+      child.stdin!.end("1");
+    });
+    // The bounded Python handshake may expire first; a closed pipe is best-effort.
+    child.stdin!.on("error", () => {});
     let output = "";
-    child.stdout.on("data", (chunk) => output += chunk);
-    child.stderr.on("data", (chunk) => output += chunk);
-    child.on("close", (code) => done({ code, output }));
+    child.stdout!.on("data", (chunk) => output += chunk);
+    child.stderr!.on("data", (chunk) => output += chunk);
+    child.on("close", (code) => {
+      if (code === 124 && output.startsWith("PTY_TIMEOUT ")) {
+        // Only sanitize failure diagnostics: success output stays raw for leak assertions.
+        const secrets = [SECRET, "fake-key", ...Object.entries(env)
+          .filter(([key]) => /secret|token|api_?key|password/i.test(key))
+          .map(([, value]) => value).filter((value): value is string => Boolean(value))];
+        const sanitize = (text: string) => {
+          let clean = stripVTControlCharacters(text);
+          for (const secret of secrets) clean = clean.replaceAll(secret, "[REDACTED]");
+          return clean.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+        };
+        const diagnostic = JSON.parse(output.slice("PTY_TIMEOUT ".length));
+        diagnostic.expected = sanitize(diagnostic.expected).slice(0, 256);
+        diagnostic.tail = sanitize(diagnostic.tail).slice(-4096);
+        diagnostic.progress = diagnostic.progressCaptured ? progress : undefined;
+        delete diagnostic.progressCaptured;
+        output = `PTY_TIMEOUT ${JSON.stringify(diagnostic)}\n`;
+      }
+      done({ code, output });
+    });
   });
 }
 
@@ -47,7 +75,7 @@ export interface FeishuStats {
   };
 }
 
-export async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats> }> {
+export async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats>; timeoutProgress(): Record<string, number> }> {
   const state = {
     pending: [] as InboundEvent[],
     waiters: [] as Array<(events: InboundEvent[]) => void>,
@@ -145,6 +173,7 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
   return {
     server,
     url: `http://127.0.0.1:${address.port}`,
+    timeoutProgress: () => ({ cardsOpened: state.opened.length, cardAppends: state.appends.length, cardsClosed: state.cardCloses.length }),
     stats: async () => {
       const response = await fetch(`http://127.0.0.1:${address.port}/stats`);
       return (await response.json()) as FeishuStats;
@@ -172,12 +201,16 @@ export function sseDone(): string {
   return `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`;
 }
 
-export async function modelServer(responder: ModelResponder): Promise<{ server: Server; modelUrl: string }> {
+export async function modelServer(responder: ModelResponder): Promise<{ server: Server; modelUrl: string; timeoutProgress(): Record<string, number> }> {
+  let requests = 0;
+  let responsesFinished = 0;
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => body += chunk);
     request.on("end", () => {
       if (!request.url?.endsWith("/chat/completions")) return response.writeHead(404).end();
+      requests++;
+      response.once("finish", () => responsesFinished++);
       let lastUser = "";
       try {
         const messages = JSON.parse(body).messages as Array<{ role: string; content: unknown }>;
@@ -211,7 +244,7 @@ export async function modelServer(responder: ModelResponder): Promise<{ server: 
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const address = server.address();
   assert(address && typeof address !== "string");
-  return { server, modelUrl: `http://127.0.0.1:${address.port}/v1` };
+  return { server, modelUrl: `http://127.0.0.1:${address.port}/v1`, timeoutProgress: () => ({ modelRequests: requests, modelResponsesFinished: responsesFinished }) };
 }
 
 export async function closeServer(server: Server): Promise<void> {
@@ -229,6 +262,7 @@ export interface RemoteFixture {
   feishu: { server: Server; url: string; stats(): Promise<FeishuStats> };
   env: (extra: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   sessionFiles(): string[];
+  timeoutProgress(): Record<string, number>;
 }
 
 export async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent }>, loopbackOptions: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<RemoteFixture> {
@@ -255,6 +289,7 @@ export async function fixture(responder: ModelResponder, script: Array<{ delayMs
   delete baseEnv.FEISHU_REMOTE_OWNER_OPEN_ID;
   return {
     root, home, project, bin, larkTrace, model, feishu,
+    timeoutProgress: () => ({ ...model.timeoutProgress(), ...feishu.timeoutProgress() }),
     env: (extra: NodeJS.ProcessEnv) => ({ ...baseEnv, ...extra }),
     sessionFiles(): string[] {
       const dir = join(home, ".feishu-agent", "sessions", projectKeyFor(project));
