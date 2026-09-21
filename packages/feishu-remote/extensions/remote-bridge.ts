@@ -73,7 +73,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let status: RemoteStatus = "off";
     let credentials: RemoteCredentials | undefined;
     let secret: string | undefined; // in memory only; dropped on stop
-    let activeTurn: { chatId: string } | undefined;
+    let activeTurn: { chatId: string; stopRequested?: boolean } | undefined;
     let activeCard: ActiveCard | undefined;
     const queue: QueuedMessage[] = [];
     let latestCtx: ExtensionContext | undefined;
@@ -207,6 +207,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
 
     function abortCurrentTurn(chatId: string): void {
       acknowledge(chatId, "Remote bridge: stop requested; the current turn will be interrupted.");
+      if (activeTurn) activeTurn.stopRequested = true;
       latestCtx?.abort();
     }
 
@@ -349,6 +350,12 @@ export function remoteBridgeExtension(): ExtensionFactory {
     });
 
     pi.on("session_shutdown", () => stop());
+
+    pi.on("agent_start", (_event, ctx) => {
+      // sendUserMessage starts asynchronously: a same-batch stop can precede
+      // the SDK's abort signal. Retain it on this turn, never on its successor.
+      if (activeTurn?.stopRequested) ctx.abort();
+    });
 
     pi.on("message_update", (event) => {
       const card = activeCard;

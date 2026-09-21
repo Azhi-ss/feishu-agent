@@ -25,7 +25,7 @@ test("PTY timeout progress precedes shutdown finalization of a controlled unfini
   }
 });
 
-test("PTY timeout diagnostics: controlled stall validates diagnostics, not the historical guard failure", async () => {
+for (const cardOpenDelayMs of [0, 300]) test(`PTY timeout diagnostics: controlled stall validates diagnostics, not the historical guard failure (card open delay ${cardOpenDelayMs}ms)`, async () => {
   const mem0Key = "FAKE-MEM0-diagnostic-key";
   const larkToken = "FAKE-LARK-diagnostic-token";
   let cliPid: number | undefined;
@@ -35,7 +35,7 @@ test("PTY timeout diagnostics: controlled stall validates diagnostics, not the h
     return { sse: sse(`DIAGNOSTIC-TAIL ${SECRET} ${mem0Key} ${larkToken} fake-key`) };
   }, [
     { delayMs: 400, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "diagnostic-1", messageType: "text", text: "diagnostic-only" } },
-  ]);
+  ], { cardOpenDelayMs });
   try {
     const result = await runPty(f.project, [], f.env({
       FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url,
@@ -53,7 +53,13 @@ test("PTY timeout diagnostics: controlled stall validates diagnostics, not the h
     assert.equal(diagnostic.totalActions, 2);
     assert.equal(diagnostic.expected, "DIAGNOSTIC-NEVER-ARRIVES");
     assert.ok(diagnostic.elapsedSec >= 12 && diagnostic.elapsedSec < 15);
-    assert.deepEqual(diagnostic.progress, { modelRequests: 1, modelResponsesFinished: 1, cardsOpened: 1, cardAppends: 1, cardsClosed: 1 });
+    const stats = await f.feishu.stats();
+    // A completed one-shot answer can close before any intermediate append,
+    // especially while card creation is in flight. Diagnose actual wire progress.
+    assert.deepEqual(diagnostic.progress, { modelRequests: 1, modelResponsesFinished: 1, cardsOpened: 1, cardAppends: stats.cards.appends.length, cardsClosed: 1 });
+    assert.equal(stats.cards.closes.length, 1);
+    // Do not echo the deliberate fake secrets in assertion failure output.
+    assert.ok(stats.cards.closes[0].text === `DIAGNOSTIC-TAIL ${SECRET} ${mem0Key} ${larkToken} fake-key`, "final card must contain the complete fixture reply");
     assert.ok(diagnostic.tail.length <= 4096);
     assert.match(diagnostic.tail, /DIAGNOSTIC-TAIL/);
     assert.match(diagnostic.tail, /\[REDACTED\]/);

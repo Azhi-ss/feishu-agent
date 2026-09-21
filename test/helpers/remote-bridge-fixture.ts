@@ -75,7 +75,7 @@ export interface FeishuStats {
   };
 }
 
-export async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats>; timeoutProgress(): Record<string, number> }> {
+export async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent | InboundEvent[] }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats>; timeoutProgress(): Record<string, number> }> {
   const state = {
     pending: [] as InboundEvent[],
     waiters: [] as Array<(events: InboundEvent[]) => void>,
@@ -101,7 +101,8 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
       if (!state.scripted) {
         state.scripted = true;
         for (const step of script) setTimeout(() => {
-          state.pending.push(step.event);
+          // One response can contain several events after network/event-loop delays.
+          state.pending.push(...(Array.isArray(step.event) ? step.event : [step.event]));
           for (const waiter of state.waiters.splice(0)) waiter([]);
         }, step.delayMs).unref();
       }
@@ -265,7 +266,7 @@ export interface RemoteFixture {
   timeoutProgress(): Record<string, number>;
 }
 
-export async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent }>, loopbackOptions: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<RemoteFixture> {
+export async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent | InboundEvent[] }>, loopbackOptions: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<RemoteFixture> {
   const root = mkdtempSync(join(tmpdir(), "feishu-remote-bridge-"));
   const home = join(root, "home");
   const project = join(root, "project");

@@ -123,17 +123,18 @@ test("FEISHU_REMOTE=1 autostarts and a message arriving during a busy turn is qu
   }
 });
 
-test("FEISHU_REMOTE=1 queues busy phone messages with acknowledgements, aborts on stop, and drains the queue in order", async () => {
+for (const batched of [false, true]) test(`FEISHU_REMOTE=1 queues busy phone messages with acknowledgements, aborts on stop, and drains the queue in order (${batched ? "same-batch stop before agent start" : "staggered"})`, async () => {
   const slowModel: ModelResponder = (lastUser) => ({
     delayMs: lastUser.includes("SLOW") ? 4000 : 0,
     sse: sse(`PTY-PONG:${lastUser}`),
   });
-  const f = await fixture(slowModel, [
+  const script = [
     { delayMs: 400, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "slow-1", messageType: "text", text: "SLOW-phone-1" } },
     { delayMs: 650, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "fast-2", messageType: "text", text: "followup-2" } },
     { delayMs: 700, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "fast-3", messageType: "text", text: "followup-3" } },
     { delayMs: 800, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "stop-4", messageType: "text", text: "stop" } },
-  ]);
+  ];
+  const f = await fixture(slowModel, batched ? [{ delayMs: 400, event: script.map((step) => step.event) }] : script);
   try {
     const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
       { wait: "fake-model", send: "" },
