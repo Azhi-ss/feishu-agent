@@ -7,8 +7,15 @@ export function ensureCompatibilityHome(realHome: string, agentHome: string): st
   const home = join(agentHome, ".compat", "home");
   const link = join(home, ".pi", "agent");
   mkdirSync(join(home, ".pi"), { recursive: true });
-  if (!existsSync(link)) symlinkSync(agentHome, link, "dir");
-  else if (!lstatSync(link).isSymbolicLink() || readlinkSync(link) !== agentHome) throw new Error(`Invalid compatibility Home mapping: ${link}`);
+  if (!existsSync(link)) {
+    try { symlinkSync(agentHome, link, "dir"); }
+    catch (error) {
+      // Another first-start process may have created it after our check.
+      // Accept EEXIST only after validating the published mapping below.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  if (!lstatSync(link).isSymbolicLink() || readlinkSync(link) !== agentHome) throw new Error(`Invalid compatibility Home mapping: ${link}`);
   return home;
 }
 

@@ -204,6 +204,16 @@ test("capacity is two different jobs across scheduled and manual callers; waitin
   await waitFor(() => f.model.requests.length === 2);
   await new Promise((r) => setTimeout(r, 150));
   assert.equal(f.model.requests.length, 2, "a third scheduled job exceeded workspace capacity");
+  // A failed startup can free a slot for C; two requests alone do not prove
+  // that the intended holders A and B are alive. Read diagnostics before a
+  // CLI call prunes logs whose real mtimes predate the fixture's 2030 clock.
+  const holders = f.model.requests.map((body) => body.match(/Automation Job: (job-[a-d])/)?.[1]).sort();
+  const startupErrors = ["job-a", "job-b"].flatMap((name) => {
+    const dir = join(f.jobs, "jobs", name, "runs");
+    return readdirSync(dir).filter((file) => file.endsWith(".stderr.log"))
+      .map((file) => `${name}: ${readFileSync(join(dir, file), "utf8").slice(-4000)}`);
+  });
+  assert.deepEqual(holders, ["job-a", "job-b"], `Expected A and B to hold capacity. ${startupErrors.join("\n")}`);
 
   // An independent manual caller shares the capacity and is refused while full.
   const full = runCli(f, ["automation", "run", "job-c"]);
