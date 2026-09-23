@@ -294,7 +294,7 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
     "open(marker,'wb').write(b'timeout')",
   ].join("\n");
   const marker = join(f.root, "pending-edit-pty");
-  const child = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, "automation", "update", "pending-edit", "--every", "5m"]), "Apply this update", marker], {
+  const child = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, "update", "pending-edit", "--every", "5m"]), "Apply this update", marker], {
     env: baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }),
   });
   let exitCode: number | null = null;

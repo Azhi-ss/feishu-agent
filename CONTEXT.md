@@ -66,6 +66,14 @@ _Avoid_: A second dedicated bridge app, storing the app secret on disk, first-DM
 
 ## Unattended Automation
 
+**Feishu Automation Package**:
+The optional `@azhi-ss/feishu-automation` package containing a standalone CLI,
+Trigger, supervised worker and Skill. It invokes the public `feishu -p` entry
+point rather than importing Runtime internals. Core init does not install it;
+package installation does not activate scheduling. Existing Remote/Mem0 defaults
+are unchanged.
+_Avoid_: Built-in core scheduler, session-bound extension timer, ordinary Pi runner
+
 **Automation Job**:
 A scheduled Feishu assignment managed for execution on one explicitly selected host, with a task definition portable between supported hosts. Portability does not imply automatic synchronization, failover, or duplicate suppression across hosts.
 _Avoid_: Native Feishu task, OS timer, automatically synchronized task

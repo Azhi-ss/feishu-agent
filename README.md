@@ -90,7 +90,7 @@ The installer copies both `SKILL.md` and `feishu-send` into the host Agent's Ski
 MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
 ```
 
-Initialization creates private state and ten bundled Feishu Skills under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs pinned npm versions of the unmodified Mem0 package and Feishu Remote Package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, customized `SYSTEM.md`, edited Skills, or an existing local/npm Remote Package source. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
+Initialization creates private state and nine bundled Feishu Skills under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs pinned npm versions of the unmodified Mem0 package and Feishu Remote Package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, customized `SYSTEM.md`, edited Skills, or an existing local/npm Remote Package source. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
 
 ## Run
 
@@ -111,15 +111,26 @@ The Feishu Runtime disables Pi's built-in startup network checks, so you will ne
 
 Only Interactive and text Print modes are supported. JSON and RPC are intentionally absent.
 
-## Scheduled Automation Jobs (macOS and Linux)
+## Optional Automation package (macOS and Linux)
 
-After explicit `feishu init`, ask Feishu Agent to schedule a task in conversation.
-The private `feishu-automation` Skill prepares a self-contained task and presents
-its complete plan: objective/inputs, fixed targets, bot/user identities, saved Lark
-profile, execution host, schedule/timezone/next occurrence, lateness and timeout.
-It waits for your confirmation before creating or materially editing the job.
-Re-running init adds the Skill only if missing; edited Skills and managed workspace
-instructions are preserved. Ordinary startup never installs it.
+Scheduling is no longer built into the Feishu Runtime. The independent package
+[`@azhi-ss/feishu-automation`](packages/feishu-automation/README.md) contains the
+CLI, background Trigger and Skill. It is not auto-installed by `feishu init` and
+has not been published to npm. Build and explicitly opt in from a local checkout:
+
+```bash
+npm run build --workspace @azhi-ss/feishu-automation
+feishu install /absolute/path/to/feishu-agent/packages/feishu-automation
+```
+
+The Skill invokes its bundled CLI by absolute path. For manual use below, replace
+`feishu-automation` with `node /absolute/package/path/dist/cli.js` unless its npm
+bin is installed on PATH. Installing never starts a service or runs tasks.
+
+**CLI migration:** `feishu-automation` replaces the removed core subcommand
+`feishu automation`.
+See the package README for current commands, safe migration and uninstall steps.
+The Skill presents the full plan and waits for approval before saving or editing.
 
 For example: “Every weekday at 09:00 Beijing time, send an ordinary bot message
 to this conversation and append a summary as me to this existing document. Show
@@ -129,16 +140,16 @@ background service or make a trial write; approve those separately.
 You can also prepare a task file and use the same CLI directly:
 
 ```bash
-feishu automation add --name reminder --at 2030-06-01T09:00 \
+feishu-automation add --name reminder --at 2030-06-01T09:00 \
   --prompt-file task.md --catch-up 2h --timeout 10m --yes
-feishu automation list
-feishu automation show reminder
+feishu-automation list
+feishu-automation show reminder
 # Alternative schedules (use distinct names and review each complete plan):
 # --cron '0 9 * * 1-5'      # weekday 09:00 in the saved timezone
 # --every 90m              # elapsed 90 minutes, NOT a cron minute-field step
-feishu automation serve          # foreground: keep this process alive
+feishu-automation serve          # foreground: keep this process alive
 # In another terminal, an explicit separate attempt:
-feishu automation run reminder
+feishu-automation run reminder
 ```
 
 `--yes` attests that the caller reviewed and confirmed the plan. Without it,
@@ -159,12 +170,12 @@ establish a new anchor only on an approved interval change. Default timeout is
 `10m` from actual execution. Failures never cause automatic whole-job retry.
 
 ```bash
-feishu automation update reminder --at 2030-06-01T09:05 --yes # after renewed approval
-feishu automation pause reminder    # future dispatch only; current run continues
-feishu automation resume reminder   # no replay of intentionally paused time
-feishu automation cancel reminder   # stop current run; earlier writes are not rolled back
-feishu automation rm reminder       # disable dispatch, retain task/history and name
-feishu automation rm reminder --purge --yes # explicit irreversible artifact removal
+feishu-automation update reminder --at 2030-06-01T09:05 --yes # after renewed approval
+feishu-automation pause reminder    # future dispatch only; current run continues
+feishu-automation resume reminder   # no replay of intentionally paused time
+feishu-automation cancel reminder   # stop current run; earlier writes are not rolled back
+feishu-automation rm reminder       # disable dispatch, retain task/history and name
+feishu-automation rm reminder --purge --yes # explicit irreversible artifact removal
 ```
 
 Updates retain unspecified values; the old plan stays active during confirmation
@@ -193,9 +204,9 @@ manual runs remain supervised by their own callers and continue occupying capaci
 For independent background execution, explicitly run:
 
 ```bash
-feishu automation start   # launchd on macOS; systemd --user on Linux/WSL
-feishu automation status  # live Trigger owner, not just an installed artifact
-feishu automation stop    # disable restart; retain jobs/history and manual runs
+feishu-automation start   # launchd on macOS; systemd --user on Linux/WSL
+feishu-automation status  # live Trigger owner, not just an installed artifact
+feishu-automation stop    # disable restart; retain jobs/history and manual runs
 ```
 
 Start checks local prerequisites and installs only the dedicated managed service.
@@ -222,14 +233,15 @@ writes. This is not a sandbox or a hard per-target permission boundary. Existing
 high-risk guards and credential protections remain unchanged. Scripted fake-model
 tests prove the workflow and policy reach the model, not universal compliance.
 
-The existing Briefing remains untouched; no Sweep/Alert is enabled. Corrupt state
+Package installation never migrates the existing Briefing; disable its old timer
+explicitly before scheduling the same deliverable here. No Sweep/Alert is enabled. Corrupt state
 is diagnosed and retained for inspection, never guessed safe to replay.
 
 ## Packages and Skills
 
 ### Defaults (what you get out of the box)
 
-`feishu init` sets up a minimal runtime plus ten bundled private Feishu Skills. Nothing else is preloaded beyond:
+`feishu init` sets up a minimal runtime plus nine bundled private Feishu Skills. Nothing else is preloaded beyond:
 
 | Capability | Source | Notes |
 |---|---|---|
@@ -237,7 +249,6 @@ is diagnosed and retained for inspection, never guessed safe to replay.
 | Remote Bridge | `@azhi-ss/feishu-remote` (pinned npm package, auto-installed by `feishu init`) | Phone control of the active session; transport only — not Feishu Skills, Mem0, or high-risk approval. Ordinary Pi may run `pi install npm:@azhi-ss/feishu-remote`. |
 | Core policy guard | built-in (hidden `feishu-core-policy` extension) | High-risk `lark-cli --yes` approval gate, blocked `/share` `/import` `/login` `/logout` |
 | Skill authoring | built-in `feishu-skill-maker` skill | Guide for creating new Feishu Skills |
-| Scheduled Feishu workflows | bundled `feishu-automation` skill | Full plan → confirmation → real CLI → receipt; background activation is separately explicit, prompt-only fixed-target business policy |
 | Skill discovery and private installation | built-in `/find-skill` command and `feishu-find-skill` skill | Reuses the `skills.sh` index and `npx skills` staging; final files go only to `~/.feishu-agent/skills/`, never `~/.agents/skills` or `~/.pi/agent/skills` |
 | Technical-note formula rendering | bundled `feishu-latex-rendering` skill | Markdown/LaTeX to Feishu XML guidance, nesting rules, escaping checklist, and conversion example |
 | Process-report workflow | bundled `process-optimization-biweekly` skill | Sanitized reusable template for source collection, lifecycle-based progress writing, and Feishu document updates |

@@ -1118,7 +1118,7 @@ export function loadJob(root: string, name: string): JobRecord {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw new AutomationError(`Job record "${name}" cannot be read; it has been preserved at ${path}.`);
     }
-    throw new AutomationError(`No Automation Job named "${name}". Run "feishu automation list" to see saved jobs.`);
+    throw new AutomationError(`No Automation Job named "${name}". Run "feishu-automation list" to see saved jobs.`);
   }
   if (!entryStat.isFile()) throw new AutomationError(`Job record "${name}" is not a regular file; it has been preserved at ${path}.`);
   let record: JobRecord;

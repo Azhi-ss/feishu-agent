@@ -7,6 +7,7 @@ import test from "node:test";
 import { hermeticEnv } from "./helpers/hermetic-env.js";
 import {
   cli,
+  installFeishuBin,
   MODEL_KEY_SENTINEL,
   REMOTE_SECRET_SENTINEL,
   TOOL_OUTPUT_SENTINEL,
@@ -326,14 +327,16 @@ test("manual run that overruns its job timeout is stopped and recorded as timeou
   assert.equal(f.model.requests.length, 1);
 });
 
-test("concurrent manual calls for the same job cannot overlap", async () => {
+test("concurrent manual calls for the same job cannot overlap", { timeout: 30_000 }, async t => {
   const f = await fixture();
   modelServers.push(f.model.server);
   assert.equal(addJob(f, [], "Overlap probe task.\n").code, 0);
 
   let openGate: () => void = () => {};
   const gate = new Promise<void>((resolveGate) => { openGate = resolveGate; });
+  let started = false;
   const gateServer = createServer((request, response) => {
+    started = true;
     request.resume();
     void gate.then(() => {
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -351,24 +354,28 @@ test("concurrent manual calls for the same job cannot overlap", async () => {
   mkdirSync(pi, { recursive: true });
   mkdirSync(join(heldHome, ".feishu-agent"), { recursive: true });
   mkdirSync(heldBin, { recursive: true });
+  installFeishuBin(heldBin);
   writeFileSync(join(pi, "auth.json"), JSON.stringify({ fake: { type: "api_key", key: "x" } }));
   writeFileSync(join(pi, "models.json"), JSON.stringify({ providers: { fake: { baseUrl: `http://127.0.0.1:${gateAddress.port}/v1`, api: "openai-completions", models: [{ id: "fake-model", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 256 }] } } }));
   writeFileSync(join(heldHome, ".feishu-agent", "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model" }));
   writeFileSync(join(heldHome, ".feishu-agent", "SYSTEM.md"), "You are Feishu Agent.\n");
   makeLarkBin(heldBin, DEFAULT_CASES([["local-default", true]]));
 
-  const first = spawn(process.execPath, [cli, "automation", "run", "daily-reminder"], {
+  const first = spawn(process.execPath, [cli, "run", "daily-reminder"], {
     cwd: f.root,
     env: hermeticEnv({ HOME: heldHome, PATH: `${heldBin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1", FEISHU_AUTOMATION_HOME: f.jobs, LARK_TRACE: join(f.root, "held-trace.log") }),
   });
+  const firstDone = new Promise<void>(done => first.once("close", () => done()));
+  t.after(() => { openGate(); first.kill("SIGTERM"); });
+  first.stdout.resume();
   let firstStderr = "";
   first.stderr.on("data", (chunk) => firstStderr += chunk);
-  await waitFor(() => existsSync(join(f.jobs, "jobs", "daily-reminder", "run.lock")));
+  await waitFor(() => started);
   const second = runCli(f, ["automation", "run", "daily-reminder"]);
   assert.notEqual(second.code, 0);
   assert.match(second.stderr, /already running/i);
   openGate();
-  await new Promise<void>((done) => first.on("close", () => done()));
+  await firstDone;
   assert.doesNotMatch(firstStderr, /already running/);
 });
 

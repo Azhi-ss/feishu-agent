@@ -14,7 +14,7 @@ test("automation add and update wait for complete delayed stdin, preserving mult
     ["add", "--name", "streamed", "--every", "90m"],
     ["update", "streamed"],
   ]) {
-    const child = spawn(process.execPath, [cli, "automation", ...args, "--prompt-stdin", "--yes"], {
+    const child = spawn(process.execPath, [cli, ...args, "--prompt-stdin", "--yes"], {
       cwd: f.root, env: baseEnv(f),
     });
     t.after(() => { if (child.exitCode === null) child.kill(); });

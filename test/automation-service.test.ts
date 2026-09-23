@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fixture as initFixture, run as initRun } from "./helpers/init-e2e-fixture.js";
 import { hermeticEnv } from "./helpers/hermetic-env.js";
-import { files, toolResponse } from "./helpers/automation-cli-fixture.js";
+import { coreCli, files, toolResponse } from "./helpers/automation-cli-fixture.js";
 import { baseEnv, cli, fixture, gate, textResponse, waitFor, type Fixture } from "./helpers/automation-trigger-fixture.js";
 
 // The service manager is the OS seam: it reads the installed artifact and
@@ -64,7 +64,7 @@ fs.writeFileSync(state, JSON.stringify({pid:child.pid, id:requested})); child.un
 }
 
 function command(f: Fixture & { node?: string; entry?: string }, args: string[], input?: string, extra: NodeJS.ProcessEnv = {}) {
-  const child = spawn(f.node ?? process.execPath, [f.entry ?? cli, ...args], { cwd: f.root,
+  const child = spawn(f.node ?? process.execPath, [f.entry ?? cli, ...args.slice(1)], { cwd: f.root,
     env: baseEnv(f, { FEISHU_AUTOMATION_CLOCK_FILE: undefined, ...extra }), stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "", stderr = "";
   child.stdout.on("data", data => stdout += data);
@@ -114,7 +114,7 @@ test("Interactive, Print and explicit init perform no implicit service work", { 
   const printed = await initRun(f.project, env, ["-p", "No service activity."]);
   assert.equal(printed.code, 0, printed.stderr);
   // Non-TTY interactive startup still loads the real Runtime then exits on EOF.
-  const interactive = spawn(process.execPath, [cli], { cwd: f.project, env, stdio: ["pipe", "pipe", "pipe"] });
+  const interactive = spawn(process.execPath, [coreCli], { cwd: f.project, env, stdio: ["pipe", "pipe", "pipe"] });
   interactive.stdout.resume(); interactive.stderr.resume(); interactive.stdin.end();
   t.after(() => { interactive.kill("SIGTERM"); });
   const ended = new Promise<void>(resolve => interactive.once("close", () => resolve()));
@@ -243,7 +243,6 @@ test("resolved Node and package paths containing spaces work without shell initi
   const layout = join(original.root, "alternate node and package"); mkdirSync(layout);
   const node = join(layout, "node"); copyFileSync(process.execPath, node);
   cpSync(dirname(cli), join(layout, "src"), { recursive: true });
-  symlinkSync(join(dirname(cli), "../../node_modules"), join(layout, "node_modules"), "dir");
   const f = { ...original, node, entry: join(layout, "src/cli.js") };
   f.model.jobs.push(gate(textResponse("ALTERNATE-LAYOUT-43")));
   await add(f, "layout");

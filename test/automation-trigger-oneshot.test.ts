@@ -141,7 +141,7 @@ test("only one Trigger owns a workspace; a second owner exits and cannot double-
 
   const first = startServe(f);
   await waitStarted(first);
-  const second = spawnSync(process.execPath, [cli, "automation", "serve"], { encoding: "utf8", cwd: f.root, env: baseEnv(f) });
+  const second = spawnSync(process.execPath, [cli, "serve"], { encoding: "utf8", cwd: f.root, env: baseEnv(f) });
   assert.notEqual(second.status, 0);
   assert.match(second.stderr, /already running/i);
 
@@ -160,7 +160,7 @@ test("scheduled firing during an active same-job manual run is overlap-skipped a
 
   const manualGate = gate(textResponse("MANUAL-HOLDER"), true);
   f.model.jobs.push(manualGate);
-  const manual = spawn(process.execPath, [cli, "automation", "run", "race-job"], { cwd: f.root, env: baseEnv(f), stdio: ["ignore", "pipe", "pipe"] });
+  const manual = spawn(process.execPath, [cli, "run", "race-job"], { cwd: f.root, env: baseEnv(f), stdio: ["ignore", "pipe", "pipe"] });
   let manualErr = "";
   manual.stderr.on("data", (c) => { manualErr += c; });
   await waitFor(() => f.model.requests.length === 1);
@@ -290,7 +290,7 @@ test("Trigger shutdown bounds its owned children and records unknown, but never 
   const manualGate = gate(textResponse("MANUAL-HOLD"), true);
   f.model.jobs.push(manualGate, scheduledGate);
 
-  const manual = spawn(process.execPath, [cli, "automation", "run", "manual-child"], { cwd: f.root, env: baseEnv(f), stdio: "ignore" });
+  const manual = spawn(process.execPath, [cli, "run", "manual-child"], { cwd: f.root, env: baseEnv(f), stdio: "ignore" });
   const manualDone = new Promise<number | null>((done) => manual.once("close", done));
   orphanSupervisors.push(manual);
   await waitFor(() => f.model.requests.length === 1);
@@ -318,7 +318,8 @@ test("ordinary Print startup neither installs, starts, nor probes the Trigger", 
   gateServers.push(f.model.server);
   addJob(f, "quiet-job");
   f.model.jobs.push(gate(textResponse("PRINT-ONLY")));
-  const result = await runCliAsync(f, ["-p", "hello"]);
+  const { run } = await import("./helpers/init-e2e-fixture.js");
+  const result = await run(f.root, baseEnv(f, { FEISHU_UNATTENDED: "1" }), ["-p", "hello"]);
   assert.equal(result.code, 0, result.stderr);
   assert.equal(existsSync(join(f.jobs, "trigger.lock")), false);
   assert.equal(existsSync(join(f.jobs, "admission.lock")), false);

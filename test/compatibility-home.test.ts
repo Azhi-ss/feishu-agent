@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { withCompatibilityHome } from "../src/compatibility-home.js";
-import { baseEnv, cli, fixture, gate, textResponse } from "./helpers/automation-trigger-fixture.js";
+import { coreCli as cli } from "./helpers/automation-cli-fixture.js";
+import { baseEnv, fixture, gate, textResponse } from "./helpers/automation-trigger-fixture.js";
 
 // Publish a competing mapping at the filesystem boundary after the CLI's
 // existence check. This pins the first-start race without timing-based retries.

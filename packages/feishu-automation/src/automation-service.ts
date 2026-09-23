@@ -8,20 +8,10 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { AutomationError, acquireWorkspaceLock, ensureWorkspace, releaseWorkspaceLock, workspacePaths } from "./automation.js";
 import { liveTrigger } from "./automation-trigger.js";
+import { executable } from "./executable.js";
 
 const MARKER = "Feishu managed Automation Trigger v1";
-const AVAILABILITY = "Scheduling requires a live host and Trigger. Sleep, power-off, WSL shutdown, and logout without an active user manager prevent execution. Use `feishu automation serve` as a foreground fallback; keep that process alive.";
-
-function executable(name: string): string {
-  const candidates = name.includes("/") ? [resolve(name)] : (process.env.PATH ?? "").split(delimiter).filter(Boolean).map(dir => resolve(dir, name));
-  for (const path of candidates) {
-    try { accessSync(path, constants.X_OK); } catch { continue; }
-    if (!lstatSync(realpathSync(path)).isFile()) continue;
-    // Keep the installed entry point (npm symlinks and shims can rely on its name).
-    return path;
-  }
-  throw new AutomationError(`Required executable ${name} is unavailable. Fix PATH and retry; ${AVAILABILITY}`);
-}
+const AVAILABILITY = "Scheduling requires a live host and Trigger. Sleep, power-off, WSL shutdown, and logout without an active user manager prevent execution. Use `feishu-automation serve` as a foreground fallback; keep that process alive.";
 
 function service(root: string) {
   if (process.platform !== "linux" && process.platform !== "darwin") {
@@ -73,11 +63,12 @@ function artifact(s: Service, root: string): string {
   const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
   accessSync(cli, constants.R_OK);
   const lark = executable("lark-cli");
+  const feishu = executable("feishu");
   const env = executable("/usr/bin/env");
   // Clear the manager's environment too: allowlisting the caller alone would
   // still inherit manager-imported model/Mem0/Remote secrets.
-  const path = [...new Set([dirname(node), dirname(lark), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(delimiter);
-  const argv = [env, "-i", `HOME=${homedir()}`, `PATH=${path}`, "PI_OFFLINE=1", `FEISHU_AUTOMATION_HOME=${root}`, node, cli, "automation", "serve"];
+  const path = [...new Set([dirname(node), dirname(lark), dirname(feishu), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(delimiter);
+  const argv = [env, "-i", `HOME=${homedir()}`, `PATH=${path}`, "PI_OFFLINE=1", `FEISHU_AUTOMATION_HOME=${root}`, node, cli, "serve"];
   if (argv.some(value => /[\x00-\x1f\x7f]/.test(value))) throw new AutomationError("Service paths must not contain control characters.");
   if (s.mac) {
     const xml = (value: string): string => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");

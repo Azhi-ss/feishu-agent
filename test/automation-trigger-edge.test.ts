@@ -83,7 +83,7 @@ test("crash at the child-ready checkpoint consumes the occurrence without runnin
   const checkpoint = join(f.root, "child-ready");
   const preload = join(f.root, "checkpoint.mjs");
   writeFileSync(preload, `import { writeFileSync } from 'node:fs';
-if (process.send && process.argv.includes('-p')) {
+if (process.send) {
   const send = process.send.bind(process);
   process.send = function(message, ...args) {
     if (message?.type === 'automation-ready') {
@@ -151,9 +151,9 @@ test("supervised Print waits for admission and exits without model work if its p
   const f = await fixture();
   gateServers.push(f.model.server);
   for (const admit of [false, true]) {
-    const child = spawn(process.execPath, [cli, "-p", "supervised admission probe"], {
+    const child = spawn(process.execPath, [new URL("../packages/feishu-automation/src/worker.js", import.meta.url).pathname, join(f.bin, "feishu"), "supervised admission probe"], {
       cwd: f.root,
-      env: baseEnv(f, { FEISHU_UNATTENDED: "1", FEISHU_AUTOMATION_ADMISSION: "1" }),
+      env: baseEnv(f, { FEISHU_UNATTENDED: "1" }),
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
     child.stdout?.resume();
@@ -374,7 +374,7 @@ test("a corrupt or unsupported Trigger lock is preserved, never guessed stale", 
   for (const evidence of ["{unfinished", '{"version":99,"pid":123}', '{"pid":0}', 'null']) {
     const lock = join(f.jobs, "trigger.lock");
     writeFileSync(lock, evidence);
-    const result = spawnSync(process.execPath, [cli, "automation", "serve"], {
+    const result = spawnSync(process.execPath, [cli, "serve"], {
       encoding: "utf8", cwd: f.root, env: baseEnv(f), timeout: 3000, killSignal: "SIGKILL",
     });
     assert.equal(result.status, 1, result.stderr);
@@ -422,12 +422,12 @@ test("creation while the foreground Trigger is live gives an honest receipt", as
   const serving = startServe(f);
   await waitStarted(serving);
   try {
-    const result = spawnSync(process.execPath, [cli, "automation", "add", "--name", "live-receipt", "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], {
+    const result = spawnSync(process.execPath, [cli, "add", "--name", "live-receipt", "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], {
       encoding: "utf8", cwd: f.root, env: baseEnv(f), input: "self-contained task\n",
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).triggerRunning, true);
-    assert.doesNotMatch(result.stderr, /Trigger is not running|Start `feishu automation serve`/);
+    assert.doesNotMatch(result.stderr, /Trigger is not running|Start `feishu-automation serve`/);
     assert.equal(JSON.parse(result.stdout).nextDueAt, new Date(DUE_MS).toISOString());
   } finally {
     await stopServe(serving);
@@ -441,13 +441,13 @@ test("--catch-up changes the per-job lateness window; --no-catch-up and bad dura
   const show = JSON.parse(runCli(f, ["automation", "show", "short-window"]).stdout);
   assert.equal(show.schedule.latenessMinutes, 30);
 
-  const badDuration = spawnSync(process.execPath, [cli, "automation", "add", "--name", "bad", "--at", "2030-06-01T09:00", "--prompt-stdin", "--catch-up", "30s", "--yes"], {
+  const badDuration = spawnSync(process.execPath, [cli, "add", "--name", "bad", "--at", "2030-06-01T09:00", "--prompt-stdin", "--catch-up", "30s", "--yes"], {
     encoding: "utf8", cwd: f.root, input: "t\n", env: baseEnv(f),
   });
   assert.notEqual(badDuration.status, 0);
   assert.match(badDuration.stderr, /positive duration/i);
 
-  const conflicting = spawnSync(process.execPath, [cli, "automation", "add", "--name", "bad2", "--at", "2030-06-01T09:00", "--prompt-stdin", "--catch-up", "1h", "--no-catch-up", "--yes"], {
+  const conflicting = spawnSync(process.execPath, [cli, "add", "--name", "bad2", "--at", "2030-06-01T09:00", "--prompt-stdin", "--catch-up", "1h", "--no-catch-up", "--yes"], {
     encoding: "utf8", cwd: f.root, input: "t\n", env: baseEnv(f),
   });
   assert.notEqual(conflicting.status, 0);

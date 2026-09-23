@@ -1,4 +1,4 @@
-// feishu automation command handlers (slice 1 #39, slice 2 #40, recurrence #41,
+// feishu-automation command handlers (slice 1 #39, slice 2 #40, recurrence #41,
 // full management lifecycle #42). Structured results go to stdout as one JSON
 // object; English diagnostics and interactive confirmation go to stderr. All
 // file writes happen only after complete validation and, for execution-
@@ -107,7 +107,7 @@ function triggerNotice(root: string): string {
   const owner = liveTrigger(workspacePaths(root));
   return owner
     ? `The scheduling Trigger is running (pid ${owner.pid}); scheduled execution requires the host and Trigger to remain alive.`
-    : "The scheduling Trigger is not running. Start `feishu automation start` or foreground `feishu automation serve` explicitly for scheduled firing; saving a job does not start it.";
+    : "The scheduling Trigger is not running. Start `feishu-automation start` or foreground `feishu-automation serve` explicitly for scheduled firing; saving a job does not start it.";
 }
 
 function catchUpPolicy(schedule: Schedule): string {
@@ -324,7 +324,7 @@ export async function automationCommand(args: string[]): Promise<number> {
     if (timeoutMinutes < 1) fail("Execution timeout must be at least one minute.");
     const task = (await readTaskValue(rest, true))!;
     if (existsSync(join(root, "jobs", name, "job.json"))) {
-      fail(`An Automation Job named "${name}" already exists (including retained removed jobs). Choose a different name or purge it first with "feishu automation rm ${name} --purge".`);
+      fail(`An Automation Job named "${name}" already exists (including retained removed jobs). Choose a different name or purge it first with "feishu-automation rm ${name} --purge".`);
     }
 
     const createdIso = new Date(nowMs()).toISOString();
@@ -369,7 +369,7 @@ export async function automationCommand(args: string[]): Promise<number> {
     };
     saveJob(workspace.root, job);
     process.stdout.write(`${JSON.stringify(jobSummary(root, job), null, 2)}\n`);
-    process.stderr.write(`Saved. ${triggerNotice(root)} Use \`feishu automation run\` for a separate manual attempt.\n`);
+    process.stderr.write(`Saved. ${triggerNotice(root)} Use \`feishu-automation run\` for a separate manual attempt.\n`);
     return 0;
   }
 
@@ -399,7 +399,7 @@ export async function automationCommand(args: string[]): Promise<number> {
       throw error;
     }
     process.stdout.write(`${JSON.stringify(jobSummary(root, updated), null, 2)}\n`);
-    process.stderr.write(`Paused "${name}": no new work will be admitted; an in-progress run continues. Resume with \`feishu automation resume ${name}\`.\n`);
+    process.stderr.write(`Paused "${name}": no new work will be admitted; an in-progress run continues. Resume with \`feishu-automation resume ${name}\`.\n`);
     return 0;
   }
 
@@ -445,7 +445,7 @@ export async function automationCommand(args: string[]): Promise<number> {
   if (verb === "run") {
     const name = args[2];
     const job = loadJob(root, name);
-    if (job.state === "removed") fail(`Job "${name}" is removed and cannot run. Add it again after purging, or inspect it with "feishu automation show ${name}".`);
+    if (job.state === "removed") fail(`Job "${name}" is removed and cannot run. Add it again after purging, or inspect it with "feishu-automation show ${name}".`);
     // Never seed the managed workspace from a read/inspection-style command:
     // run needs it (and seeds missing standing instructions), show/list do not.
     const workspace = existsSync(join(root, "AGENTS.md")) || existsSync(join(root, "jobs"))
@@ -483,7 +483,7 @@ export async function automationCommand(args: string[]): Promise<number> {
 
 async function updateCommand(root: string, restInput: string[]): Promise<number> {
   const name = restInput[0];
-  if (!name || name.startsWith("-")) fail("Usage: feishu automation update <name> [options] [--yes].");
+  if (!name || name.startsWith("-")) fail("Usage: feishu-automation update <name> [options] [--yes].");
   const rest = restInput.slice(1);
   const existing = loadJob(root, name);
   if (existing.state === "removed") fail(`Job "${name}" is removed; add it again after purging instead of updating it.`);
@@ -551,7 +551,7 @@ async function updateCommand(root: string, restInput: string[]): Promise<number>
         && current.task === existing.task
         && JSON.stringify(current.schedule) === JSON.stringify(existing.schedule);
       if (!untouched) {
-        throw new AutomationError(`Job "${name}" changed while the update awaited confirmation; review it with "feishu automation show ${name}" and re-confirm the edit.`, "busy");
+        throw new AutomationError(`Job "${name}" changed while the update awaited confirmation; review it with "feishu-automation show ${name}" and re-confirm the edit.`, "busy");
       }
       // The new anchor is the approval instant, not the pre-confirmation one.
       const finalSchedule: Schedule = intervalAnchorChanged && schedule.kind === "interval"
@@ -575,14 +575,14 @@ async function updateCommand(root: string, restInput: string[]): Promise<number>
 }
 
 async function cancelCommand(root: string, name: string | undefined): Promise<number> {
-  if (!name || name.startsWith("-")) fail("Usage: feishu automation cancel <name>.");
+  if (!name || name.startsWith("-")) fail("Usage: feishu-automation cancel <name>.");
   // loadJob surfaces a missing/corrupt record before the lock; the lock then
   // re-reads a live run and binds the request to its exact run identity.
   loadJob(root, name);
   const workspace = workspacePaths(root);
   const held = activeRun(workspace, name);
   if (!held) {
-    fail(`No active run of "${name}" to cancel. Use "feishu automation pause ${name}" to stop future admission; previous outcomes are in "feishu automation show ${name}".`);
+    fail(`No active run of "${name}" to cancel. Use "feishu-automation pause ${name}" to stop future admission; previous outcomes are in "feishu-automation show ${name}".`);
   }
   const runId = String(held.runId);
   const supervisorPid = Number(held.supervisorPid ?? held.pid);
@@ -627,7 +627,7 @@ async function cancelCommand(root: string, name: string | undefined): Promise<nu
 
 async function removeCommand(root: string, rest: string[]): Promise<number> {
   const name = rest[0];
-  if (!name || name.startsWith("-")) fail("Usage: feishu automation rm <name> [--purge] [--yes].");
+  if (!name || name.startsWith("-")) fail("Usage: feishu-automation rm <name> [--purge] [--yes].");
   const options = rest.slice(1);
   const purge = options.includes("--purge");
   const yes = options.includes("--yes");
@@ -639,7 +639,7 @@ async function removeCommand(root: string, rest: string[]): Promise<number> {
   const jobDir = join(workspace.jobs, name);
   if (purge) {
     if (activeRun(workspace, name)) {
-      fail(`Cannot purge "${name}" while a run is active. Pause it with "feishu automation pause ${name}" or stop the run with "feishu automation cancel ${name}" first.`);
+      fail(`Cannot purge "${name}" while a run is active. Pause it with "feishu-automation pause ${name}" or stop the run with "feishu-automation cancel ${name}" first.`);
     }
     // Permanent deletion of retained artifacts is the destructive path: show
     // exactly what goes and require fresh affirmative confirmation.
@@ -670,10 +670,10 @@ async function removeCommand(root: string, rest: string[]): Promise<number> {
   try {
     removed = mutateJobRecord(root, name, (current) => {
       if (activeRun(workspace, name)) {
-        throw new AutomationError(`Cannot remove "${name}" while a run is active. Pause it with "feishu automation pause ${name}" or stop the run with "feishu automation cancel ${name}" first.`);
+        throw new AutomationError(`Cannot remove "${name}" while a run is active. Pause it with "feishu-automation pause ${name}" or stop the run with "feishu-automation cancel ${name}" first.`);
       }
       if (current.state === "removed") {
-        throw new AutomationError(`Job "${name}" is already removed (retained). Use "feishu automation rm ${name} --purge" to permanently delete it.`);
+        throw new AutomationError(`Job "${name}" is already removed (retained). Use "feishu-automation rm ${name} --purge" to permanently delete it.`);
       }
       return { ...current, state: "removed" };
     });
@@ -682,7 +682,7 @@ async function removeCommand(root: string, rest: string[]): Promise<number> {
     throw error;
   }
   process.stdout.write(`${JSON.stringify(jobSummary(root, removed), null, 2)}\n`);
-  process.stderr.write(`Removed "${name}" from active scheduling; its definition and run history are retained. It can no longer run, and its name is not reused silently. Purge permanently with "feishu automation rm ${name} --purge".\n`);
+  process.stderr.write(`Removed "${name}" from active scheduling; its definition and run history are retained. It can no longer run, and its name is not reused silently. Purge permanently with "feishu-automation rm ${name} --purge".\n`);
   return 0;
 }
 function loadScheduleStateFor(root: string, name: string) {

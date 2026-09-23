@@ -11,7 +11,7 @@ import {
   cronFirstAtOrAfter,
   cronLastAtOrBefore,
   type CronSchedule,
-} from "../src/automation.js";
+} from "../packages/feishu-automation/src/automation.js";
 
 test("parseDurationMinutes accepts positive minute/hour/day values and rejects the rest", () => {
   assert.equal(parseDurationMinutes("1m"), 1);

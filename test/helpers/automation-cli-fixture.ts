@@ -9,7 +9,13 @@ import test from "node:test";
 import { hermeticEnv } from "./hermetic-env.js";
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-export const cli = join(repoRoot, "dist/src/cli.js");
+export const coreCli = join(repoRoot, "dist/src/cli.js");
+export const cli = join(repoRoot, "dist/packages/feishu-automation/src/cli.js");
+
+export function installFeishuBin(bin: string): void {
+  const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+  writeFileSync(join(bin, "feishu"), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(coreCli)} "$@"\n`, { mode: 0o755 });
+}
 
 export const MODEL_KEY_SENTINEL = "MEM0-AUTOMATION-KEY-39";
 export const REMOTE_SECRET_SENTINEL = "REMOTE-SECRET-SENTINEL-39";
@@ -95,6 +101,7 @@ export async function fixture(profiles: Array<[string, boolean]> = [["local-defa
   mkdirSync(pi, { recursive: true });
   mkdirSync(feishu, { recursive: true });
   mkdirSync(bin, { recursive: true });
+  installFeishuBin(bin);
   writeFileSync(join(pi, "auth.json"), JSON.stringify({ fake: { type: "api_key", key: "not-secret" } }));
   writeFileSync(join(feishu, "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model", quietStartup: true, collapseChangelog: true }));
   writeFileSync(join(feishu, "SYSTEM.md"), "You are Feishu Agent.\n");
@@ -173,7 +180,7 @@ export function baseEnv(f: Fixture, extra: NodeJS.ProcessEnv = {}): NodeJS.Proce
 }
 
 export function runCli(f: Fixture, args: string[], options: { input?: string; env?: NodeJS.ProcessEnv } = {}): CliResult {
-  const result = spawnSync(process.execPath, [cli, ...args], {
+  const result = spawnSync(process.execPath, [cli, ...args.slice(1)], {
     encoding: "utf8",
     cwd: f.root,
     input: options.input,
@@ -188,7 +195,7 @@ export function addJob(f: Fixture, extraArgs: string[] = [], task = "Self-contai
 
 export function runAutomationAsync(f: Fixture, args: string[], extra: NodeJS.ProcessEnv = {}): Promise<CliResult> {
   return new Promise((done) => {
-    const child = spawn(process.execPath, [cli, "automation", ...args], {
+    const child = spawn(process.execPath, [cli, ...args], {
       cwd: f.root,
       env: baseEnv(f, {
         MEM0_API_KEY: MODEL_KEY_SENTINEL, MEM0_API_HOST: `http://127.0.0.1:${f.model.port}`,
@@ -227,7 +234,7 @@ export function ptyRun(f: Fixture, args: string[], input: string, ready: RegExp,
     "os.kill(pid,15); sys.stdout.buffer.write(out); sys.exit(124)",
   ].join("\n");
   return new Promise((done) => {
-    const child = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, ...args]), input, ready.source, reply], {
+    const child = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, ...args.slice(1)]), input, ready.source, reply], {
       env: baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }),
     });
     let output = "";

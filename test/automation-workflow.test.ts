@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fixture as initFixture, run, allFiles } from "./helpers/init-e2e-fixture.js";
 import { hermeticEnv } from "./helpers/hermetic-env.js";
-import { toolResponse, profileListJson } from "./helpers/automation-cli-fixture.js";
+import { coreCli, repoRoot, toolResponse, profileListJson } from "./helpers/automation-cli-fixture.js";
 import { cli, createTriggerHarness, startGateServer, gate, textResponse, DUE_MS, MIN, setClock, waitStarted, settle, stopServe, runCli, type Fixture } from "./helpers/automation-trigger-fixture.js";
 
 const { gateServers, startServe } = createTriggerHarness();
@@ -31,7 +31,7 @@ while time.time()<deadline:
   sys.stdout.buffer.write(out); sys.exit(os.waitstatus_to_exitcode(status) if step==len(steps) else 125)
 os.kill(pid,15); sys.stdout.buffer.write(out); sys.exit(124)`;
   return new Promise<{ code: number | null; output: string }>((done, reject) => {
-    const child = spawn("python3", ["-c", driver, cwd, process.execPath, JSON.stringify(actions), cli], { env });
+    const child = spawn("python3", ["-c", driver, cwd, process.execPath, JSON.stringify(actions), coreCli], { env });
     let output = "";
     child.stdout.on("data", (chunk) => output += chunk);
     child.stderr.on("data", (chunk) => output += chunk);
@@ -63,7 +63,10 @@ test("scripted conversation reads private Skill, confirms create/edit, manages t
     // Keep the real Mem0 package configured: unattended runs must skip it, not just
     // happen to have no package. Only the fake model's endpoint/catalog is replaced.
     writeFileSync(join(init.pi, "models.json"), JSON.stringify({ providers: { fake: { baseUrl: `http://127.0.0.1:${model.port}/v1`, api: "openai-completions", models: [{ id: "fake-model", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 4096 }] } } }));
-    writeFileSync(join(f.bin, "feishu"), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(f.bin, "feishu"), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(coreCli)} "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(f.bin, "feishu-automation"), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`, { mode: 0o755 });
+    const installed = await run(f.root, env, ["install", join(repoRoot, "packages/feishu-automation")]);
+    assert.equal(installed.code, 0, installed.stderr);
     const profiles = profileListJson([["approved-profile", true], ["changed-default", false]]);
     const messageCommand = "lark-cli im +messages-send --chat-id oc_fixed --text 'Approved report' --as bot";
     const appendCommand = "lark-cli docs +update --doc doc_existing --command append --content '<p>Approved report</p>' --as user";
@@ -80,7 +83,7 @@ esac
     const larkConfig = join(f.home, ".config", "lark-cli");
     mkdirSync(larkConfig, { recursive: true });
     writeFileSync(join(larkConfig, "config.json"), JSON.stringify({ token }));
-    const skillPath = join(init.agentHome, "skills", "feishu-automation", "SKILL.md");
+    const skillPath = join(repoRoot, "packages/feishu-automation/skills/feishu-automation/SKILL.md");
     const taskPath = join(f.root, "report-task.md");
     const task = `Objective: publish the approved report. Inputs: the literal Approved report text.
 Fixed destinations: conversation oc_fixed and existing document doc_existing.
@@ -97,24 +100,24 @@ No memory recall or conversation history needed.\n`;
       toolResponse("read", { path: skillPath }, "skill-read"),
       toolResponse("write", { path: taskPath, content: task }, "prepare-task"),
       textResponse(fullPlan(task, "2030-06-01T09:00:00") + "\nConfirm this complete plan? CREATE-PLAN-READY"),
-      bash(`feishu automation add --name report --at 2030-06-01T09:00 --prompt-file ${quote(taskPath)} --lark-profile approved-profile --yes`, "create"),
-      bash("feishu automation show report", "inspect-create"),
+      bash(`feishu-automation add --name report --at 2030-06-01T09:00 --prompt-file ${quote(taskPath)} --lark-profile approved-profile --yes`, "create"),
+      bash("feishu-automation show report", "inspect-create"),
       textResponse("Saved report, enabled; next 2030-06-01T09:00+08:00 / 01:00Z Asia/Shanghai, profile approved-profile, 2h lateness, 10m timeout. Trigger inactive: no automatic firing until separately approved automation start. No trial write. Use automation show/list/status, pause or explicit run. CREATE-SAVED"),
-      bash("feishu automation show report", "inspect-before-edit"),
+      bash("feishu-automation show report", "inspect-before-edit"),
       toolResponse("write", { path: taskPath, content: editedTask }, "prepare-edit"),
       textResponse("Old 09:00 -> new 09:05; summary adds REVISION-TWO. Old plan remains active until approved. " + fullPlan(editedTask, "2030-06-01T09:05:00") + "\nConfirm this revised plan? EDIT-PLAN-READY"),
-      bash(`feishu automation update report --at 2030-06-01T09:05 --prompt-file ${quote(taskPath)} --yes`, "edit"),
-      bash("feishu automation show report", "inspect-edit"),
+      bash(`feishu-automation update report --at 2030-06-01T09:05 --prompt-file ${quote(taskPath)} --yes`, "edit"),
+      bash("feishu-automation show report", "inspect-edit"),
       textResponse("Updated report; enabled; next 2030-06-01T09:05+08:00 / 01:05Z Asia/Shanghai, approved-profile, 2h lateness, 10m timeout. Trigger inactive; show/status for inspection. EDIT-SAVED"),
-      bash("feishu automation pause report", "pause"),
+      bash("feishu-automation pause report", "pause"),
       textResponse("report paused: future dispatch stops, current attempt would continue. Cancel is separate and does not roll back writes. PAUSED-RECEIPT"),
-      bash("feishu automation resume report", "resume"),
+      bash("feishu-automation resume report", "resume"),
       textResponse("report resumed; next 2030-06-01T09:05+08:00 Asia/Shanghai; no replay of intentionally paused work. RESUMED-RECEIPT"),
       textResponse("Manual testing performs real writes and may duplicate effects: future one-shot remains eligible at 09:05 Asia/Shanghai. Confirm a separate run? MANUAL-PLAN-READY"),
-      bash("feishu automation run report", "manual"),
+      bash("feishu-automation run report", "manual"),
       bash(messageCommand, "manual-message"), bash(appendCommand, "manual-append"),
       textResponse("REVISION-TWO: fake-effect-receipt for bot message and user append. RUN-FINISHED"),
-      bash("feishu automation show report", "inspect-manual"),
+      bash("feishu-automation show report", "inspect-manual"),
       textResponse("Manual report completed with fake receipts; runner completion is not guaranteed delivery. The future one-shot remains eligible at 2030-06-01T09:05+08:00 Asia/Shanghai and may duplicate writes. Trigger still inactive. MANUAL-RECEIPT"),
     ];
     model.jobs.push(...replies.map((reply) => gate(reply)));
@@ -190,7 +193,14 @@ No memory recall or conversation history needed.\n`;
     // fail; normal business-policy instructions are NOT a new target ACL.
     for (const suffix of [" --yes", ""]) {
       model.jobs.push(gate(bash(`lark-cli doc delete doc_existing --as user${suffix}`, `blocked-${suffix.length}`)));
-      const failed = await run(f.root, { ...env, LARK_PROFILE: "changed-default" }, ["automation", "run", "report"]);
+      const failed = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+        const child = spawn(process.execPath, [cli, "run", "report"], { cwd: f.root, env: { ...env, LARK_PROFILE: "changed-default" } });
+        let stdout = "", stderr = "";
+        child.stdout.on("data", data => stdout += data);
+        child.stderr.on("data", data => stderr += data);
+        child.once("error", reject);
+        child.once("close", code => resolve({ code, stdout, stderr }));
+      });
       assert.equal(failed.code, 1, failed.stderr);
       assert.equal(JSON.parse(failed.stdout).outcome, "failed");
       assert.equal(model.jobs.length, 0, "Print guard terminates the turn without another model request");

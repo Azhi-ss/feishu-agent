@@ -9,7 +9,8 @@ import test from "node:test";
 import { hermeticEnv } from "./hermetic-env.js";
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-export const cli = join(repoRoot, "dist/src/cli.js");
+export { cli } from "./automation-cli-fixture.js";
+import { cli, installFeishuBin } from "./automation-cli-fixture.js";
 
 export const DUE_MS = Date.parse("2030-06-01T01:00:00.000Z"); // 09:00 Asia/Shanghai
 export const MIN = 60_000;
@@ -91,6 +92,7 @@ export async function fixture(): Promise<Fixture> {
   mkdirSync(pi, { recursive: true });
   mkdirSync(feishu, { recursive: true });
   mkdirSync(bin, { recursive: true });
+  installFeishuBin(bin);
   writeFileSync(join(pi, "auth.json"), JSON.stringify({ fake: { type: "api_key", key: "not-secret" } }));
   writeFileSync(join(feishu, "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model", quietStartup: true, collapseChangelog: true }));
   writeFileSync(join(feishu, "SYSTEM.md"), "You are Feishu Agent.\n");
@@ -133,7 +135,7 @@ export function createTriggerHarness() {
   });
 
   function startServe(f: Fixture, extra: NodeJS.ProcessEnv = {}): Serve {
-    const child = spawn(process.execPath, [cli, "automation", "serve"], { cwd: f.root, env: baseEnv(f, extra), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [cli, "serve"], { cwd: f.root, env: baseEnv(f, extra), stdio: ["ignore", "pipe", "pipe"] });
     spawnedServes.push(child);
     child.stdout.resume();
     const serve: Serve = { child, stderr: "" };
@@ -157,13 +159,13 @@ export function baseEnv(f: Fixture, extra: NodeJS.ProcessEnv = {}): NodeJS.Proce
 }
 
 export function runCli(f: Fixture, args: string[], extra: NodeJS.ProcessEnv = {}): { code: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", cwd: f.root, env: baseEnv(f, extra) });
+  const result = spawnSync(process.execPath, [cli, ...args.slice(1)], { encoding: "utf8", cwd: f.root, env: baseEnv(f, extra) });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 export function runCliAsync(f: Fixture, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, ...args], {
+    const child = spawn(process.execPath, [cli, ...args.slice(1)], {
       cwd: f.root, env: baseEnv(f), stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "", stderr = "";
@@ -175,21 +177,21 @@ export function runCliAsync(f: Fixture, args: string[]): Promise<{ code: number 
 }
 
 export function addJob(f: Fixture, name: string, extraArgs: string[] = [], task = "Self-contained scheduled task."): void {
-  const result = spawnSync(process.execPath, [cli, "automation", "add", "--name", name, "--at", "2030-06-01T09:00", "--prompt-stdin", ...extraArgs, "--yes"], {
+  const result = spawnSync(process.execPath, [cli, "add", "--name", name, "--at", "2030-06-01T09:00", "--prompt-stdin", ...extraArgs, "--yes"], {
     encoding: "utf8", cwd: f.root, input: `${task}\n`, env: baseEnv(f),
   });
   assert.equal(result.status, 0, result.stderr);
 }
 
 export function addCron(f: Fixture, name: string, expr: string, extraArgs: string[] = [], task = "Recurring task."): void {
-  const result = spawnSync(process.execPath, [cli, "automation", "add", "--name", name, "--cron", expr, "--prompt-stdin", ...extraArgs, "--yes"], {
+  const result = spawnSync(process.execPath, [cli, "add", "--name", name, "--cron", expr, "--prompt-stdin", ...extraArgs, "--yes"], {
     encoding: "utf8", cwd: f.root, input: `${task}\n`, env: baseEnv(f),
   });
   assert.equal(result.status, 0, result.stderr);
 }
 
 export function addEvery(f: Fixture, name: string, duration: string, extraArgs: string[] = [], task = "Interval task."): void {
-  const result = spawnSync(process.execPath, [cli, "automation", "add", "--name", name, "--every", duration, "--prompt-stdin", ...extraArgs, "--yes"], {
+  const result = spawnSync(process.execPath, [cli, "add", "--name", name, "--every", duration, "--prompt-stdin", ...extraArgs, "--yes"], {
     encoding: "utf8", cwd: f.root, input: `${task}\n`, env: baseEnv(f),
   });
   assert.equal(result.status, 0, result.stderr);

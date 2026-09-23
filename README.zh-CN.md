@@ -87,6 +87,23 @@ Feishu Runtime 会关闭 Pi 内置的启动期网络检查，因此你永远不�
 
 只支持交互式和文本 Print 模式。刻意不提供 JSON 和 RPC 模式。
 
+## 可选定时任务包
+
+定时任务已从本体拆为独立的 `@azhi-ss/feishu-automation` Package，`feishu init`
+不再安装自动化 Skill，本体不再提供 `feishu automation` 命令。包尚未发布 npm，
+可从本地源码显式构建安装；安装不会启动后台服务或执行任务。
+
+```bash
+npm run build --workspace @azhi-ss/feishu-automation
+feishu install /绝对路径/feishu-agent/packages/feishu-automation
+```
+
+CLI 改用 `node /绝对路径/包/dist/cli.js <命令>`（npm bin 可用时为
+`feishu-automation <命令>`）。移除包前先执行 `stop` 并检查 `status`；
+旧每日简报定时器与此独立，迁移前应停用，脚本和历史记录保留。
+完整安装、迁移和卸载说明见[包 README](packages/feishu-automation/README.md)。
+Remote/Mem0 默认安装策略本轮不变。
+
 ## 包与 Skills
 
 ### 默认（开箱即得）

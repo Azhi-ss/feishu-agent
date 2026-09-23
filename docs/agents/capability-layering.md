@@ -87,13 +87,13 @@ and update across projects?**
   `@azhi-ss/feishu-remote`, and resource filtering in `src/resources.ts`.
   Pinning and allow-listing are provenance controls, not sandboxes — the
   AGENTS.md isolation boundary says so in user-facing terms.
-- **Trigger separate from Runtime**: the deployed Briefing uses external
-  systemd user timers (ADR-0002). The revised automation design (ADR-0005,
-  SPEC §16.5; not implemented) permits an explicitly enabled, standalone
-  cross-platform Trigger with no retained model context. OS services supervise
-  that process, not individual job calendars. Interactive/Print/init must not
-  implicitly install, start, or wait for it; a separate scheduler does not
-  inherently violate zero-network/zero-blocking startup.
+- **Trigger separate from Runtime**: Automation is an optional Package
+  (`packages/feishu-automation/`, ADR-0006), with CLI, Skill and standalone
+  cross-platform Trigger. OS services supervise that process, not individual
+  job calendars. The package invokes public `feishu -p`, not Runtime internals.
+  Core init does not install the package; normal startup never probes services.
+  The legacy Briefing's systemd timer remains a separate deployment artifact
+  (ADR-0002). Stop old scheduling explicitly before migration; retain records.
 
 ## Anti-examples
 

@@ -8,6 +8,7 @@
 // Trigger owns scheduled children and stops only those.
 
 import { spawn } from "node:child_process";
+import { executable } from "./executable.js";
 import { randomUUID } from "node:crypto";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
@@ -100,6 +101,7 @@ export function startAdmittedRun(
   kind: "manual" | "scheduled",
   options: StartOptions = {},
 ): AdmittedRun {
+  const feishu = executable("feishu");
   const scheduled = kind === "scheduled" ? options.due ?? null : null;
   const home = options.home ?? homedir();
   const startedAt = new Date(nowMs()).toISOString();
@@ -138,7 +140,6 @@ export function startAdmittedRun(
   Object.assign(childEnv, {
     HOME: home,
     FEISHU_UNATTENDED: "1",
-    FEISHU_AUTOMATION_ADMISSION: "1",
     LARK_PROFILE: job.profile,
     PI_OFFLINE: "1",
   });
@@ -152,7 +153,7 @@ export function startAdmittedRun(
     });
     stdoutFd = openSync(stdoutPath, "wx", 0o600);
     stderrFd = openSync(stderrPath, "wx", 0o600);
-    child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "cli.js"), "-p", buildPrompt(job, scratchDir)], {
+    child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "worker.js"), feishu, buildPrompt(job, scratchDir)], {
       cwd: workspace.root,
       env: childEnv,
       stdio: ["ignore", stdoutFd, stderrFd, "ipc"],
@@ -336,7 +337,7 @@ export async function runJobManual(
   } = {},
 ): Promise<ManualRunResult> {
   if (job.state === "removed") {
-    throw new AutomationError(`Job "${job.name}" is removed and cannot run. Purge its retained record with "feishu automation rm ${job.name} --purge" and add it again if needed.`);
+    throw new AutomationError(`Job "${job.name}" is removed and cannot run. Purge its retained record with "feishu-automation rm ${job.name} --purge" and add it again if needed.`);
   }
   const admitted = startAdmittedRun(job, workspace, "manual", options);
 

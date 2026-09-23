@@ -1,5 +1,11 @@
 # PRD: Cross-platform, Agent-managed cron automation
 
+> Historical delivery plan. Packaging and CLI ownership are superseded by
+> [ADR-0006](../adr/0006-optional-automation-package.md) and SPEC §16.5:
+> scheduling now lives in the optional `@azhi-ss/feishu-automation` package,
+> uses `feishu-automation` instead of `feishu automation`, and is not installed
+> by core init. The schedule, confirmation, isolation and run contracts remain.
+
 ## Problem Statement
 
 The owner alternates between macOS and Linux/WSL and wants to tell Feishu Agent what to do and when, rather than hand-write scheduler configuration for each new task. The current application can execute a fresh unattended Print run, but it has no implemented task-management or scheduling surface. The earlier systemd-only proposal exposes Linux-specific calendar syntax and fails on macOS.

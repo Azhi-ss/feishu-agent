@@ -222,7 +222,7 @@ test("cancel stops the named active run through its owner and records cancellati
   const gate = await startGate(textResponse("SHOULD-NEVER-ARRIVE"));
   repointModel(f, gate.port);
 
-  const active = spawn(process.execPath, [cli, "automation", "run", "daily-reminder"], { cwd: f.root, env: baseEnv(f), stdio: ["ignore", "pipe", "pipe"] });
+  const active = spawn(process.execPath, [cli, "run", "daily-reminder"], { cwd: f.root, env: baseEnv(f), stdio: ["ignore", "pipe", "pipe"] });
   let activeStderr = "";
   active.stderr.on("data", (chunk) => { activeStderr += chunk; });
   await waitFor(() => gate.requests.length === 1, 300);
@@ -274,7 +274,7 @@ test("a stale cancel.json never cancels a later run and is removed at admission"
   // active is ignored too: publish a foreign-id request mid-run.
   const gate = await startGate(textResponse("HELD-WHILE-FOREIGN-CANCEL"));
   repointModel(f, gate.port);
-  const active = spawn(process.execPath, [cli, "automation", "run", "daily-reminder"], { cwd: f.root, env: baseEnv(f), stdio: "ignore" });
+  const active = spawn(process.execPath, [cli, "run", "daily-reminder"], { cwd: f.root, env: baseEnv(f), stdio: "ignore" });
   await waitFor(() => gate.requests.length === 1, 300);
   mkdirSync(jobDir, { recursive: true });
   writeFileSync(join(jobDir, "cancel.json"), JSON.stringify({ runId: "someone-else", requestedAt: new Date().toISOString() }));
@@ -293,7 +293,7 @@ test("rm refuses active jobs; ordinary removal retains artifacts and blocks runs
   assert.equal(addJob(f, ["--timeout", "1h"], "Held task.\n").code, 0);
   const gate = await startGate(textResponse("Held for rm refusal"));
   repointModel(f, gate.port);
-  const active = spawn(process.execPath, [cli, "automation", "run", "daily-reminder"], { cwd: f.root, env: baseEnv(f), stdio: "ignore" });
+  const active = spawn(process.execPath, [cli, "run", "daily-reminder"], { cwd: f.root, env: baseEnv(f), stdio: "ignore" });
   await waitFor(() => gate.requests.length === 1, 300);
 
   const refused = runCli(f, ["automation", "rm", "daily-reminder", "--purge", "--yes"]);
@@ -491,7 +491,7 @@ test("an approved edit is rejected when the job is removed while confirmation wa
     "open(marker,'wb').write(b'timeout')",
   ].join("\n");
   const marker = join(f.root, "remove-race-pty");
-  const pending = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, "automation", "update", "daily-reminder", "--timeout", "20m"]), marker], {
+  const pending = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, "update", "daily-reminder", "--timeout", "20m"]), marker], {
     env: baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }),
   });
   let code: number | null = null;

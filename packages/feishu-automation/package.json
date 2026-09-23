@@ -1,0 +1,16 @@
+{
+  "name": "@azhi-ss/feishu-automation",
+  "version": "0.1.0",
+  "description": "Optional Feishu scheduled jobs: standalone CLI, background Trigger and Skill.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "feishu-automation": "dist/cli.js" },
+  "files": ["dist", "skills", "README.md", "LICENSE"],
+  "pi": { "skills": ["./skills"], "extensions": [] },
+  "keywords": ["pi-package", "feishu", "automation"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
+    "prepack": "npm run build"
+  },
+  "engines": { "node": ">=22.19.0" }
+}

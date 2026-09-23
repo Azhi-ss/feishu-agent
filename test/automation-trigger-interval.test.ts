@@ -211,7 +211,7 @@ test("cron jobs persist their explicit timezone and ignore later host timezone c
   assert.equal(new Date(nextIso).getUTCHours(), 0);
   assert.equal(new Date(nextIso).getUTCMinutes(), 0);
   // The rule text and zone are both visible in the confirmation receipt.
-  const receipt = spawnSync(process.execPath, [cli, "automation", "add", "--name", "tokyo2", "--cron", "0 9 * * *", "--tz", "Asia/Tokyo", "--prompt-stdin", "--yes"], {
+  const receipt = spawnSync(process.execPath, [cli, "add", "--name", "tokyo2", "--cron", "0 9 * * *", "--tz", "Asia/Tokyo", "--prompt-stdin", "--yes"], {
     encoding: "utf8", cwd: f.root, input: "t\n", env: baseEnv(f),
   });
   assert.equal(receipt.status, 0, receipt.stderr);

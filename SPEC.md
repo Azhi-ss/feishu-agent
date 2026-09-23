@@ -176,7 +176,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 已存在的私有 Skill 必须经过第二次明确确认才能覆盖。源树中的符号链接和路径穿越会被拒绝；安装先 staging，目标变更完成后再清理临时树。
 - 复制成功后，当前 Runtime 重新加载 Resources，使 Skill 立即可用。已安装 Skill 仍以当前用户权限运行，确认流程不构成沙箱。
 - Print 模式可以输出搜索结果；没有 UI 时安装必须快速失败，不能等待确认。
-- 全新 Home 有 10 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer`、`feishu-package-curator`、`volc-devinstance` 与 `feishu-automation`（§16.5），沿用显式 init 补齐流程；公共资源只能使用脱敏占位符，个人标识留在用户本地。
+- 全新 Home 有 9 个内置 Feishu Skill：`feishu-skill-maker`、`feishu-find-skill`、`feishu-latex-rendering`、`process-optimization-biweekly`、`deslop-zh`、`feishu-pro-diagram`、`feishu-tech-note-writer`、`feishu-package-curator`、`volc-devinstance` （Automation 已改为可选 Package，见 §16.5），沿用显式 init 补齐流程；公共资源只能使用脱敏占位符，个人标识留在用户本地。
 
 ### 7. Package management
 
@@ -295,11 +295,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu update [source|--extensions]`
 - `feishu config`
 - `feishu skills sync [--update]`（`--update` 先显式 `lark-cli update` 再按新版本重建缓存；仅显式调用才联网）
-- `feishu automation list` / `feishu automation show <name>`
-- `feishu automation add --name <slug> (--cron <expr> | --at <ISO-time> | --every <duration>) (--prompt-file <path> | --prompt-stdin) [--tz <IANA>] [--catch-up <duration> | --no-catch-up] [--timeout <duration>] [--yes]`
-- `feishu automation update <name> [同 add 的可变选项，不含 --name] [--yes]`
-- `feishu automation run <name>` / `pause <name>` / `resume <name>` / `cancel <name>` / `rm <name> [--purge]`
-- `feishu automation start` / `stop` / `status` / `serve`（Trigger 生命周期，与任务的 pause/cancel 区分；详见 §16.5）
+- 本体不再提供 `feishu automation` 子命令；可选 `@azhi-ss/feishu-automation` Package 提供独立 `feishu-automation` CLI 和 Skill（§16.5）。
 - `feishu -c`
 - `feishu -r`
 - `feishu --session <id>`
@@ -366,6 +362,13 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 **验收口径**：Sweep 行为（分层、游标退化、无 Persistent、通知合并/去重、越权拦截）与 Briefing 部署制品同属「工位/外部契约/模型内容」，仓库只对其中的核心代码（硬命令策略、无人模式契约）做测试；预筛脚本、systemd 单元、时区与通知内容靠「真实 systemd 子进程 + 临时覆盖时钟」在部署机端到端验收及观察周人工确认，不入仓库测试。
 
 #### 16.5 跨平台 Automation 管理与应用级 cron
+
+**可选包拆分（当前合同，优先于下方历史交付记录）**：Automation 从本体移入 `packages/feishu-automation/`，以独立 `@azhi-ss/feishu-automation` Package 交付（本地打包安装，不代表已发布 npm）。Package 包含独立 `feishu-automation` CLI、Skill、调度/存储/执行监管与系统服务托管，不注册常驻 Runtime Hook，不依赖本体私有模块。不新增第三方依赖、不重写调度语义。
+
+- 下文历史 `feishu automation <verb>` 均由 `feishu-automation <verb>` 替代；所有既有 flags、确认、任务格式和日程/运行合同保留。`feishu-automation --help` 提供完整参数说明。
+- 本体 Interactive/Print/init 不包含调度管理、IPC admission 或自动化 Skill 安装；保留通用 `FEISHU_UNATTENDED=1` 无记忆 Print 执行。Package 自己的 worker 完成 admission 后通过 PATH 调用 `feishu -p <prompt>`，绝不调用普通 Pi。后台服务显式解析所需可执行路径，不复制秘密环境。
+- Package 显式安装不等于启用服务；Skill 使用随包 CLI，不假设 npm 全局 bin 可用。安装、移除复用现有 `feishu install/remove`，服务必须先显式 stop 再移除包。Remote/Mem0 安装策略本轮不变。
+- 原 `~/feishu-jobs` 记录与旧 `~/feishu-automation` Briefing 文件保留；不自动迁移、启动或重放。旧服务停用后保留可恢复文件；旧私有 automation Skill 如存在，先归档再移出加载目录，不覆盖用户修改。升级/init 不擅自清理其他用户的运行时资料。
 
 **状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 的 #39–#44 六个分片已交付，并通过共享离线 macOS/Linux × Node 22/24 验收（提交 `a430a86`，[CI 35186457536](https://github.com/Azhi-ss/feishu-agent/actions/runs/35186457536) 六项全绿）。#39 提供一次性任务创建/查看/手动运行，#40 增加显式前台 `serve`、两小时默认窗口、持久化消费与重启恢复，#41 增加数字五字段 cron 重复与固定间隔（显式时区、DST 跳过/重叠只算一次、latest-only 补跑、同任务 overlap 跳过）；#42 已提供生命周期编辑，#43 增加显式 launchd/user-systemd `start/stop/status` 托管同一 `serve`；#44 补齐私有 automation Skill 的完整计划→确认→创建/编辑回执及管理流程，复用默认安装器，真实 CLI/fake 模型覆盖交互确认与手动/定时 Print；未部署真实服务或迁移旧任务。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
 
