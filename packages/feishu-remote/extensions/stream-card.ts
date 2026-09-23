@@ -110,19 +110,6 @@ export class StreamCardSession {
     const previous = this.writingText ?? this.sentText;
     if (text === previous) return;
     this.pendingText = text;
-    this.clearTimer();
-    const elapsed = Date.now() - this.lastFlushAt;
-    if (!shouldFlushStreamUpdate(previous, text, elapsed)) {
-      this.flushTimer = setTimeout(() => {
-        this.flushTimer = undefined;
-        // Anchor the throttle at the moment this write is dispatched, so the next
-        // update measures the gap against the write that actually happened.
-        this.lastFlushAt = Date.now();
-        void this.flush();
-      }, STREAM_UPDATE_THROTTLE_MS - elapsed);
-      return;
-    }
-    this.lastFlushAt = Date.now();
     void this.flush();
   }
 
@@ -174,10 +161,22 @@ export class StreamCardSession {
   private flush(): Promise<void> {
     this.queue = this.queue.then(async () => {
       if (this.closed) return;
+      this.clearTimer();
       const text = this.pendingText;
-      this.pendingText = undefined;
       if (text === undefined || text === this.sentText || text === this.writingText) return;
+      // Queue delays and coalescing can invalidate an earlier flush decision.
+      // Check the latest snapshot here and timestamp the actual dispatch.
+      const elapsed = Date.now() - this.lastFlushAt;
+      if (!shouldFlushStreamUpdate(this.sentText, text, elapsed)) {
+        this.flushTimer = setTimeout(() => {
+          this.flushTimer = undefined;
+          void this.flush();
+        }, STREAM_UPDATE_THROTTLE_MS - elapsed);
+        return;
+      }
+      this.pendingText = undefined;
       this.writingText = text;
+      this.lastFlushAt = Date.now();
       this.sequence += 1;
       try {
         await this.ops.append(this.cardId, text, this.sequence, `s_${this.cardId}_${this.sequence}`);

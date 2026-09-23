@@ -57,6 +57,88 @@ test("visibleAssistantText tolerates non-array, legacy, and malformed content", 
   assert.equal(visibleAssistantText([{ type: "text", text: "kept", textSignature: "{not json" }]), "kept");
 });
 
+test("throttle starts at actual append after a queued status request, not at update", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000 });
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const writes: Array<{ text: string; at: number }> = [];
+  const session = new StreamCardSession("delayed-status", {
+    setStatus: () => blocked,
+    append: async (_id, text) => { writes.push({ text, at: Date.now() }); },
+    closeCard: async () => {},
+  }, error => { throw error; });
+  const drain = () => new Promise<void>(resolve => setImmediate(resolve));
+  try {
+    session.setStatus("working");
+    session.update("a");
+    await drain();
+    assert.equal(writes.length, 0);
+    t.mock.timers.tick(200);
+    release();
+    await drain();
+    assert.deepEqual(writes, [{ text: "a", at: 1200 }]);
+    session.update("ab");
+    await drain();
+    assert.equal(writes.length, 1, "small delta must not bypass throttle after queue delay");
+    t.mock.timers.tick(STREAM_UPDATE_THROTTLE_MS - 1);
+    await drain();
+    assert.equal(writes.length, 1);
+    t.mock.timers.tick(1);
+    await drain();
+    assert.deepEqual(writes[1], { text: "ab", at: 1360 });
+  } finally {
+    release();
+    await session.finalize("ab");
+  }
+});
+
+test("queued flushes recheck coalesced text and preserve forced updates and final close", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000 });
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const writes: Array<{ text: string; at: number }> = [];
+  const closes: string[] = [];
+  const session = new StreamCardSession("slow-append", {
+    setStatus: async () => {},
+    append: async (_id, text) => {
+      writes.push({ text, at: Date.now() });
+      if (writes.length === 1) await blocked;
+    },
+    closeCard: async (_id, text) => { closes.push(text); },
+  }, error => { throw error; });
+  const drain = () => new Promise<void>(resolve => setImmediate(resolve));
+  try {
+    session.update("a");
+    await drain();
+    t.mock.timers.tick(200);
+    session.update("ab");
+    session.update("abc");
+    release();
+    await drain();
+    assert.deepEqual(writes, [{ text: "a", at: 1000 }, { text: "abc", at: 1200 }]);
+    session.update("abcd");
+    await drain();
+    assert.equal(writes.length, 2);
+    const significant = "abcd" + "x".repeat(STREAM_SIGNIFICANT_DELTA_CHARS);
+    session.update(significant);
+    await drain();
+    assert.deepEqual(writes.at(-1), { text: significant, at: 1200 });
+    session.update(significant + "。");
+    await drain();
+    assert.deepEqual(writes.at(-1), { text: significant + "。", at: 1200 });
+    session.update(significant + "。tail");
+    await drain();
+    await session.finalize(significant + "。tail");
+    t.mock.timers.tick(1000);
+    await drain();
+    assert.equal(writes.length, 4, "no pending timer writes after finalization");
+    assert.deepEqual(closes, [significant + "。tail"]);
+  } finally {
+    release();
+    await session.finalize("cleanup");
+  }
+});
+
 function recordingOps(): {
   ops: ConstructorParameters<typeof StreamCardSession>[1];
   statusWrites: string[];
