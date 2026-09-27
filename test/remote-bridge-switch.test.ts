@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
@@ -59,6 +60,26 @@ test("/remote switch hands the bridge off from the holding window to the new one
     assert.equal(firstResult.code, 0, firstResult.output);
     assert.match(firstResult.output, /remote:off/);
     assert.doesNotMatch(firstResult.output, /Remote bridge connected[\s\S]*Remote bridge connected/);
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("/remote switch reclaims a stale dead-pid lock and connects", async () => {
+  const f = await fixture(echoModel, []);
+  try {
+    const dead = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+    await new Promise<void>((done) => dead.on("exit", () => done()));
+    assert.ok(dead.pid, "the dead process must have had a pid");
+    plantLock(f.home, dead.pid);
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "/remote switch\r" },
+      { wait: "Remote bridge connected", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Remote bridge connected/);
+    assert.doesNotMatch(result.output, /handover failed|not a reachable|did not release/);
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);

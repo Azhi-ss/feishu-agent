@@ -422,19 +422,19 @@ export function remoteBridgeExtension(): ExtensionFactory {
         return;
       }
       const holder = readRemoteLock(process.env.HOME ?? "", appId);
-      if (holder) {
-        const signaled = requestRemoteHandover(process.env.HOME ?? "", appId);
-        if (signaled) notify(ctx, `Remote bridge: asking ${describeHolder(holder)} to hand over…`);
-        const released = await waitForRemoteLockRelease(process.env.HOME ?? "", appId, signaled ? 10_000 : 1_000);
+      if (holder && requestRemoteHandover(process.env.HOME ?? "", appId)) {
+        notify(ctx, `Remote bridge: asking ${describeHolder(holder)} to hand over…`);
+        const released = await waitForRemoteLockRelease(process.env.HOME ?? "", appId, 10_000);
         if (!released) {
-          const error = signaled
-            ? `Remote bridge handover timed out: ${describeHolder(holder)} did not release the lock. Stop it there first.`
-            : "Remote bridge handover failed: the lock holder is not a reachable Feishu bridge. Stop it there first.";
+          const error = `Remote bridge handover timed out: ${describeHolder(holder)} did not release the lock. Stop it there first.`;
           enterStandby(ctx, error);
           notify(ctx, error, "error");
           return;
         }
       }
+      // No holder, or a dead one (crashed window): nothing to ask — fall
+      // through and let acquireRemoteLock reclaim the stale lock (SPEC §221:
+      // 无锁/死 pid 锁直接回收后连接).
       await start(ctx);
     }
 
