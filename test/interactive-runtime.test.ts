@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +9,7 @@ import test from "node:test";
 import { InteractiveMode, SessionManager } from "@earendil-works/pi-coding-agent";
 import { projectKeyFor } from "../src/policy.js";
 import { disablePiStartupNetworkChecks, runInteractive, rewritePiResumeNotice } from "../src/runtime.js";
+import { runPty as runHarness } from "./helpers/pty-harness.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -16,14 +17,7 @@ const cli = join(repoRoot, "dist/src/cli.js");
 interface PtyAction { wait: string; send: string; }
 
 function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[]): Promise<{ code: number | null; output: string }> {
-  const python = `import json,os,pty,select,sys,time\nactions=json.loads(sys.argv[4]); pid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3],*json.loads(sys.argv[5])],os.environ)\nout=b''; checkpoint=0; action=0; end=time.time()+60\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n if action<len(actions) and actions[action]['wait'].encode() in out[checkpoint:]:\n  time.sleep(.15); os.write(fd,actions[action]['send'].encode()); w=actions[action]['wait'].encode(); checkpoint=out.index(w,checkpoint)+len(w); action+=1\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if action==len(actions) else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
-  return new Promise((done) => {
-    const child = spawn("python3", ["-c", python, cwd, process.execPath, cli, JSON.stringify(actions), JSON.stringify(args)], { env });
-    let output = "";
-    child.stdout.on("data", (chunk) => output += chunk);
-    child.stderr.on("data", (chunk) => output += chunk);
-    child.on("close", (code) => done({ code, output }));
-  });
+  return runHarness(cwd, args, env, actions, { cliPath: cli });
 }
 
 function appendSession(sessionDir: string, cwd: string, marker: string): string {

@@ -7,37 +7,14 @@ import { fixture as initFixture, run, allFiles } from "./helpers/init-e2e-fixtur
 import { hermeticEnv } from "./helpers/hermetic-env.js";
 import { coreCli, repoRoot, toolResponse, profileListJson } from "./helpers/automation-cli-fixture.js";
 import { cli, createTriggerHarness, startGateServer, gate, textResponse, DUE_MS, MIN, setClock, waitStarted, settle, stopServe, runCli, type Fixture } from "./helpers/automation-trigger-fixture.js";
+import { runPty as runHarness } from "./helpers/pty-harness.js";
 
 const { gateServers, startServe } = createTriggerHarness();
 const quote = (text: string): string => `'${text.replaceAll("'", "'\\''")}'`;
 
 // Real TUI input, with each owner reply sent once after the preceding plan/receipt.
 function conversation(cwd: string, env: NodeJS.ProcessEnv, actions: Array<{ wait: string; send: string }>) {
-  const driver = `import json,os,pty,select,sys,time
-steps=json.loads(sys.argv[3]); pid,fd=pty.fork()
-if pid==0:
- os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[4]],os.environ)
-out=b''; checkpoint=0; step=0; deadline=time.time()+90
-while time.time()<deadline:
- ready,_,_=select.select([fd],[],[],0.1)
- if ready:
-  try: out+=os.read(fd,65536)
-  except OSError:
-   _,status=os.waitpid(pid,0); sys.stdout.buffer.write(out); sys.exit(os.waitstatus_to_exitcode(status) if step==len(steps) else 125)
- if step<len(steps) and steps[step]['wait'].encode() in out[checkpoint:]:
-  time.sleep(.2); os.write(fd,steps[step]['send'].encode()); w=steps[step]['wait'].encode(); checkpoint=out.index(w,checkpoint)+len(w); step+=1
- child,status=os.waitpid(pid,os.WNOHANG)
- if child:
-  sys.stdout.buffer.write(out); sys.exit(os.waitstatus_to_exitcode(status) if step==len(steps) else 125)
-os.kill(pid,15); sys.stdout.buffer.write(out); sys.exit(124)`;
-  return new Promise<{ code: number | null; output: string }>((done, reject) => {
-    const child = spawn("python3", ["-c", driver, cwd, process.execPath, JSON.stringify(actions), coreCli], { env });
-    let output = "";
-    child.stdout.on("data", (chunk) => output += chunk);
-    child.stderr.on("data", (chunk) => output += chunk);
-    child.once("error", reject);
-    child.once("close", (code) => done({ code, output }));
-  });
+  return runHarness(cwd, [], env, actions, { timeoutSec: 90, cliPath: coreCli });
 }
 
 test("scripted conversation reads private Skill, confirms create/edit, manages the real CLI and observes manual/scheduled memory-less Print", async () => {
