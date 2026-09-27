@@ -119,3 +119,23 @@ the property is broken:
   decreasing `Date.now()` sequence inside a single-threaded server process.
   The sequence-number version was verified red-capable by injecting a real
   post-teardown poller.
+
+## Known load flakes: re-run, don't re-diagnose
+
+A few timing tests can exceed a deliberately short budget when the full suite runs
+in parallel on a busy machine. Each passes in isolation, none indicates a product
+defect, and **CI has never shown any of them** (the six-job matrix has been green
+on every run so far). Local full-suite runs are a reference, not the gate: if one
+of these goes red locally, re-run it (or the suite) rather than re-diagnosing.
+
+| Test | Budget | What overload looks like |
+|---|---|---|
+| `automation-trigger-interval` "overlap-skipped without queuing" | shared 15s `waitFor` | the awaited condition needs 19.7s (measured once, ~1 run in 15) |
+| `remote-bridge-diagnostics` "card open delay 0ms" | 12s, asserted as a 12–15s window | the first turn takes so long that the harness times out on action 0, indistinguishable from the intended stall |
+
+Act only when one of them fails **in CI**, or repeats in consecutive local runs.
+Then the levers — in order of preference — are: reduce `--test-concurrency` so the
+suite stops oversubscribing the machine, give that call site a measured override,
+or make the test load-aware. Do not delete the test: it covers real behaviour
+(overlap-skip, timeout diagnostics), and losing it would hide the risk rather than
+remove it.
