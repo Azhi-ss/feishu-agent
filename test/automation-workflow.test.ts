@@ -25,7 +25,7 @@ while time.time()<deadline:
   except OSError:
    _,status=os.waitpid(pid,0); sys.stdout.buffer.write(out); sys.exit(os.waitstatus_to_exitcode(status) if step==len(steps) else 125)
  if step<len(steps) and steps[step]['wait'].encode() in out[checkpoint:]:
-  time.sleep(.2); os.write(fd,steps[step]['send'].encode()); checkpoint=len(out); step+=1
+  time.sleep(.2); os.write(fd,steps[step]['send'].encode()); w=steps[step]['wait'].encode(); checkpoint=out.index(w,checkpoint)+len(w); step+=1
  child,status=os.waitpid(pid,os.WNOHANG)
  if child:
   sys.stdout.buffer.write(out); sys.exit(os.waitstatus_to_exitcode(status) if step==len(steps) else 125)

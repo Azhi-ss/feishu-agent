@@ -35,6 +35,21 @@ monotonic counter. If you replace such an assertion, prove it still fails on a
 real violation — inject the bug (e.g. keep the poll loop alive past `close()`),
 watch it go red, then revert.
 
+## 3. Harness match windows anchor at the previous match
+
+A PTY harness that advances one action per matched pattern must start the next
+search window **after the matched pattern**, not at the end of the read buffer.
+Two patterns delivered in a single read (routine under load) otherwise leave the
+second one behind the window, and the run dies on its timeout while the app has
+already produced the expected output — this failed CI in `remote-bridge-stream`
+("High-risk Approval guard still applies to phone-originated turns").
+
+- Seam: `runPty` in `test/helpers/remote-bridge-fixture.ts`, with the same fix in
+  `interactive-runtime.test.ts`, `release-matrix.test.ts`, and
+  `automation-workflow.test.ts`. `reasoning-replay-cli.test.ts` keeps its stricter
+  per-chunk window (it matches only within the latest read).
+- Locked by `test/pty-harness.test.ts` (red on the old window logic).
+
 ## Diagnosis notes (why these, not other fixes)
 
 - The 5s budget was not "too tight for a slow machine" in the abstract: bisection
