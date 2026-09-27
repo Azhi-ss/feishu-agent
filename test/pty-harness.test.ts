@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { runPty } from "./helpers/remote-bridge-fixture.js";
 import { runPty as runHarness } from "./helpers/pty-harness.js";
@@ -83,4 +84,26 @@ test("an early child exit reports 125, never the child's own code", async () => 
   writeFileSync(fakeCli, `process.exit(7);\n`);
   const result = await runHarness(root, [], { ...process.env }, [{ wait: "NEVER-PRINTED", send: "" }], { timeoutSec: 5, cliPath: fakeCli });
   assert.equal(result.code, 125, result.output);
+});
+
+// Contract: an inline PTY script used by exactly one test may stay put, but it
+// must carry the label. The label is what forces "is this really used once?"
+// before a sixth copy gets written; true duplication is not mechanically
+// decidable, so this guard checks the label, not the duplication.
+test("inline PTY scripts carry the single-test label", () => {
+  // Assembled from parts so this file's own source contains neither the needle nor
+  // the label: otherwise the guard would have to exempt itself from the rule it
+  // enforces, and a real inline script added here would slip through.
+  const needle = ["pty", "fork()"].join(".");
+  const label = ["// single-test PTY", "script: not shared"].join(" ");
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const offenders = readdirSync(join(root, "test"), { recursive: true })
+    .map(String)
+    .filter((path) => path.endsWith(".ts"))
+    .filter((path) => path !== join("helpers", "pty-harness.ts"))
+    .map((path) => [path, readFileSync(join(root, "test", path), "utf8")] as const)
+    .filter(([, content]) => content.includes(needle))
+    .filter(([, content]) => !content.includes(label))
+    .map(([path]) => path);
+  assert.deepEqual(offenders, [], `inline PTY scripts must carry "${label}" (or use the shared harness): ${offenders.join(", ")}`);
 });

@@ -9,7 +9,7 @@ import test from "node:test";
 import { hermeticEnv } from "./hermetic-env.js";
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-export { cli } from "./automation-cli-fixture.js";
+export { cli, ptyHandshake } from "./automation-cli-fixture.js";
 import { cli, installFeishuBin } from "./automation-cli-fixture.js";
 
 export const DUE_MS = Date.parse("2030-06-01T01:00:00.000Z"); // 09:00 Asia/Shanghai

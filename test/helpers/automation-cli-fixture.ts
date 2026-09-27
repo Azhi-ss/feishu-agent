@@ -210,6 +210,22 @@ export function runAutomationAsync(f: Fixture, args: string[], extra: NodeJS.Pro
   });
 }
 
+
+/**
+ * PTY handshake for a test that must act while a confirmation prompt is open:
+ * the driver creates `<marker>.ready` when the prompt appears, the test creates
+ * `<marker>.proceed` to answer "y", and the CLI output lands in `<marker>`
+ * ("timeout" when the driver times out). Resolves with the CLI exit code.
+ */
+export function ptyHandshake(cwd: string, env: NodeJS.ProcessEnv, args: string[], marker: string, ready: string): Promise<{ code: number | null; output: string }> {
+  return runHarness(cwd, args.slice(1), env, [
+    { wait: ready, markFile: `${marker}.ready`, send: "" },
+    { waitFile: `${marker}.proceed`, send: "y\n" },
+  ], { cliPath: cli, ignoreCase: true }).then((result) => {
+    writeFileSync(marker, result.code === 124 ? "timeout" : result.output);
+    return result;
+  });
+}
 export function ptyRun(f: Fixture, args: string[], ready: string, reply: string): Promise<{ code: number | null; output: string }> {
   // Drives the automation CLI directly; `args[0]` is the CLI’s own command word.
   return runHarness(f.root, args.slice(1), baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }), [
