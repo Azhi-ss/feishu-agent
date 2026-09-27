@@ -21,6 +21,8 @@ export interface PtyAction {
   wait?: string;
   /** Path that must exist before sending `send` (mutually exclusive with `wait`). */
   waitFile?: string;
+  /** Created (empty) when this action's pattern matches, so a test can synchronise from outside. */
+  markFile?: string;
   send?: string;
 }
 
@@ -35,6 +37,8 @@ export interface PtyOptions {
   diagnostics?: boolean;
   /** Resend the previous input after a 5s stall, and the last input until it lands. */
   resend?: boolean;
+  /** ASCII case-insensitive pattern matching. Default false: a real mismatch must stay visible. */
+  ignoreCase?: boolean;
   /** Progress snapshot for the timeout diagnostic; only used with `diagnostics`. */
   onTimeoutProgress?: () => Record<string, number>;
 }
@@ -43,7 +47,7 @@ const python = `
 import json,os,pty,select,sys,time
 actions=json.loads(sys.argv[4]); argv=json.loads(sys.argv[5])
 timeout=float(sys.argv[6]); opts=json.loads(sys.argv[7]) if len(sys.argv)>7 else {}
-kill_after=float(opts.get('killAfter') or 0); resend=bool(opts.get('resend')); diagnostics=bool(opts.get('diagnostics'))
+kill_after=float(opts.get('killAfter') or 0); resend=bool(opts.get('resend')); diagnostics=bool(opts.get('diagnostics')); ignore_case=bool(opts.get('ignoreCase'))
 pid,fd=pty.fork()
 if pid==0:
  os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3]]+argv,os.environ)
@@ -54,18 +58,25 @@ while time.time()<end:
  if r:
   try: out+=os.read(fd,65536)
   except OSError:
-   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))
+   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if action==len(actions) else 125)
  ready=False
  if action<len(actions):
   a=actions[action]
   if a.get('waitFile'): ready=os.path.exists(a['waitFile'])
-  elif a.get('wait') and a['wait'].encode() in out[checkpoint:]: ready=True
+  elif a.get('wait'):
+   needle=a['wait'].encode(); window=out[checkpoint:]
+   ready=needle.lower() in window.lower() if ignore_case else needle in window
  if ready:
   time.sleep(.15); s=actions[action].get('send') or ''
   if s: os.write(fd,s.encode())
   last_send=s.encode() if s else None; last_sent_at=time.time(); stall_resends=0
   w=actions[action].get('wait')
-  checkpoint=(out.index(w.encode(),checkpoint)+len(w.encode())) if w else len(out)
+  if w:
+   needle=w.encode(); hay=out.lower() if ignore_case else out
+   if ignore_case: needle=needle.lower()
+   checkpoint=hay.index(needle,checkpoint)+len(needle)
+  else: checkpoint=len(out)
+  if actions[action].get('markFile'): open(actions[action]['markFile'],'wb').close()
   action+=1
   if action==len(actions) and kill_after>0: done_at=time.time()+kill_after
  elif resend and action<len(actions) and last_send and stall_resends<1 and time.time()-last_sent_at>5:
@@ -108,8 +119,8 @@ export interface PtyResult {
 }
 
 export function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[], options: PtyOptions = {}): Promise<PtyResult> {
-  const { timeoutSec = 60, cliPath = defaultCliPath, killAfterLastActionSec, diagnostics = false, resend = false, onTimeoutProgress } = options;
-  const flags = JSON.stringify({ killAfter: killAfterLastActionSec ?? 0, resend, diagnostics });
+  const { timeoutSec = 60, cliPath = defaultCliPath, killAfterLastActionSec, diagnostics = false, resend = false, ignoreCase = false, onTimeoutProgress } = options;
+  const flags = JSON.stringify({ killAfter: killAfterLastActionSec ?? 0, resend, diagnostics, ignoreCase });
   return new Promise((done) => {
     const child = spawn("python3", ["-c", python, cwd, process.execPath, cliPath, JSON.stringify(actions), JSON.stringify(args), String(timeoutSec), flags], { env, stdio: ["pipe", "pipe", "pipe", "pipe"] });
     let timeoutProgress: Record<string, number> | undefined;
