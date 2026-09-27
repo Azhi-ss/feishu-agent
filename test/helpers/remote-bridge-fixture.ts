@@ -65,6 +65,10 @@ export interface InboundEvent {
 export interface FeishuStats {
   polls: number;
   pollTimes: number[];
+  /** Monotonic arrival sequence numbers (clock-jump proof): a poll that reached
+   * the server after the first disconnect has a seq greater than closeSeqs[0]. */
+  pollSeqs: number[];
+  closeSeqs: number[];
   sends: Array<{ chatId: string; text: string; at: number }>;
   closes: number[];
   cards: {
@@ -77,6 +81,9 @@ export interface FeishuStats {
 
 export async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent | InboundEvent[] }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats>; timeoutProgress(): Record<string, number> }> {
   const state = {
+    seq: 0,
+    pollSeqs: [] as number[],
+    closeSeqs: [] as number[],
     pending: [] as InboundEvent[],
     waiters: [] as Array<(events: InboundEvent[]) => void>,
     sends: [] as Array<{ chatId: string; text: string; at: number }>,
@@ -92,7 +99,10 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
   const server = createServer((request, response) => {
     if (request.url === "/events") {
       state.polls++;
-      state.pollTimes.push(Date.now());
+      const now = Date.now();
+      const seq = ++state.seq;
+      state.pollTimes.push(now);
+      state.pollSeqs.push(seq);
       if (state.polls > 1 && (options.failPollsAfterFirst ?? 0) > 0) {
         options.failPollsAfterFirst!--;
         response.destroy();
@@ -163,8 +173,8 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
         state.cardCloses.push({ cardId, text, at: Date.now() });
         response.writeHead(200).end();
       }
-      else if (request.url === "/disconnect") { state.closes.push(Date.now()); response.writeHead(200).end(); }
-      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, sends: state.sends, closes: state.closes, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
+      else if (request.url === "/disconnect") { const now = Date.now(); const seq = ++state.seq; state.closes.push(now); state.closeSeqs.push(seq); response.writeHead(200).end(); }
+      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, sends: state.sends, closes: state.closes, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
       else response.writeHead(404).end();
     });
   });
@@ -288,6 +298,12 @@ export async function fixture(responder: ModelResponder, script: Array<{ delayMs
   delete baseEnv.FEISHU_REMOTE_LOOPBACK_URL;
   delete baseEnv.FEISHU_REMOTE_APP_ID;
   delete baseEnv.FEISHU_REMOTE_OWNER_OPEN_ID;
+  // A real MEM0_API_KEY leaking from the developer's shell would make every CLI
+  // subprocess ping the production Mem0 API, adding seconds of jitter to these
+  // timing-sensitive PTY tests (and violating the loopback-only test rule).
+  delete baseEnv.MEM0_API_KEY;
+  delete baseEnv.MEM0_API_HOST;
+  delete baseEnv.MEM0_HEALTH_TIMEOUT_MS;
   return {
     root, home, project, bin, larkTrace, model, feishu,
     timeoutProgress: () => ({ ...model.timeoutProgress(), ...feishu.timeoutProgress() }),

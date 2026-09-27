@@ -61,7 +61,10 @@ test("owner P2P message drives the session and gets one streaming card with the 
     assert.equal(stats.cards.closes[0].text, "PTY-PONG:phone-message-1", "final close delivers the complete reply");
     assert.equal(stats.sends.length, 0, "the reply rides on the card, not a plain message");
     assert(stats.closes.length >= 1, "gateway disconnect is recorded on stop");
-    assert(stats.pollTimes.every((time) => time <= stats.closes[0]), "no polling after teardown");
+    // Arrival sequence, not wall-clock time: Date.now() jumped backwards under
+    // load in this sandbox, which made pre-teardown polls look post-teardown.
+    // The server's monotonic seq still catches a poller that really kept polling.
+    assert(stats.pollSeqs.every((seq) => seq <= stats.closeSeqs[0]), "no polling after teardown");
 
     assert.doesNotMatch(result.output, new RegExp(SECRET));
     for (const session of f.sessionFiles()) assert.doesNotMatch(session, new RegExp(SECRET), "app secret must not reach session files");

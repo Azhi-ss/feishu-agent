@@ -244,7 +244,12 @@ export function ptyRun(f: Fixture, args: string[], input: string, ready: RegExp,
   });
 }
 
-export async function waitFor(predicate: () => boolean, attempts = 100): Promise<void> {
+export async function waitFor(predicate: () => boolean, attempts = 300): Promise<void> {
+  // 300×50ms = 15s: the 5s default was calibrated for an idle machine, but a
+  // full-suite parallel run (dozens of spawned CLI/PTY children contending for
+  // CPU and IO) can make a doubly-nested node bootstrap take 6s+ to reach the
+  // model server. Genuinely-broken conditions only pay the longer budget when
+  // they fail; every call site routes through this default.
   for (let i = 0; i < attempts; i++) {
     if (predicate()) return;
     await new Promise((resolveSleep) => setTimeout(resolveSleep, 50));

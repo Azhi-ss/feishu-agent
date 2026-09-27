@@ -9,6 +9,7 @@ import {
   clearHandoffRequest,
   describeHolder,
   hasHandoffRequest,
+  isAlive,
   readRemoteLock,
   releaseRemoteLock,
   requestRemoteHandover,
@@ -26,6 +27,18 @@ function tempHome(): string {
 
 function lockPath(home: string): string {
   return join(home, ".cache", "feishu-remote", `${APP_ID}.lock`);
+}
+
+/** A pid that is dead and not yet recycled. Magic pids (999999…) are
+ * allocatable on Linux (pid_max can be 4M) and under a loaded test run get
+ * taken by real processes, making isAlive() true and the test flake. */
+async function deadPid(): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const dead = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+    await new Promise<void>((done) => dead.on("exit", () => done()));
+    if (dead.pid !== undefined && !isAlive(dead.pid)) return dead.pid;
+  }
+  throw new Error("could not obtain a non-recycled dead pid");
 }
 
 function yieldPath(home: string): string {
@@ -66,9 +79,8 @@ test("a legacy plain-pid lock file is still read and reported as busy when alive
 test("a lock held by a dead pid is reclaimed on acquire", async () => {
   const home = tempHome();
   try {
-    const dead = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
-    await new Promise<void>((done) => dead.on("exit", () => done()));
-    writeFileSync(lockPath(home), JSON.stringify({ pid: dead.pid, startedAt: new Date().toISOString(), cwd: "/tmp/old-project" }));
+    const pid = await deadPid();
+    writeFileSync(lockPath(home), JSON.stringify({ pid, startedAt: new Date().toISOString(), cwd: "/tmp/old-project" }));
     const result = acquireRemoteLock(home, APP_ID, process.pid, process.cwd());
     assert.equal(result.ok, true);
     const parsed = JSON.parse(readFileSync(lockPath(home), "utf8"));
@@ -137,10 +149,10 @@ test("requestRemoteHandover writes a fresh yield file the holder can consume", a
   }
 });
 
-test("requestRemoteHandover refuses when no live holder exists", () => {
+test("requestRemoteHandover refuses when no live holder exists", async () => {
   const home = tempHome();
   try {
-    writeFileSync(lockPath(home), JSON.stringify({ pid: 999999, startedAt: new Date().toISOString(), cwd: "/tmp/project" }));
+    writeFileSync(lockPath(home), JSON.stringify({ pid: await deadPid(), startedAt: new Date().toISOString(), cwd: "/tmp/project" }));
     assert.equal(requestRemoteHandover(home, APP_ID), false);
     assert.equal(existsSync(yieldPath(home)), false);
     assert.equal(existsSync(lockPath(home)), true, "a failed handover leaves the lock for the caller to reclaim");
