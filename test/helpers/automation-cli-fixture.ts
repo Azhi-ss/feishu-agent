@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { runPty as runHarness } from "./pty-harness.js";
 import { hermeticEnv } from "./hermetic-env.js";
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -209,39 +210,11 @@ export function runAutomationAsync(f: Fixture, args: string[], extra: NodeJS.Pro
   });
 }
 
-export function ptyRun(f: Fixture, args: string[], input: string, ready: RegExp, reply: string): Promise<{ code: number | null; output: string }> {
-  const python = [
-    "import os,pty,re,select,sys,time",
-    "cwd=sys.argv[1]; exe=sys.argv[2]; argv=eval(sys.argv[3]); stdin=sys.argv[4]; pattern=sys.argv[5]; reply=sys.argv[6]",
-    "pid,fd=pty.fork()",
-    "if pid==0:",
-    " os.chdir(cwd); os.execvpe(exe,[exe]+argv,os.environ)",
-    "sent=False; replied=False; out=b''; end=time.time()+30",
-    "os.write(fd, stdin.encode())",
-    "while time.time()<end:",
-    " r,_,_=select.select([fd],[],[],0.1)",
-    " if r:",
-    "  try: out+=os.read(fd,65536)",
-    "  except OSError:",
-    "   _,st=os.waitpid(pid,0); sys.stdout.buffer.write(out); sys.exit(os.waitstatus_to_exitcode(st))",
-    " if not replied and re.search(pattern,out.decode('utf-8','replace'),re.I):",
-    "  time.sleep(0.2); os.write(fd,reply.encode()+b'\\n'); replied=True",
-    " p,st=os.waitpid(pid,os.WNOHANG)",
-    " if p and replied:",
-    "  sys.stdout.buffer.write(out); sys.exit(os.waitstatus_to_exitcode(st))",
-    " if p and not replied:",
-    "  sys.stdout.buffer.write(out); sys.exit(os.waitstatus_to_exitcode(st))",
-    "os.kill(pid,15); sys.stdout.buffer.write(out); sys.exit(124)",
-  ].join("\n");
-  return new Promise((done) => {
-    const child = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, ...args.slice(1)]), input, ready.source, reply], {
-      env: baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }),
-    });
-    let output = "";
-    child.stdout.on("data", (chunk) => output += chunk);
-    child.stderr.on("data", (chunk) => output += chunk);
-    child.on("close", (code) => done({ code, output }));
-  });
+export function ptyRun(f: Fixture, args: string[], ready: string, reply: string): Promise<{ code: number | null; output: string }> {
+  // Drives the automation CLI directly; `args[0]` is the CLI’s own command word.
+  return runHarness(f.root, args.slice(1), baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }), [
+    { wait: ready, send: `${reply}\n` },
+  ], { cliPath: cli, ignoreCase: true });
 }
 
 export async function waitFor(predicate: () => boolean, attempts = 300): Promise<void> {

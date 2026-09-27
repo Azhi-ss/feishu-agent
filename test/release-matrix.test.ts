@@ -38,7 +38,7 @@ function run(cwd: string, env: NodeJS.ProcessEnv, args: string[]) {
 }
 
 function runPty(cwd: string, env: NodeJS.ProcessEnv, actions: Array<{ wait: string; send: string }>) {
-  return runHarness(cwd, [], env, actions, { timeoutSec: 30, cliPath: cli });
+  return runHarness(cwd, [], env, actions, { cliPath: cli });
 }
 
 function allFiles(root: string): string[] {

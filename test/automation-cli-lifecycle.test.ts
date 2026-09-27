@@ -107,12 +107,12 @@ test("update keeps unspecified values, shows the change set and full plan, and p
   assert.equal(receipt.nextDueAt, "2030-06-01T01:00:00.000Z");
   assert.match(receipt.schedule.resolvedLocal, /2030-06-01 09:00/);
 
-  const declined = await ptyRun(f, ["automation", "update", "daily-reminder", "--timeout", "30m"], "", /Apply this update\?/i, "n");
+  const declined = await ptyRun(f, ["automation", "update", "daily-reminder", "--timeout", "30m"], "Apply this update?", "n");
   assert.notEqual(declined.code, 0);
   assert.match(declined.output, /Declined/i);
   assert.equal(JSON.parse(runCli(f, ["automation", "show", "daily-reminder"]).stdout).timeoutMinutes, 12);
 
-  const accepted = await ptyRun(f, ["automation", "update", "daily-reminder", "--timeout", "30m"], "", /Apply this update\?/i, "y");
+  const accepted = await ptyRun(f, ["automation", "update", "daily-reminder", "--timeout", "30m"], "Apply this update?", "y");
   assert.equal(accepted.code, 0, accepted.output);
   assert.equal(JSON.parse(runCli(f, ["automation", "show", "daily-reminder"]).stdout).timeoutMinutes, 30);
 });
