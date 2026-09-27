@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -23,6 +22,7 @@ import {
   waitFor,
   occurrence,
   settle,
+  ptyHandshake,
   settledOccurrence,
   schedulePath,
   createTriggerHarness,
@@ -271,36 +271,8 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
 
   // Open a TTY update and leave the confirmation UNANSWERED while the clock
   // crosses the next old-grid minute: that minute fires on the OLD plan.
-  const python = [
-    "import os,pty,re,select,sys,time",
-    "cwd=sys.argv[1]; exe=sys.argv[2]; argv=eval(sys.argv[3]); pattern=sys.argv[4]; marker=sys.argv[5]",
-    "pid,fd=pty.fork()",
-    "if pid==0:",
-    " os.chdir(cwd); os.execvpe(exe,[exe]+argv,dict(os.environ))",
-    "out=b''; replied=False; sent=False; end=time.time()+60",
-    "while time.time()<end:",
-    " r,_,_=select.select([fd],[],[],0.1)",
-    " if r:",
-    "  try: out+=os.read(fd,65536)",
-    "  except OSError:",
-    "   _,st=os.waitpid(pid,0); open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
-    " if not replied and re.search(pattern,out.decode('utf-8','replace'),re.I):",
-    "  replied=True; open(marker+'.ready','w').write('ready')",
-    " if not sent and os.path.exists(marker+'.proceed'):",
-    "  time.sleep(0.2); os.write(fd,b'y\\n'); sent=True",
-    " p,st=os.waitpid(pid,os.WNOHANG)",
-    " if p:",
-    "  open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
-    "open(marker,'wb').write(b'timeout')",
-  ].join("\n");
   const marker = join(f.root, "pending-edit-pty");
-  const child = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, "update", "pending-edit", "--every", "5m"]), "Apply this update", marker], {
-    env: baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }),
-  });
-  let exitCode: number | null = null;
-  child.on("close", (code) => { exitCode = code; });
-  let diagnostic = "";
-  child.stderr.on("data", (chunk) => diagnostic += chunk);
+  const pending = ptyHandshake(f.root, baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }), ["automation", "update", "pending-edit", "--every", "5m"], marker, "Apply this update");
   await waitFor(() => existsSync(marker + ".ready"));
 
   // Advance one old-grid minute while the confirmation prompt is still open.
@@ -317,8 +289,8 @@ test("the old plan keeps firing while a TTY update awaits confirmation; approval
   const approvalAt = DUE_MS + 3 * MIN;
   setClock(f, approvalAt);
   writeFileSync(marker + ".proceed", "go");
-  await waitFor(() => exitCode !== null);
-  assert.equal(exitCode, 0, diagnostic);
+  const approvedEdit = await pending;
+  assert.equal(approvedEdit.code, 0, approvedEdit.output);
   assert.ok(existsSync(marker), "the PTY driver must retain the CLI receipt");
   assert.match(readFileSync(marker, "utf8"), /Updated "pending-edit"\./);
   const approved = JSON.parse(runCli(f, ["automation", "show", "pending-edit"]).stdout);

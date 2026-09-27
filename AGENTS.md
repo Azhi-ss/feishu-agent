@@ -62,9 +62,9 @@ Issues 与 PRD 以 GitHub issue 管理（`Azhi-ss/feishu-agent`），统一用 `
 
 单上下文仓库：根目录 `CONTEXT.md` 领域词汇表 + `docs/adr/`；工程设计以 `SPEC.md` 为准。见 `docs/agents/domain.md`。
 
-### Test timing
+### Test conventions
 
-就绪等待统一走共享 `waitFor` 预算，不在调用点写死毫秒；时序断言用单调到达序号，不用墙钟时间戳。见 `docs/agents/test-timing.md`。
+就绪与超时预算走共享默认值，不在调用点写死毫秒；时序断言用单调到达序号；PTY 测试走共享 harness，单测试脚本必须标注、同一协议第二次出现即升级进模块。见 `docs/agents/test-conventions.md`。
 
 ### Capability layering
 

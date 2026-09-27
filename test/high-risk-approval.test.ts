@@ -85,6 +85,7 @@ function runBounded(cwd: string, env: NodeJS.ProcessEnv, args: string[], timeout
 }
 
 function runPty(cwd: string, env: NodeJS.ProcessEnv, prompt: string): Promise<{ code: number | null; output: string }> {
+  // single-test PTY script: not shared
   const python = `import os,pty,select,sys,time\npid,fd=pty.fork()\nif pid==0:\n os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3]],os.environ)\nout=b''; sent_prompt=False; sent_no=False; sent_quit=False; end=time.time()+60\nwhile time.time()<end:\n r,_,_=select.select([fd],[],[],0.1)\n if r:\n  try: out+=os.read(fd,65536)\n  except OSError:\n   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))\n if not sent_prompt and b'fake-model' in out:\n  time.sleep(.3); os.write(fd,sys.argv[4].encode()+b'\\r'); sent_prompt=True\n if sent_prompt and not sent_no and b'FAKE LARK CONFIRMATION' in out:\n  os.write(fd,b'n\\r'); sent_no=True\n if sent_no and not sent_quit and b'AMBIGUOUS-DONE' in out:\n  os.write(fd,b'/quit\\r'); sent_quit=True\n p,status=os.waitpid(pid,os.WNOHANG)\n if p:\n  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if sent_quit else 125)\nos.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
   return new Promise((done) => {
     const child = spawn("python3", ["-c", python, cwd, process.execPath, cli, prompt], { env });

@@ -94,20 +94,22 @@ test("noninteractive add without --yes fails promptly; TTY decline mutates nothi
   assert.equal(existsSync(f.jobs), false);
 
   writeFileSync(join(f.root, "task-b.txt"), "task text\n");
-  const declined = await ptyRun(f, ["automation", "add", "--name", "job-b", "--at", "2030-06-01T09:00", "--prompt-file", join(f.root, "task-b.txt")], "", /Create this Automation Job\?/i, "n");
+  const declined = await ptyRun(f, ["automation", "add", "--name", "job-b", "--at", "2030-06-01T09:00", "--prompt-file", join(f.root, "task-b.txt")], "Create this Automation Job?", "n");
   assert.notEqual(declined.code, 0);
   assert.match(declined.output, /Declined/i);
   assert.equal(existsSync(f.jobs), false);
 
   // Interactive stdin cannot both hold task text and answer the prompt: a TTY
   // --prompt-stdin call fails fast with a --prompt-file pointer.
-  const ttyStdin = await ptyRun(f, ["automation", "add", "--name", "job-d", "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], "", /Create this Automation Job\?/, "n");
-  assert.notEqual(ttyStdin.code, 0);
+  const ttyStdin = await ptyRun(f, ["automation", "add", "--name", "job-d", "--at", "2030-06-01T09:00", "--prompt-stdin", "--yes"], "Create this Automation Job?", "n");
+  // 125 is the harness contract for "the child exited before the awaited state":
+  // --prompt-stdin is rejected on a TTY before the confirmation prompt appears.
+  assert.equal(ttyStdin.code, 125, ttyStdin.output);
   assert.match(ttyStdin.output, /--prompt-file/);
   assert.equal(existsSync(join(f.jobs, "jobs", "job-d")), false);
 
   writeFileSync(join(f.root, "task-c.txt"), "task text\n");
-  const accepted = await ptyRun(f, ["automation", "add", "--name", "job-c", "--at", "2030-06-01T09:00", "--prompt-file", join(f.root, "task-c.txt")], "", /Create this Automation Job\?/i, "y");
+  const accepted = await ptyRun(f, ["automation", "add", "--name", "job-c", "--at", "2030-06-01T09:00", "--prompt-file", join(f.root, "task-c.txt")], "Create this Automation Job?", "y");
   assert.equal(accepted.code, 0, accepted.output);
   assert.match(accepted.output, /2030-06-01 09:00/);
   assert.match(accepted.output, /Asia\/Shanghai/);

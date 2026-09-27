@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -20,6 +20,7 @@ import {
   addJob,
   runAutomationAsync,
   ptyRun,
+  ptyHandshake,
   waitFor,
   repointModel,
   lastUserPrompt,
@@ -107,12 +108,12 @@ test("update keeps unspecified values, shows the change set and full plan, and p
   assert.equal(receipt.nextDueAt, "2030-06-01T01:00:00.000Z");
   assert.match(receipt.schedule.resolvedLocal, /2030-06-01 09:00/);
 
-  const declined = await ptyRun(f, ["automation", "update", "daily-reminder", "--timeout", "30m"], "", /Apply this update\?/i, "n");
+  const declined = await ptyRun(f, ["automation", "update", "daily-reminder", "--timeout", "30m"], "Apply this update?", "n");
   assert.notEqual(declined.code, 0);
   assert.match(declined.output, /Declined/i);
   assert.equal(JSON.parse(runCli(f, ["automation", "show", "daily-reminder"]).stdout).timeoutMinutes, 12);
 
-  const accepted = await ptyRun(f, ["automation", "update", "daily-reminder", "--timeout", "30m"], "", /Apply this update\?/i, "y");
+  const accepted = await ptyRun(f, ["automation", "update", "daily-reminder", "--timeout", "30m"], "Apply this update?", "y");
   assert.equal(accepted.code, 0, accepted.output);
   assert.equal(JSON.parse(runCli(f, ["automation", "show", "daily-reminder"]).stdout).timeoutMinutes, 30);
 });
@@ -468,40 +469,14 @@ test("an approved edit is rejected when the job is removed while confirmation wa
   // Drive the TTY confirmation externally: hold the prompt open, remove the
   // job from a second CLI while it waits, then answer y. The approval must be
   // rejected and cannot resurrect a removed job.
-  const python = [
-    "import os,pty,re,select,sys,time",
-    "cwd=sys.argv[1]; exe=sys.argv[2]; argv=eval(sys.argv[3]); marker=sys.argv[4]",
-    "pid,fd=pty.fork()",
-    "if pid==0:",
-    " os.chdir(cwd); os.execvpe(exe,[exe]+argv,dict(os.environ))",
-    "out=b''; replied=False; sent=False; end=time.time()+30",
-    "while time.time()<end:",
-    " r,_,_=select.select([fd],[],[],0.1)",
-    " if r:",
-    "  try: out+=os.read(fd,65536)",
-    "  except OSError:",
-    "   _,st=os.waitpid(pid,0); open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
-    " if not replied and re.search(b'Apply this update',out,re.I):",
-    "  replied=True; open(marker+'.ready','w').write('ready')",
-    " if not sent and os.path.exists(marker+'.proceed'):",
-    "  time.sleep(0.2); os.write(fd,b'y\\n'); sent=True",
-    " p,st=os.waitpid(pid,os.WNOHANG)",
-    " if p:",
-    "  open(marker,'wb').write(out); sys.exit(os.waitstatus_to_exitcode(st))",
-    "open(marker,'wb').write(b'timeout')",
-  ].join("\n");
   const marker = join(f.root, "remove-race-pty");
-  const pending = spawn("python3", ["-c", python, f.root, process.execPath, JSON.stringify([cli, "update", "daily-reminder", "--timeout", "20m"]), marker], {
-    env: baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }),
-  });
-  let code: number | null = null;
-  pending.on("close", (c) => { code = c; });
+  const pending = ptyHandshake(f.root, baseEnv(f, { TERM: "xterm-256color", COLUMNS: "120", LINES: "40" }), ["automation", "update", "daily-reminder", "--timeout", "20m"], marker, "Apply this update");
   await waitFor(() => existsSync(marker + ".ready"));
   // Ordinary retained removal needs no confirmation and does not run.
   assert.equal(runCli(f, ["automation", "rm", "daily-reminder"]).code, 0);
   writeFileSync(marker + ".proceed", "go");
-  await waitFor(() => code !== null, 200);
-  assert.notEqual(code, 0, "the stale confirmation should be rejected");
+  const stale = await pending;
+  assert.notEqual(stale.code, 0, "the stale confirmation should be rejected");
   assert.ok(existsSync(marker), "the PTY driver must retain the CLI rejection, not crash");
   assert.match(readFileSync(marker, "utf8"), /removed while the update awaited confirmation/i);
   const shown = JSON.parse(runCli(f, ["automation", "show", "daily-reminder"]).stdout);
