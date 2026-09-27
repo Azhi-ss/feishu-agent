@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { hermeticEnv } from "./helpers/hermetic-env.js";
@@ -27,9 +27,9 @@ function fixture(baseUrl: string) {
   return { home, cwd, pi, feishu };
 }
 
-function runAsync(cwd: string, home: string, args: string[]) {
+function runAsync(cwd: string, home: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveResult) => {
-    const child = spawn(process.execPath, [cli, ...args], { cwd, env: hermeticEnv({ HOME: home, PI_OFFLINE: "1" }) });
+    const child = spawn(process.execPath, [cli, ...args], { cwd, env: hermeticEnv({ HOME: home, PI_OFFLINE: "1", ...env }) });
     let stdout = "", stderr = "";
     child.stdout.on("data", (chunk) => stdout += chunk);
     child.stderr.on("data", (chunk) => stderr += chunk);
@@ -54,6 +54,59 @@ test("print mode uses shared read-only auth and isolated Feishu default", async 
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /pong/);
     assert.deepEqual(["auth.json", "models.json", "settings.json"].map((name) => readFileSync(join(f.pi, name), "utf8")), before);
+  } finally { server.close(); }
+});
+
+test("print mode loads optional global soul and user files in order without importing foreign profiles", async () => {
+  const prompts: string[] = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => body += chunk);
+    request.on("end", () => {
+      const payload = JSON.parse(body) as { messages: Array<{ role: string; content: string }> };
+      prompts.push(payload.messages.find((message) => message.role === "system")?.content ?? "");
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end('data: {"choices":[{"delta":{"content":"profile-ok"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const f = fixture(`http://127.0.0.1:${address.port}/v1`);
+  const bin = join(f.home, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "lark-cli"), "#!/bin/sh\n[ \"$1\" = --version ] || exit 2\necho lark-cli-profile-test\n", { mode: 0o755 });
+  mkdirSync(join(f.cwd, ".feishu-agent"));
+  writeFileSync(join(f.cwd, ".feishu-agent", "AGENTS.md"), "PRIVATE-PROJECT-CONTEXT");
+  writeFileSync(join(f.cwd, "AGENTS.md"), "ROOT-PROJECT-CONTEXT");
+  for (const dir of [f.pi, join(f.home, ".agents"), f.cwd, join(f.cwd, ".feishu-agent")]) {
+    mkdirSync(dir, { recursive: true });
+    for (const name of ["SOUL.md", "USER.md"]) writeFileSync(join(dir, name), "FOREIGN-PROFILE-MUST-NOT-LOAD");
+  }
+  try {
+    for (const names of [[], ["SOUL.md"], ["USER.md"], ["SOUL.md", "USER.md"]]) {
+      for (const name of ["SOUL.md", "USER.md"]) {
+        rmSync(join(f.feishu, name), { force: true });
+        if (names.includes(name)) writeFileSync(join(f.feishu, name), `GLOBAL-${name}-MARKER`);
+      }
+      const result = await runAsync(f.cwd, f.home, ["-p", "profile check"], { PATH: `${bin}${delimiter}${process.env.PATH}` });
+      assert.equal(result.code, 0, result.stderr);
+      const prompt = prompts.at(-1)!;
+      assert.match(prompt, /^You are Feishu Agent/);
+      assert.doesNotMatch(prompt, /FOREIGN-PROFILE-MUST-NOT-LOAD/);
+      const markers = [...names.map((name) => `GLOBAL-${name}-MARKER`), "PRIVATE-PROJECT-CONTEXT", "ROOT-PROJECT-CONTEXT"];
+      let previous = -1;
+      for (const marker of markers) {
+        const index = prompt.indexOf(marker);
+        assert(index > previous, `Missing or out-of-order prompt layer: ${marker}`);
+        if (marker.startsWith("GLOBAL-")) assert.equal(prompt.split(marker).length - 1, 1, `Duplicate layer: ${marker}`);
+        previous = index;
+      }
+      for (const name of ["SOUL.md", "USER.md"]) {
+        assert.equal(prompt.includes(`GLOBAL-${name}-MARKER`), names.includes(name));
+        if (names.includes(name)) assert.equal(readFileSync(join(f.feishu, name), "utf8"), `GLOBAL-${name}-MARKER`);
+      }
+    }
   } finally { server.close(); }
 });
 

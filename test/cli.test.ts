@@ -37,6 +37,8 @@ test("inspect exposes isolated project, session, prompt, and resource state", ()
   execFileSync("git", ["init", "-q"], { cwd: project });
 
   writeFileSync(join(home, ".feishu-agent", "SYSTEM.md"), "FEISHU SYSTEM IDENTITY\n");
+  writeFileSync(join(home, ".feishu-agent", "SOUL.md"), "GLOBAL SOUL\n");
+  writeFileSync(join(home, ".feishu-agent", "USER.md"), "GLOBAL USER\n");
   writeFileSync(join(home, ".pi", "agent", "AGENTS.md"), "PI GLOBAL MUST NOT LOAD\n");
   writeFileSync(join(project, "AGENTS.md"), "ROOT PROJECT CONTEXT\n");
   writeFileSync(join(project, ".feishu-agent", "AGENTS.md"), "FEISHU PROJECT CONTEXT\n");
@@ -60,7 +62,7 @@ test("inspect exposes isolated project, session, prompt, and resource state", ()
   assert.equal(state.projectRoot, realpathSync(project));
   assert.equal(state.agentHome, join(realpathSync(home), ".feishu-agent"));
   assert.match(state.sessionDir, new RegExp(`^${join(realpathSync(home), ".feishu-agent", "sessions").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`));
-  assert.match(state.systemPrompt, /FEISHU SYSTEM IDENTITY/);
+  assert.match(state.systemPrompt, /FEISHU SYSTEM IDENTITY[\s\S]*GLOBAL SOUL[\s\S]*GLOBAL USER[\s\S]*FEISHU PROJECT CONTEXT[\s\S]*ROOT PROJECT CONTEXT/);
   assert.match(state.systemPrompt, /ROOT PROJECT CONTEXT/);
   assert.match(state.systemPrompt, /FEISHU PROJECT CONTEXT/);
   assert.doesNotMatch(state.systemPrompt, /PI GLOBAL MUST NOT LOAD/);

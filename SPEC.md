@@ -146,13 +146,15 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
   2. 已启用 Feishu Packages；
   3. `~/.feishu-agent/skills/`；
   4. `<project>/.feishu-agent/skills/`；
-  5. 全局 `~/.feishu-agent/SYSTEM.md`；
+  5. 全局 `~/.feishu-agent/SYSTEM.md`，以及可选的 `SOUL.md`、`USER.md`；
   6. `<project>/.feishu-agent/AGENTS.md`；
   7. `<project>/AGENTS.md`。
 - 不加载 `.agents/skills`、`.pi/skills`、普通 Pi Prompts/Themes/Extensions、Codex/Claude Skills 或其他 Agent Home。
 - 仓库根目录的 `skills/feishu-control/` 是面向宿主 Agent 分发的桥接资源，不属于 Feishu Runtime；ResourceLoader 不自动发现它，`feishu init` 也不得把它安装到宿主 Agent 目录或 `~/.feishu-agent/skills/`。
 - 项目 Feishu 资源和根 `AGENTS.md` 自动加载，不走 Pi 项目信任提示。
 - 全局 `SYSTEM.md` 是基础身份，项目说明和 Extension 只能追加，不能替换。
+- 提示词按 `SYSTEM.md`（缺失时使用内置默认）→ 全局 `SOUL.md`（人格与协作风格）→ 全局 `USER.md`（用户背景）→ 项目 `.feishu-agent/AGENTS.md` → 根 `AGENTS.md` 拼接。`SOUL.md`、`USER.md` 仅从 Feishu Agent Home 读取，缺失或为空时跳过；不改变基础职责、工具权限或安全策略。
+- Interactive、Print 与本地 inspect 使用相同的分层顺序；启动与资源 reload 时读取本地文件，不联网，不自动推断、生成或改写档案。`feishu init`（含 `--reset-system`）不创建或覆盖这两个可选文件。修改后重启会话或在 Interactive 中执行 `/reload` 生效。
 
 ### 6. Skill synchronization and precedence
 

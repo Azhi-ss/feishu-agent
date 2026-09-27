@@ -37,7 +37,7 @@ The Git repository root that owns project-level Feishu skills, packages, setting
 _Avoid_: Arbitrary subdirectory as project identity, process-wide workspace, monorepo package root, forced root working directory
 
 **System Prompt Layer**:
-The global `~/.feishu-agent/SYSTEM.md` defines the non-replaceable Feishu Agent identity. The current project's `.feishu-agent/AGENTS.md` and root `AGENTS.md` append project-specific instructions without replacing that identity.
+The global `~/.feishu-agent/SYSTEM.md` defines the non-replaceable Feishu Agent identity. Optional `SOUL.md` (persona and collaboration style) and `USER.md` (user background) in that same Agent Home append in that order, followed by the current project's `.feishu-agent/AGENTS.md` and root `AGENTS.md`. Missing optional files are skipped; project-local persona/profile files are not discovered. These local files are read at startup and resource reload, never automatically rewritten by init or runtime, and do not change tool permissions or safety policy.
 _Avoid_: `APPEND_SYSTEM.md`, project system-prompt override, other-agent global context
 
 **Lark Identity**:

@@ -92,6 +92,18 @@ MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thi
 
 Initialization creates private state and nine bundled Feishu Skills under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs pinned npm versions of the unmodified Mem0 package and Feishu Remote Package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, customized `SYSTEM.md`, edited Skills, or an existing local/npm Remote Package source. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
 
+## Personal context
+
+Feishu assembles local instructions in this order:
+
+1. `~/.feishu-agent/SYSTEM.md` — base Feishu identity (built-in default if absent).
+2. `~/.feishu-agent/SOUL.md` — optional persona and collaboration style.
+3. `~/.feishu-agent/USER.md` — optional user background and stable preferences.
+4. `<project>/.feishu-agent/AGENTS.md` — Feishu-specific project instructions.
+5. `<project>/AGENTS.md` — shared project instructions.
+
+Create the optional files yourself; missing or empty files are skipped. `feishu init`, including `--reset-system`, leaves them untouched. Only the Feishu Agent Home supplies `SOUL.md` and `USER.md`; project-local copies and other agents' profiles are ignored. Restart Feishu or use `/reload` in Interactive mode after editing. These files are included in model requests, so keep them concise and never store credentials in them. They describe context, not account authentication or permission grants.
+
 ## Run
 
 ```bash

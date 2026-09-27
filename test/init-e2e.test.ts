@@ -54,6 +54,10 @@ test("fresh HOME one-command init is immediately Print-ready, idempotent, isolat
     assert.equal(bareRerun.code, 0, bareRerun.stderr);
     assertCompleteSummary(bareRerun.stdout, f.agentHome, "alice", "fake-model");
 
+    for (const name of ["SOUL.md", "USER.md"]) {
+      assert.equal(existsSync(join(f.agentHome, name)), false);
+      writeFileSync(join(f.agentHome, name), `CUSTOM-${name}\n`);
+    }
     const customSystem = "You are Feishu Agent. CUSTOM FEISHU IDENTITY\n";
     writeFileSync(join(f.agentHome, "SYSTEM.md"), customSystem);
     writeFileSync(join(f.agentHome, "custom.txt"), "keep me\n");
@@ -63,6 +67,7 @@ test("fresh HOME one-command init is immediately Print-ready, idempotent, isolat
     const settings = JSON.parse(readFileSync(join(f.agentHome, "settings.json"), "utf8"));
     assert.deepEqual([settings.defaultProvider, settings.defaultModel, settings.defaultThinkingLevel], ["fake", "fake-model", "medium"]);
     assert.equal(readFileSync(join(f.agentHome, "SYSTEM.md"), "utf8"), customSystem);
+    for (const name of ["SOUL.md", "USER.md"]) assert.equal(readFileSync(join(f.agentHome, name), "utf8"), `CUSTOM-${name}\n`);
     assert.match(readFileSync(join(f.agentHome, "mem0-config.json"), "utf8"), /feishu:alice/);
     assert.equal(readFileSync(join(f.agentHome, "custom.txt"), "utf8"), "keep me\n");
     assert.equal(lines(f.npmLog).length, 2, "the two valid default packages must not be installed twice");
@@ -72,6 +77,7 @@ test("fresh HOME one-command init is immediately Print-ready, idempotent, isolat
     assert.equal(reset.code, 0, reset.stderr);
     assertCompleteSummary(reset.stdout, f.agentHome, "bob", "other-model");
     assert.notEqual(readFileSync(join(f.agentHome, "SYSTEM.md"), "utf8"), customSystem);
+    for (const name of ["SOUL.md", "USER.md"]) assert.equal(readFileSync(join(f.agentHome, name), "utf8"), `CUSTOM-${name}\n`);
     assert.match(readFileSync(join(f.agentHome, "mem0-config.json"), "utf8"), /feishu:bob/);
     assert.equal(readFileSync(join(f.agentHome, "custom.txt"), "utf8"), "keep me\n");
     assert.equal(existsSync(join(f.project, ".pi")), false);

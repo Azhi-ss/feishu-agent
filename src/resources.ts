@@ -62,7 +62,7 @@ export class FeishuResourceLoader implements ResourceLoader {
       const content = read(path);
       return content === undefined ? [] : [{ path, content }];
     });
-    this.prompt = [read(system) ?? DEFAULT_SYSTEM, ...this.agentsFiles.map((entry) => entry.content)].filter(Boolean).join("\n\n");
+    this.prompt = [read(system) ?? DEFAULT_SYSTEM, ...["SOUL.md", "USER.md"].map((name) => read(join(this.agentHome, name))), ...this.agentsFiles.map((entry) => entry.content)].filter(Boolean).join("\n\n");
 
     const globalSkillsDir = join(this.agentHome, "skills");
     const projectSkillsDir = join(this.projectRoot, ".feishu-agent", "skills");

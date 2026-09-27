@@ -27,7 +27,7 @@ function inspect(): void {
   const root = projectRoot(launchCwd);
   const agentHome = join(realpathSync(homedir()), ".feishu-agent");
   const contextFiles = [join(root, ".feishu-agent", "AGENTS.md"), join(root, "AGENTS.md")].filter(existsSync);
-  const systemPrompt = [readIfPresent(join(agentHome, "SYSTEM.md")), ...contextFiles.map(readIfPresent)].filter(Boolean).join("\n");
+  const systemPrompt = [...["SYSTEM.md", "SOUL.md", "USER.md"].map((name) => readIfPresent(join(agentHome, name))), ...contextFiles.map(readIfPresent)].filter(Boolean).join("\n");
   process.stdout.write(JSON.stringify({
     launchCwd,
     projectRoot: root,
