@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync, spawn, type ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +9,7 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { projectKeyFor } from "../src/policy.js";
 import { hermeticEnv } from "./helpers/hermetic-env.js";
+import { runPty as runHarness } from "./helpers/pty-harness.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -108,34 +109,7 @@ function defaultHandler(_req: IncomingMessage, res: ServerResponse): void {
 interface PtyAction { wait: string; send: string; }
 
 function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[], timeoutSec = 60, killAfterLastActionSec?: number, cliPath = cli): Promise<{ code: number | null; output: string }> {
-  const python = `import json,os,pty,select,sys,time
-actions=json.loads(sys.argv[5]); timeout=float(sys.argv[6]); kill_after=float(sys.argv[7]) if len(sys.argv)>7 and sys.argv[7] else 0; pid,fd=pty.fork()
-if pid==0:
- os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],[sys.argv[2],sys.argv[3],*json.loads(sys.argv[4])],os.environ)
-out=b''; checkpoint=0; action=0; end=time.time()+timeout; done_at=None
-while time.time()<end:
- r,_,_=select.select([fd],[],[],0.1)
- if r:
-  try: out+=os.read(fd,65536)
-  except OSError:
-   _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))
- if action<len(actions) and actions[action]['wait'].encode() in out[checkpoint:]:
-  time.sleep(.2); os.write(fd,actions[action]['send'].encode()); w=actions[action]['wait'].encode(); checkpoint=out.index(w,checkpoint)+len(w); action+=1
-  if action==len(actions) and kill_after>0: done_at=time.time()+kill_after
- if done_at and time.time()>done_at:
-  os.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(0)
- p,status=os.waitpid(pid,os.WNOHANG)
- if p:
-  print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if action==len(actions) else 125)
-os.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
-  return new Promise((done) => {
-    const child: ChildProcess = spawn("python3", ["-c", python, cwd, process.execPath, cliPath, JSON.stringify(args), JSON.stringify(actions), String(timeoutSec), String(killAfterLastActionSec ?? 0)], { env });
-    if (!child.stdout || !child.stderr) throw new Error("pty subprocess has no stdio");
-    let output = "";
-    child.stdout.on("data", (chunk) => output += chunk);
-    child.stderr.on("data", (chunk) => output += chunk);
-    child.on("close", (code) => done({ code, output }));
-  });
+  return runHarness(cwd, args, env, actions, { timeoutSec, cliPath, killAfterLastActionSec });
 }
 
 /** Seed a prior session containing every lifecycle/protocol fixture. */

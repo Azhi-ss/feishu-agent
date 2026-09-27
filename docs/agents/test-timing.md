@@ -37,22 +37,34 @@ watch it go red, then revert.
 
 ## 3. Harness match windows anchor at the previous match
 
-A PTY harness that advances one action per matched pattern must start the next
-search window **after the matched pattern**, not at the end of the read buffer —
-and it must never reset the window to the end of the buffer on every iteration.
-Both shapes are the same bug from two sides: a pattern that arrives together with
-the previous one, or split across two reads, otherwise never matches while the
-app has already produced the expected output. The first shape failed CI in
-`remote-bridge-stream` ("High-risk Approval guard still applies to
-phone-originated turns"); the second also reproduces with a two-read fixture.
+Five test files drove a PTY with their own copy of the same embedded Python, so one
+harness bug had to be fixed five times and a sixth would have been written by
+copy-paste. The driver now lives in one module:
 
-- Seam: `runPty` in `test/helpers/remote-bridge-fixture.ts`, with the same fix in
-  `interactive-runtime.test.ts`, `release-matrix.test.ts`,
-  `automation-workflow.test.ts`, and `reasoning-replay-cli.test.ts` (the last one
-  reset its window every iteration, so an awaited pattern only matched when it
-  arrived inside a single read).
-- Locked by `test/pty-harness.test.ts` (same-read case) and a two-read case in
-  `reasoning-replay-cli.test.ts`; both go red against the old window logic.
+- `runPty` in `test/helpers/pty-harness.ts`, whose options cover the union the
+  callers need (`timeoutSec`, `cliPath`, `killAfterLastActionSec`, `diagnostics`,
+  `resend`). Callers keep their own failure formatting — the remote-bridge fixture
+  still sanitises and parses its `PTY_TIMEOUT` diagnostic, and captures the
+  progress snapshot the module hands back.
+
+Two properties keep the matcher honest. Each has a regression test that goes red
+when it is broken:
+
+- **Advance the search window only when an action matches.** Resetting it on every
+  loop iteration leaves only the latest read in the window, so a pattern split
+  across two reads never matches. Guarded by the two-read case in
+  `reasoning-replay-cli.test.ts` (red against a per-iteration reset, which was that
+  harness's original bug).
+- **Anchor it at the end of the matched pattern.** Advancing it to the end of the
+  read buffer drops a pattern that arrives together with the previous one. Guarded
+  by `test/pty-harness.test.ts` (red against `checkpoint=len(out)`). This shape
+  failed CI in `remote-bridge-stream` ("High-risk Approval guard still applies to
+  phone-originated turns"): the guard fired, the model answered, the card opened and
+  closed, and only the harness was stuck waiting.
+
+The five flag-based harnesses (`automation-cli-fixture`, `automation-trigger-lifecycle`,
+`automation-cli-lifecycle`, `high-risk-approval`, `memory-degradation`) match against
+the whole buffer with a `sent`/`replied` latch and do not share this failure mode.
 
 ## Diagnosis notes (why these, not other fixes)
 
