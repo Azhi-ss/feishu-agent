@@ -107,7 +107,7 @@ function defaultHandler(_req: IncomingMessage, res: ServerResponse): void {
 
 interface PtyAction { wait: string; send: string; }
 
-function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[], timeoutSec = 60, killAfterLastActionSec?: number): Promise<{ code: number | null; output: string }> {
+function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[], timeoutSec = 60, killAfterLastActionSec?: number, cliPath = cli): Promise<{ code: number | null; output: string }> {
   const python = `import json,os,pty,select,sys,time
 actions=json.loads(sys.argv[5]); timeout=float(sys.argv[6]); kill_after=float(sys.argv[7]) if len(sys.argv)>7 and sys.argv[7] else 0; pid,fd=pty.fork()
 if pid==0:
@@ -120,9 +120,8 @@ while time.time()<end:
   except OSError:
    _,status=os.waitpid(pid,0); print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status))
  if action<len(actions) and actions[action]['wait'].encode() in out[checkpoint:]:
-  time.sleep(.2); os.write(fd,actions[action]['send'].encode()); action+=1
+  time.sleep(.2); os.write(fd,actions[action]['send'].encode()); w=actions[action]['wait'].encode(); checkpoint=out.index(w,checkpoint)+len(w); action+=1
   if action==len(actions) and kill_after>0: done_at=time.time()+kill_after
- if action<len(actions): checkpoint=len(out)
  if done_at and time.time()>done_at:
   os.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(0)
  p,status=os.waitpid(pid,os.WNOHANG)
@@ -130,7 +129,7 @@ while time.time()<end:
   print(out.decode('utf-8','replace')); sys.exit(os.waitstatus_to_exitcode(status) if action==len(actions) else 125)
 os.kill(pid,15); print(out.decode('utf-8','replace')); sys.exit(124)`;
   return new Promise((done) => {
-    const child: ChildProcess = spawn("python3", ["-c", python, cwd, process.execPath, cli, JSON.stringify(args), JSON.stringify(actions), String(timeoutSec), String(killAfterLastActionSec ?? 0)], { env });
+    const child: ChildProcess = spawn("python3", ["-c", python, cwd, process.execPath, cliPath, JSON.stringify(args), JSON.stringify(actions), String(timeoutSec), String(killAfterLastActionSec ?? 0)], { env });
     if (!child.stdout || !child.stderr) throw new Error("pty subprocess has no stdio");
     let output = "";
     child.stdout.on("data", (chunk) => output += chunk);
@@ -415,4 +414,18 @@ test("branch summary request applies the same input rule when leaving a conversa
   } finally {
     await h.close();
   }
+});
+
+// Regression: this harness used to reset its search window to the end of the
+// output on every loop iteration, so an awaited pattern only ever matched if it
+// arrived inside a SINGLE read. A pattern split across two reads (routine for
+// incrementally rendered TUI output) then never matched and the run died on its
+// timeout. The window now starts after the previously matched pattern.
+test("the PTY harness matches an awaited pattern that arrives across two reads", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-rr-harness-"));
+  const fakeCli = join(root, "fake-cli.js");
+  writeFileSync(fakeCli, `process.stdout.write("ANSWER-");\nsetTimeout(() => process.stdout.write("SPLIT\\n"), 250);\nprocess.stdin.on("data", () => process.exit(0));\n`);
+  const result = await runPty(root, [], hermeticEnv({ HOME: root }), [{ wait: "ANSWER-SPLIT", send: "/quit\r" }], 5, undefined, fakeCli);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /ANSWER-SPLIT/);
 });
