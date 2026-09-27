@@ -179,9 +179,14 @@ test("actual Dream tool failure degrades the session and does not record complet
 test("memory degradation warnings redact API keys for every failure class", () => {
   process.env.MEM0_API_KEY = apiKeySentinel;
   assert.equal(redactSecrets(`failed ${apiKeySentinel}`), "failed [REDACTED]");
-  for (const feature of ["load", "health", "recall", "capture", "dream"] as const) {
+  for (const feature of ["load", "health"] as const) {
     const warning = memoryWarning(feature, new Error(`failed ${apiKeySentinel}`));
     assert.match(warning, new RegExp(`Long-term Memory ${feature} unavailable for this session`));
+    assert.doesNotMatch(warning, new RegExp(apiKeySentinel));
+  }
+  for (const feature of ["recall", "capture", "dream"] as const) {
+    const warning = memoryWarning(feature, new Error(`failed ${apiKeySentinel}`), true);
+    assert.match(warning, new RegExp(`Long-term Memory ${feature} unavailable — will retry on a later turn`));
     assert.doesNotMatch(warning, new RegExp(apiKeySentinel));
   }
 });
@@ -386,6 +391,60 @@ test("memory status updates dynamically during session upon degradation", async 
   assert.equal(mounted.statusCalls.filter(([k]) => k === "feishu-1-memory").at(-1)?.[1], "○ mem off");
 });
 
+test("a transient recall failure recovers at a turn boundary after the cooldown", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-retry-"));
+  const agent = join(root, ".feishu-agent");
+  writeMemoryConfig(agent, "alice");
+  process.env.MEM0_API_KEY = "sentinel-key";
+  const calls: string[] = [];
+  let failRecall = true;
+  const flaky = client({
+    search: async () => { calls.push("search"); if (failRecall) { failRecall = false; throw new Error("transient network blip"); } return { results: [] }; },
+    add: async () => { calls.push("add"); return []; },
+  });
+  const runtime = await memoryRuntime(agent, () => flaky, 2000, 50);
+  const mounted = mount(runtime.extension!);
+  await mounted.handlers.get("before_agent_start")![0]({ prompt: "one", systemPrompt: "base" }, mounted.ctx);
+  assert.match(runtime.diagnostic()!, /Memory recall unavailable — will retry on a later turn/);
+  assert.equal(mounted.statusCalls.filter(([k]) => k === "feishu-1-memory").at(-1)?.[1], "○ mem off");
+
+  // Still inside the cooldown: the next turn skips memory entirely.
+  await mounted.handlers.get("before_agent_start")![0]({ prompt: "two", systemPrompt: "base" }, mounted.ctx);
+  assert.deepEqual(calls, ["search"]);
+
+  // Past the cooldown: the recall call itself is the recovery probe.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const enriched = await mounted.handlers.get("before_agent_start")![0]({ prompt: "three", systemPrompt: "base" }, mounted.ctx);
+  assert.deepEqual(calls, ["search", "search"]);
+  assert.equal(runtime.diagnostic(), undefined);
+  assert.equal(mounted.statusCalls.filter(([k]) => k === "feishu-1-memory").at(-1)?.[1], "● mem");
+  assert.doesNotMatch(enriched.systemPrompt ?? "", /blip/);
+
+  await mounted.handlers.get("agent_end")![0]({ messages: [{ role: "user", content: "capture me" }] }, mounted.ctx);
+  assert.deepEqual(calls, ["search", "search", "add"]);
+});
+
+test("a composition (load) failure stays degraded for the whole session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-load-permanent-"));
+  const agent = join(root, ".feishu-agent");
+  writeMemoryConfig(agent, "alice");
+  process.env.MEM0_API_KEY = "sentinel-key";
+  const calls: string[] = [];
+  const runtime = await memoryRuntime(agent, () => client({ search: async () => { calls.push("search"); return { results: [] }; } }), 2000, 50);
+  assert(runtime.extension);
+  const handlers = new Map<string, Function[]>();
+  runtime.extension!({
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerTool: () => { throw new Error("composition failed"); },
+    registerCommand: () => {},
+  } as never);
+  assert.match(runtime.diagnostic()!, /Memory load unavailable for this session/);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await handlers.get("before_agent_start")![0]({ prompt: "probe", systemPrompt: "base" }, { mode: "tui", ui: { notify: () => {}, setStatus: () => {} }, sessionManager: { getSessionFile: () => undefined } } as never);
+  assert.deepEqual(calls, [], "a load failure recovered and issued memory calls");
+  assert.match(runtime.diagnostic()!, /Memory load unavailable for this session/);
+});
+
 test("timed out health check aborts the in-flight ping and leaves no lingering request", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-memory-abort-"));
   const agent = join(root, ".feishu-agent");
@@ -411,4 +470,50 @@ test("timed out health check aborts the in-flight ping and leaves no lingering r
   assert.match(runtime.warning!, /health check timed out after 50ms/);
   assert.equal(signalReceived, true);
   assert.equal(aborted, true);
+});
+
+test("default health budget tolerates cross-border cold-start latency above 2s", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-default-budget-"));
+  const agent = join(root, ".feishu-agent");
+  writeMemoryConfig(agent, "alice");
+  const originalKey = process.env.MEM0_API_KEY;
+  const originalTimeout = process.env.MEM0_HEALTH_TIMEOUT_MS;
+  process.env.MEM0_API_KEY = "sentinel-key";
+  delete process.env.MEM0_HEALTH_TIMEOUT_MS;
+  try {
+    const slowColdStart = client({ ping: () => new Promise<void>((resolve) => setTimeout(resolve, 2200)) });
+    const runtime = await memoryRuntime(agent, () => slowColdStart);
+    assert(runtime.extension, `startup health check degraded on a 2.2s ping: ${runtime.warning}`);
+    assert.equal(runtime.warning, undefined);
+  } finally {
+    if (originalKey === undefined) delete process.env.MEM0_API_KEY;
+    else process.env.MEM0_API_KEY = originalKey;
+    if (originalTimeout === undefined) delete process.env.MEM0_HEALTH_TIMEOUT_MS;
+    else process.env.MEM0_HEALTH_TIMEOUT_MS = originalTimeout;
+  }
+});
+
+test("MEM0_HEALTH_TIMEOUT_MS overrides the startup health check budget", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-env-budget-"));
+  const agent = join(root, ".feishu-agent");
+  writeMemoryConfig(agent, "alice");
+  const originalKey = process.env.MEM0_API_KEY;
+  const originalTimeout = process.env.MEM0_HEALTH_TIMEOUT_MS;
+  process.env.MEM0_API_KEY = "sentinel-key";
+  process.env.MEM0_HEALTH_TIMEOUT_MS = "50";
+  const neverResolves = {
+    ping: () => new Promise<void>(() => {}),
+    add: async () => [], search: async () => ({ results: [] }), getAll: async () => ({ results: [] }),
+    update: async () => ({}), delete: async () => ({}), deleteAll: async () => ({}),
+  };
+  try {
+    const runtime = await memoryRuntime(agent, () => neverResolves);
+    assert.equal(runtime.extension, undefined);
+    assert.match(runtime.warning!, /health check timed out after 50ms/);
+  } finally {
+    if (originalKey === undefined) delete process.env.MEM0_API_KEY;
+    else process.env.MEM0_API_KEY = originalKey;
+    if (originalTimeout === undefined) delete process.env.MEM0_HEALTH_TIMEOUT_MS;
+    else process.env.MEM0_HEALTH_TIMEOUT_MS = originalTimeout;
+  }
 });

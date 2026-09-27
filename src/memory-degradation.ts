@@ -3,7 +3,8 @@ export function redactSecrets(value: string): string {
   return secret ? value.split(secret).join("[REDACTED]") : value;
 }
 
-export function memoryWarning(feature: "load" | "health" | "recall" | "capture" | "dream", error: unknown): string {
+export function memoryWarning(feature: "load" | "health" | "recall" | "capture" | "dream", error: unknown, retrying = false): string {
   const message = error instanceof Error ? error.message : String(error);
-  return `${feature === "health" ? "Startup Warning" : "Warning"}: Long-term Memory ${feature} unavailable for this session: ${redactSecrets(message)}`;
+  const scope = retrying ? "unavailable — will retry on a later turn" : "unavailable for this session";
+  return `${feature === "health" ? "Startup Warning" : "Warning"}: Long-term Memory ${feature} ${scope}: ${redactSecrets(message)}`;
 }

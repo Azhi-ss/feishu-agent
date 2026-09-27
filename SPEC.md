@@ -248,8 +248,9 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 自动捕获采用插件默认语义：仅用户消息和 Assistant 文本回复，不包含 Tool Result。
 - 自动捕获固定 Project Scope；Global Memory 只能由显式 Memory 命令或 Tool Action 写入。
 - 强制为 Feishu 进程设置 `MEM0_TELEMETRY=false`。
+- 启动健康检查超时默认 5 秒，环境变量 `MEM0_HEALTH_TIMEOUT_MS` 可覆盖；该预算同时是网络不可用时启动被阻塞的上限。
 - Mem0 加载、健康检查、召回或捕获失败时产生显式 Warning，但不得使 Runtime 创建失败。
-- 降级会话中禁用或跳过本轮 Memory Capture、Recall 和 Dream；其他工具继续工作。
+- 启动加载与健康检查失败仍是整场降级（不挂载记忆扩展）。运行期召回/捕获/Dream 失败是暂时降级：冷却期（默认 5 分钟）内跳过全部记忆调用，冷却结束后在轮次边界用真实调用探测，成功即恢复状态与召回/捕获，失败重新计时；其他工具始终可用。
 - `FEISHU_UNATTENDED=1` 的无人值守进程不注册 Mem0 扩展（无 Recall、Capture、Dream，且不需要 API key）；见 §16。
 - 不修改第三方包源码；升级继续使用原始 npm 包。
 

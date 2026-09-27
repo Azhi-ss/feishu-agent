@@ -111,7 +111,13 @@ const createDefaultClient = (apiKey: string): MemoryClientLike => new DefaultMem
 export async function memoryRuntime(
   agentHome: string,
   createClient: (apiKey: string) => MemoryClientLike = createDefaultClient,
-  timeoutMs = 2000,
+  // Cross-border proxies routinely exceed the old 2s budget on cold DNS+TLS;
+  // 5s tolerates that jitter while keeping the awaited startup check bounded.
+  // MEM0_HEALTH_TIMEOUT_MS overrides without a code change (SPEC §12).
+  timeoutMs = Number(process.env.MEM0_HEALTH_TIMEOUT_MS) || 5000,
+  // Runtime failures (recall/capture/dream) skip memory for this long before
+  // probing again at a turn boundary; "load" failures never recover.
+  retryCooldownMs = 300_000,
 ): Promise<MemoryRuntime> {
   const apiKey = process.env.MEM0_API_KEY;
   let warning: string | undefined;
@@ -170,6 +176,7 @@ export async function memoryRuntime(
   const dreamStateDir = join(agentHome, "memory-state");
   const scope: ScopeContext = { userId: config.userId, appId: MEMORY_APP_ID, runId: "unknown" };
   let degraded = false;
+  let retryAt = 0;
   let dreamTriggered = false;
   let dreamWriteSucceeded = false;
   let dreamChecked = false;
@@ -178,10 +185,28 @@ export async function memoryRuntime(
   const disable = (feature: "load" | "health" | "recall" | "capture" | "dream", error: unknown) => {
     if (degraded) return;
     degraded = true;
-    warning = memoryWarning(feature, error);
+    // Runtime failures are transient network blips more often than dead
+    // services: skip everything for a cooldown, then probe again at the next
+    // turn boundary. Composition ("load") failures cannot recover — the
+    // memory tool was never registered — so they stay degraded for the session.
+    const recoverable = feature !== "load";
+    retryAt = recoverable ? Date.now() + retryCooldownMs : Infinity;
+    warning = memoryWarning(feature, error, recoverable);
     setStatus?.(true);
     process.stderr.write(`${warning}\n`);
     notifyWarning?.(warning);
+  };
+  const recover = () => {
+    degraded = false;
+    retryAt = 0;
+    warning = undefined;
+    setStatus?.(false);
+  };
+  // Past the cooldown, the next real recall/capture call doubles as the
+  // recovery probe: success restores ● mem, failure re-arms the cooldown.
+  const active = () => {
+    if (degraded && Date.now() >= retryAt) degraded = false;
+    return !degraded;
   };
   const failDream = (error: unknown) => {
     if (dreamTriggered) releaseDreamLock(dreamStateDir);
@@ -272,10 +297,11 @@ export async function memoryRuntime(
       },
     });
     pi.on("before_agent_start", async (event) => {
-      if (degraded) return { systemPrompt: event.systemPrompt };
+      if (!active()) return { systemPrompt: event.systemPrompt };
       let extra = MEMORY_POLICY;
       try {
         const result = await guardedClient.search((event.prompt ?? "").trim(), { filters: resolveSearchFilters("project", scope) });
+        if (warning) recover();
         if (result.results?.length) extra += `\n\n<mem0-relevant-memories>\n${formatMemoryList(result.results)}\n</mem0-relevant-memories>`;
       } catch (error) { disable("recall", error); return { systemPrompt: event.systemPrompt }; }
       if (pluginConfig.dream.enabled && pluginConfig.dream.auto && !dreamTriggered && !dreamChecked) {
@@ -295,10 +321,10 @@ export async function memoryRuntime(
       return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${extra}` };
     });
     pi.on("agent_end", async (event) => {
-      if (degraded) return;
+      if (!active()) return;
       const conversation = extractConversation(event.messages ?? []);
       if (conversation.length) {
-        try { await guardedClient.add(conversation, { userId: scope.userId, appId: scope.appId }); }
+        try { await guardedClient.add(conversation, { userId: scope.userId, appId: scope.appId }); if (warning) recover(); }
         catch (error) { disable("capture", error); }
       }
       if (dreamTriggered) {
