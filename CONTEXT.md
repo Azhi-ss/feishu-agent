@@ -64,6 +64,20 @@ _Avoid_: Standalone daemon, multi-session server, independent chat bot, public w
 The bot credential the in-process bridge uses: it reuses the existing `lark-cli` bot app rather than a separate identity, so no second app or pairing flow is needed. The app id and the owner's `open_id` are read first from the on-disk `lark-cli` config (zero network). If no config file exists, they may be supplied as `FEISHU_REMOTE_APP_ID` and `FEISHU_REMOTE_OWNER_OPEN_ID`; a present but invalid config does not fall back. The app secret is held in the OS keychain by `lark-cli` and cannot be read in-process, so the owner supplies it once via an environment variable (like Mem0), never persisted into the Feishu Agent Home or ordinary Pi settings. The in-process WebSocket is a separate instance for that app, so a `lark-cli event consume` consumer must not run concurrently or Feishu will load-balance events between them.
 _Avoid_: A second dedicated bridge app, storing the app secret on disk, first-DM pairing, concurrent event-consumer sharing
 
+## Personal Work Context
+
+**Work Board**:
+The current, owner-confirmed work context of the Feishu Project: active items, pending items, and brief recent outcomes. It is not a mirror of native Feishu tasks, a source of Automation Jobs, or permission to act on pending items.
+_Avoid_: Native Feishu task list, Automation Job queue, chat archive
+
+**Work Board Archive**:
+A durable per-item closeout recording a verified outcome or explicitly closed stage after it leaves the live board. Entries migrated from an old board are historical snapshots, not independently verified completions; routine Briefings read the live board, not the archive.
+_Avoid_: Daily Briefing trace, per-item execution log
+
+**Work-linked Conversation**:
+A conversation or thread explicitly marked for a bounded progress check on an active Work Board item; the reference may be a name, link, or ID. A name in unrelated prose, a document link, or a past archive is not such a reference, and a candidate found by name must be matched before reading messages; it never authorizes a reply.
+_Avoid_: Every chat involving the owner, global at-mention search, implicit group monitoring
+
 ## Unattended Automation
 
 **Feishu Automation Package**:

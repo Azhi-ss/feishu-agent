@@ -75,7 +75,9 @@ function artifact(s: Service, root: string): string {
     return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<!-- ${MARKER} -->\n<key>Label</key><string>${s.id}</string>\n<key>ProgramArguments</key><array>${argv.map(value => `<string>${xml(value)}</string>`).join("")}</array>\n<key>WorkingDirectory</key><string>${xml(root)}</string>\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><true/>\n<key>ThrottleInterval</key><integer>10</integer>\n<key>ExitTimeOut</key><integer>20</integer>\n</dict></plist>\n`;
   }
   const quote = (value: string): string => JSON.stringify(value.replaceAll("%", "%%").replaceAll("$", "$$"));
-  return `# ${MARKER}\n[Unit]\nDescription=Feishu Automation Trigger\n[Service]\nType=simple\nExecStart=${argv.map(quote).join(" ")}\nWorkingDirectory=${JSON.stringify(root.replaceAll("%", "%%"))}\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=20\nKillMode=mixed\n[Install]\nWantedBy=default.target\n`;
+  // systemd does not unquote WorkingDirectory values; quoting here makes the
+  // literal quotes part of the path and the unit fatally invalid.
+  return `# ${MARKER}\n[Unit]\nDescription=Feishu Automation Trigger\n[Service]\nType=simple\nExecStart=${argv.map(quote).join(" ")}\nWorkingDirectory=${root.replaceAll("%", "%%")}\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=20\nKillMode=mixed\n[Install]\nWantedBy=default.target\n`;
 }
 
 function installed(s: Service): string | null {

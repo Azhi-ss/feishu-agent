@@ -250,6 +250,10 @@ test("resolved Node and package paths containing spaces work without shell initi
   await waitFor(() => f.model.requests.length === 1);
   const artifact = readFileSync(serviceArtifacts(f)[0], "utf8");
   assert.match(artifact, /alternate node and package/);
+  // systemd never unquotes WorkingDirectory; a JSON-quoted value becomes a
+  // literal quoted path and the unit fatally fails to load (regression: the
+  // fake manager used to accept it, real systemd 255 rejected it).
+  if (process.platform !== "darwin") assert.match(artifact, /^WorkingDirectory=\/[^"\n]*$/m);
   assert.equal((await run(f, ["stop"])).code, 0);
 });
 
