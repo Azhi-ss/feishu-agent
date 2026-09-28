@@ -130,7 +130,7 @@ of these goes red locally, re-run it (or the suite) rather than re-diagnosing.
 
 | Test | Budget | What overload looks like |
 |---|---|---|
-| `automation-trigger-interval` "overlap-skipped without queuing" | shared 15s `waitFor` | the awaited condition needs 19.7s (measured once, ~1 run in 15) |
+| `automation-trigger-interval` "overlap-skipped without queuing" | shared 15s `waitFor` | the awaited condition needs 19.7s (measured once, ~1 run in 15) — resolved 2026-09-28: that call site now carries a measured 30s override (`settledOccurrence(..., 600)`); the entry stays for history |
 | `remote-bridge-diagnostics` "card open delay 0ms" | 12s, asserted as a 12–15s window | the first turn takes so long that the harness times out on action 0, indistinguishable from the intended stall |
 
 Act only when one of them fails **in CI**, or repeats in consecutive local runs.

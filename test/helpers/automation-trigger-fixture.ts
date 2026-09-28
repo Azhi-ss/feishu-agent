@@ -251,8 +251,8 @@ export async function settle(f: Fixture, name: string): Promise<Record<string, u
   throw new Error(`CLI did not report a settled occurrence for ${name}`);
 }
 
-export async function settledOccurrence(f: Fixture, name: string, dueMs: number): Promise<Record<string, unknown>> {
-  for (let attempt = 0; attempt < 200; attempt++) {
+export async function settledOccurrence(f: Fixture, name: string, dueMs: number, attempts = 200): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const result = await runCliAsync(f, ["automation", "show", name]);
     assert.equal(result.code, 0, result.stderr);
     const shown = JSON.parse(result.stdout);

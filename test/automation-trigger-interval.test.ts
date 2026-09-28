@@ -76,7 +76,11 @@ test("a recurring occurrence during an active same-job run is overlap-skipped wi
 
   // Two more minutes pass while the first run is still active.
   setClock(f, DUE_MS + MIN);
-  const skipped1 = await settledOccurrence(f, "slow", DUE_MS + MIN);
+  // Measured override: this settled occurrence needed 19.7s once under
+  // full-suite parallelism (~1 run in 15) against the shared 15s waitFor
+  // default (docs/agents/test-conventions.md §1, overnight-log 2026-09-28);
+  // give the overlap-skip settlement headroom beyond that measurement.
+  const skipped1 = await settledOccurrence(f, "slow", DUE_MS + MIN, 600);
   assert.equal(skipped1.outcome, "overlap-skipped");
   setClock(f, DUE_MS + 2 * MIN);
   const skipped2 = await settledOccurrence(f, "slow", DUE_MS + 2 * MIN);
