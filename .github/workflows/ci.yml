@@ -14,12 +14,42 @@ jobs:
         node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the tested Feishu subagents fork
+        uses: actions/checkout@v4
+        with:
+          repository: Azhi-ss/pi-subagents-feishu
+          ref: 0c8e03e4badc0cd6f1f5d6f421c131003f28c156
+          path: reference/pi-subagents-feishu
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      - name: Install the subagents fork dependencies
+        run: npm ci
+        working-directory: reference/pi-subagents-feishu
       - run: npm test
+        env:
+          FEISHU_SUBAGENTS_PACKAGE: ${{ github.workspace }}/reference/pi-subagents-feishu
+
+      - name: Check subagents types and upstream unit tests
+        if: matrix.node-version == 22
+        working-directory: reference/pi-subagents-feishu
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Build the compiled subagents package
+        if: matrix.node-version == 24
+        working-directory: reference/pi-subagents-feishu
+        run: npm run build:pkg
+
+      - name: Verify compiled subagents installation and execution
+        if: matrix.node-version == 24
+        env:
+          FEISHU_SUBAGENTS_PACKAGE: ${{ github.workspace }}/reference/pi-subagents-feishu/dist-pkg
+        run: node --test dist/test/subagents-runtime.test.js
 
       - name: Verify live npm package installation
         run: |

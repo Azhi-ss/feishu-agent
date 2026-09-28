@@ -156,6 +156,17 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 提示词按 `SYSTEM.md`（缺失时使用内置默认）→ 全局 `SOUL.md`（人格与协作风格）→ 全局 `USER.md`（用户背景）→ 项目 `.feishu-agent/AGENTS.md` → 根 `AGENTS.md` 拼接。`SOUL.md`、`USER.md` 仅从 Feishu Agent Home 读取，缺失或为空时跳过；不改变基础职责、工具权限或安全策略。
 - Interactive、Print 与本地 inspect 使用相同的分层顺序；启动与资源 reload 时读取本地文件，不联网，不自动推断、生成或改写档案。`feishu init`（含 `--reset-system`）不创建或覆盖这两个可选文件。修改后重启会话或在 Interactive 中执行 `/reload` 生效。
 
+### 5.1. Feishu Subagent integration
+
+- 基于 pi-subagents 的现有设计做最小适配：沿用角色定义、任务委派、前台/后台执行、取消、状态与结果回传；历史上下文沿用其 `fresh` / `fork` 及现有配置语义，不另建调度协议或上下文模式。
+- 子 Agent 使用主 Agent 当前已解析、已启用的完整 Feishu Skill 目录，不另维护仅供检索的 Skill 白名单。
+- 沿用主 Agent 选定的 Skill 来源、同名优先级与官方缓存版本；不重新调用 Pi 默认发现，也不回退到 `.agents/`、`.pi/` 或其他 Agent 的资源。
+- 继承目录表示可按需读取其中的 Skills，不表示把全部 Skill 正文预先装入子 Agent 上下文。
+- 适配范围限于现有 Feishu 边界：资源与运行状态使用 Feishu 私有路径，基础身份保持 Feishu 职责，模型凭证只读复用，高危操作继续受现有 Guard 约束；主 Agent 生成的委派文本不等于用户新增的破坏性操作授权。完整 Skills 可见范围不等于复制全部父会话扩展。
+- 适配包在用户授权的独立 fork `Azhi-ss/pi-subagents-feishu` 维护，基于上游 v0.73.1；Pi SDK 和 Mem0 原样使用，不修改已安装第三方文件。`feishu install <绝对路径>` 可引用本地 fork，init 不自动安装。
+- 主会话把已解析的 Skills、系统提示词、项目/私有目录和本轮破坏性授权布尔值发布为私有目录内的不可变快照；不写入模型凭证或用户对话。前台/后台子会话通过宿主提供的资源接口加载它，排队、重试与嵌套委派保持原始快照，后续父回合不会追授权限。快照缺失/无效时失败，不回退普通 Pi 发现。
+- 子会话不自动启动父会话的 Mem0/Remote 扩展。外部 CLI/job runner 和远程机器运行不经过 Feishu 宿主资源/Guard，故在 Feishu 模式明确拒绝；本机原生前台/后台执行保留。配置、安装与跨仓库验证见 `docs/subagents.md`。
+
 ### 6. Skill synchronization and precedence
 
 - 启动读取 `lark-cli --version`（本地命令，无网络请求），缓存目录以完整 CLI 版本命名。

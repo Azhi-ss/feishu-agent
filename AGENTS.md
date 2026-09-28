@@ -22,12 +22,12 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 - CLI 用户可见文案用英文（与现有输出一致）；SPEC.md / CONTEXT.md 保持中文，README / CONTEXT 保持英文。
 - **Vendored 第三方资源**（当前为 `themes/`）必须在同目录登记来源 URL、版本/日期与同步步骤（见 `themes/CREDITS.md`）；从上游同步后重跑 `npm test`。Vendored 内容不通过 npm 依赖引入。
 - **空 `catch`** 必须注释吞掉了什么错误、为什么 best-effort，且 `try` 只包一条语句。
-- **Pi SDK 钉版本且属 pre-stable**：升级版本号前先读上游 CHANGELOG 的 extension/editor/theme 行为变更，升完在 Node 22 与 24 下跑全量测试，破坏点写进 commit/issue；不盲目追新——已知 0.85.x 的 turn 结算回归会挂 Remote Bridge 电话回合（blocked-tool 场景），锁在 0.84.x 直到上游修复或 bridge 层适配。
+- **Pi SDK 钉版本且属 pre-stable**：当前钉在 0.87.1；升级前先读上游 CHANGELOG 的 extension/editor/theme 行为变更，升完在 Node 22 与 24 下跑全量测试，破坏点写进 commit/issue。0.85.x 曾出现 Remote Bridge 电话回合的 blocked-tool 结算回归；每次升级必须通过工具拦截与停止后队列续跑回归，不盲目追新。
 
 ## 硬边界（动这些之前先停下来和用户讨论）
 
 1. **启动路径零网络、零阻塞**。Interactive/Print/init 启动只允许本地命令（如 `lark-cli --version`）和缓存命中。任何网络请求、自动更新、长超时同步调用都要先征得用户同意——2026-09 曾因启动时自动更新 lark-cli（同步网络 + `npx skills` 状态检查）导致 TUI 卡死，被整体移除（commit 08f769b）。官方 Skills 靠版本惰性同步：启动只读与当前 `lark-cli` 版本匹配的缓存（不自动重建）；用户显式 `feishu skills sync` 重建，或 `feishu skills sync --update` 一条命令先 `lark-cli update` 再按新版本重建（唯一会联网升级 CLI 的入口，仍需手动）。
-2. **不 Fork Pi、不 patch 第三方包**。`@earendil-works/pi-coding-agent` 与 `@mem0/pi-agent-plugin` 原样使用，版本在 package.json 里钉死。
+2. **不 Fork Pi、不 patch 已安装第三方包**。`@earendil-works/pi-coding-agent` 与 `@mem0/pi-agent-plugin` 原样使用，版本在 package.json 里钉死。用户授权的 pi-subagents 适配在独立仓库 `Azhi-ss/pi-subagents-feishu` 维护，通过 Package 安装；边界见 `docs/subagents.md`。
 3. **资源隔离**。绝不加载 `.pi/`、`.agents/`、Codex、Claude 的资源；Feishu 的设置、包、Skills、会话、Mem0 状态全部在 `~/.feishu-agent/`。普通 Pi 的 `auth.json`/`models.json` 只读复用。仓库根目录的 `skills/feishu-control/` 是给宿主 Agent 安装的分发资源，不是 Feishu Runtime Skill；不得加入 `DEFAULT_SKILLS`，也不得由 `feishu init` 安装到宿主 Agent 目录或 `~/.feishu-agent/skills/`。
 4. **凭证**。不复制、不打印、不落盘任何 token/API key；`MEM0_API_KEY` 只走环境变量，且不得出现在错误信息、Session 文件或测试输出里。
 5. **高危 lark-cli 写操作**。Guard 只拦一种情况：`lark-cli` 破坏性命令（delete/remove/revoke/withdraw）带 `--yes` 但用户本轮消息没有明确表达破坏性意图。不解析目标/身份/范围、不做一次性消费；用户在对话中确认后于同一轮或下一轮重跑即可放行。不带 `--yes` 时 TUI 透传给 lark-cli 自身确认；Print 模式无法交互确认时快速失败（非零退出码 + 可操作报错），绝不挂起。

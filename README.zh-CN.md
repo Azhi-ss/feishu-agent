@@ -127,13 +127,13 @@ Remote/Mem0 默认安装策略本轮不变。
 
 ### 可选推荐包
 
-兼容 Pi 的扩展包用 `feishu install npm:<包名>` 安装。Feishu **不会**自动安装任何一个——按机器/项目自行开启。下表全部是真实的、兼容 `pi-coding-agent` 的 npm 包；钉版本前用 `npm view <包名>` 确认当前版本。
+兼容 Pi 的扩展包用 `feishu install npm:<包名>` 安装。Feishu **不会**自动安装任何一个——按机器/项目自行开启。npm 包钉版本前用 `npm view <包名>` 确认当前版本；Feishu subagents 适配版按文档安装本地 fork。
 
 | 包 | 增加的能力 | 什么时候装 |
 |---|---|---|
 | `pi-web-access` | 网页搜索、URL 抓取、GitHub 仓库克隆、PDF 提取、YouTube/视频理解；可接多种后端（Tavily、Firecrawl、Jina、Exa、Gemini、Kimi、SearXNG……） | **最推荐**——当 Feishu 需要读在线文档、查飞书 API 参考、或抓取链接时 |
 | `pi-mcp-adapter` | 把 MCP（Model Context Protocol）server 作为工具使用 | 你已经有 MCP server（或需要某厂商的 MCP 集成） |
-| `pi-subagents` | 单代理委派与脚本化多代理工作流 | 长且可并行的飞书任务 |
+| [Feishu subagents 适配版](docs/subagents.md) | 沿用 Feishu 资源与 Guard 的子代理委派和工作流 | 长且可并行的飞书任务；按文档安装独立 fork 的本地目录 |
 | `pi-background-tasks` | 持久后台 shell 任务、只读委派代理、本地 attested Pi 运行 | 让长时间运行的 lark-cli 任务在会话结束后继续 |
 | `pi-hermes-memory` | 持久记忆 + 会话搜索 + 密钥扫描，token 感知的策略式捕获 | 备选/补充记忆引擎；注意 Feishu 已自带 Mem0 |
 
@@ -141,7 +141,7 @@ Remote/Mem0 默认安装策略本轮不变。
 feishu install npm:pi-web-access        # 推荐，全局
 feishu install -l npm:pi-mcp-adapter     # 仅当前项目
 feishu list
-feishu remove npm:pi-subagents
+feishu remove /absolute/path/to/pi-subagents-feishu
 feishu update --extensions
 feishu config set npm:pi-web-access extensions off
 feishu config -l set ./local-package skills off
