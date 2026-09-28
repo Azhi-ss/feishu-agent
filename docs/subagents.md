@@ -71,3 +71,8 @@ FEISHU_SUBAGENTS_PACKAGE=/absolute/path/to/pi-subagents-feishu \
 
 Run the fork's focused Feishu tests and upstream tests as well when changing the
 adapter. No live Feishu account or provider credentials are needed for these tests.
+
+The host CI pins the fork to a reviewed commit and runs this contract on Node 22
+and 24. It also checks the fork's types and full unit suite on Node 22, and repeats
+the contract against the compiled package on Node 24. Update the pinned commit in
+`.github/workflows/ci.yml` when adopting a new fork revision.
