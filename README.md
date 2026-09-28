@@ -272,13 +272,13 @@ The default TUI theme (`breezy-ocean`) is bundled and applied automatically; swi
 
 ### Recommended optional packages
 
-Pi-compatible extension packages install with `feishu install npm:<package>`. Feishu does **not** auto-install any of these — opt in per machine/project. All listings below are real, `pi-coding-agent`-compatible npm packages; verify the current version with `npm view <package>` before pinning.
+Pi-compatible extension packages install with `feishu install npm:<package>`. Feishu does **not** auto-install any of these — opt in per machine/project. For npm packages, verify the current version with `npm view <package>` before pinning. The Feishu subagents fork uses the local installation documented below.
 
 | Package | What it adds | When to install |
 |---|---|---|
 | `pi-web-access` | Web search, URL fetching, GitHub repo cloning, PDF extraction, YouTube/video understanding; pluggable backends (Tavily, Firecrawl, Jina, Exa, Gemini, Kimi, SearXNG, …) | **Most recommended** — when Feishu needs to read online docs, look up Feishu API references, or fetch a link |
 | `pi-mcp-adapter` | Use MCP (Model Context Protocol) servers as tools | You already have MCP servers (or want a specific vendor's MCP integration) |
-| `pi-subagents` | Single-agent delegation and scripted multi-agent workflows | Long, parallelizable Feishu tasks |
+| [Feishu subagents fork](docs/subagents.md) | Native child delegation and scripted workflows with Feishu resources and policy | Long, parallelizable Feishu tasks; install the adapted local package |
 | `pi-background-tasks` | Durable background shell tasks, read-only delegated agents, attested local Pi runs | Letting long-running lark-cli jobs survive the session |
 | `pi-hermes-memory` | Persistent memory + session search + secret scanning, token-aware policy-only capture | Alternative/additional memory engine; note Feishu already ships Mem0 |
 
@@ -286,7 +286,7 @@ Pi-compatible extension packages install with `feishu install npm:<package>`. Fe
 feishu install npm:pi-web-access        # recommended, global
 feishu install -l npm:pi-mcp-adapter     # current project only
 feishu list
-feishu remove npm:pi-subagents
+feishu remove /absolute/path/to/pi-subagents-feishu
 feishu update --extensions
 feishu config set npm:pi-web-access extensions off
 feishu config -l set ./local-package skills off

@@ -20,6 +20,8 @@ import { reasoningTrimExtension } from "./reasoning-trim-extension.js";
 import { isAllowlistedRemoteExtension } from "./remote-package.js";
 import type { SkillsStatus } from "./tui-status.js";
 import { DEFAULT_SYSTEM } from "./init.js";
+import { publishFeishuSubagentContext } from "./subagents.js";
+import { userApprovesDestructive } from "./high-risk.js";
 
 // Themes shipped with the Feishu Agent package (themes/ at repo root; after
 // build this file lives in dist/src/, hence ../../). Not a ~/.pi resource.
@@ -43,8 +45,17 @@ export class FeishuResourceLoader implements ResourceLoader {
   private skillsStatus = "unavailable" as SkillsStatus;
   private extensionLoader?: DefaultResourceLoader;
   private extensionPathsKey = "";
+  private approvedDestructive = false;
 
-  constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project", private readonly currentRequest?: string, private readonly memoryExtension?: import("@earendil-works/pi-coding-agent").ExtensionFactory) {}
+  constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project", private readonly currentRequest?: string, private readonly memoryExtension?: import("@earendil-works/pi-coding-agent").ExtensionFactory) {
+    this.approvedDestructive = userApprovesDestructive(currentRequest);
+  }
+
+  setDestructiveApproval(approved: boolean): void {
+    this.approvedDestructive = approved;
+    publishFeishuSubagentContext({ version: 1, agentHome: this.agentHome, projectRoot: this.projectRoot,
+      skills: this.skills, systemPrompt: this.prompt, approvedDestructive: approved });
+  }
 
   setSessionSwitcher(sessionSwitcher?: (path: string) => Promise<void>): void {
     this.sessionSwitcher = sessionSwitcher;
@@ -89,6 +100,14 @@ export class FeishuResourceLoader implements ResourceLoader {
     });
     const extensionPaths = resolved.extensions.filter((entry) => entry.enabled).map((entry) => entry.path)
       .filter((path) => !path.includes("@mem0/pi-agent-plugin"));
+    for (const skill of [...official, ...packageSkills, ...global, ...project]) {
+      const shadowed = selected.get(skill.name);
+      if (shadowed) this.warnings.push(`Skill "${skill.name}" selected ${skill.filePath}; shadowed ${shadowed.filePath}`);
+      selected.set(skill.name, skill);
+    }
+    this.skills = [...selected.values()];
+    // Publish before loading extensions: the fork discovers resources at initialization.
+    this.setDestructiveApproval(this.approvedDestructive);
     const extensionPathsKey = JSON.stringify(extensionPaths);
     if (!this.extensionLoader || this.extensionPathsKey !== extensionPathsKey) {
       this.extensionPathsKey = extensionPathsKey;
@@ -109,6 +128,7 @@ export class FeishuResourceLoader implements ResourceLoader {
     }
     await withCompatibilityHome(process.env.HOME!, this.agentHome, () => this.extensionLoader!.reload());
     this.extensions = this.extensionLoader.getExtensions();
+    for (const error of this.extensions.errors) this.warnings.push(`Extension ${error.path} failed to load: ${error.error}`);
     for (const extension of this.extensions.extensions) {
       if (extension.path === "<inline:feishu-core-policy>" || extension.path === "<inline:feishu-startup-banner>" || extension.path === "<inline:feishu-find-skill>") continue;
       for (const reserved of CORE_TOOLS) if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);
@@ -132,13 +152,6 @@ export class FeishuResourceLoader implements ResourceLoader {
     await packageResources.reload();
     this.prompts = packageResources.getPrompts();
     this.themes = packageResources.getThemes();
-
-    for (const skill of [...official, ...packageSkills, ...global, ...project]) {
-      const shadowed = selected.get(skill.name);
-      if (shadowed) this.warnings.push(`Skill "${skill.name}" selected ${skill.filePath}; shadowed ${shadowed.filePath}`);
-      selected.set(skill.name, skill);
-    }
-    this.skills = [...selected.values()];
   }
 
   getExtensions() { return this.extensions; }

@@ -43,7 +43,7 @@ function installStatusLine(pi: ExtensionAPI, memoryDiagnostic?: () => string | u
   });
 }
 
-export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, memoryDiagnostic?: () => string | undefined, resourceLoader?: { getSystemPrompt(): string | undefined; getSkillsStatus?: () => SkillsStatus }): ExtensionFactory {
+export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, memoryDiagnostic?: () => string | undefined, resourceLoader?: { getSystemPrompt(): string | undefined; getSkillsStatus?: () => SkillsStatus; setDestructiveApproval?: (approved: boolean) => void }): ExtensionFactory {
   let approved = userApprovesDestructive(currentRequest);
   return (pi: ExtensionAPI) => {
     installStatusLine(pi, memoryDiagnostic, resourceLoader?.getSkillsStatus?.bind(resourceLoader));
@@ -73,6 +73,7 @@ export function corePolicyExtension(currentRequest?: string, switchSelectedSessi
       const reason = prohibitedCommand(event.text);
       if (reason) return { action: "handled" as const };
       approved = userApprovesDestructive(event.text);
+      resourceLoader?.setDestructiveApproval?.(approved);
     });
     if (resourceLoader) pi.on("before_agent_start", (event) => {
       const base = resourceLoader.getSystemPrompt() ?? event.systemPrompt ?? "";

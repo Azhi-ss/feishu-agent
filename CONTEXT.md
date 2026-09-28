@@ -32,6 +32,10 @@ _Avoid_: Pi skill, Codex skill, `.agents/skills`, shared skill, unversioned CLI 
 A loading boundary that prevents Feishu Agent from automatically importing other agents' skills, prompts, packages, settings, and context. It is not an operating-system sandbox: Bash retains the current user's filesystem permissions and may inspect project material when needed. A project's `.feishu-agent/` resources and root `AGENTS.md` are considered project context and load automatically without a separate trust decision.
 _Avoid_: Filesystem sandbox, container isolation, permission boundary
 
+**Feishu Subagent**:
+An assistant delegated a bounded task by Feishu Agent, with its own conversation and access to the same complete Feishu Skill catalog as its parent.
+_Avoid_: Ordinary Pi child, independently discovered skill catalog, shared conversation
+
 **Feishu Project**:
 The Git repository root that owns project-level Feishu skills, packages, settings, instructions, and sessions (but not the fixed person-scoped Mem0 bucket). When no Git root exists, the startup working directory is the project. Runtime file and Bash paths remain relative to the directory where `feishu` was launched rather than automatically changing to the project root.
 _Avoid_: Arbitrary subdirectory as project identity, process-wide workspace, monorepo package root, forced root working directory
@@ -135,5 +139,4 @@ _Avoid_: Routine phone buzz, model-self-authorized urgent calls, unbounded escal
 **Replay Reasoning Trim**:
 The automatic omission of reasoning blocks from verified-complete, text-only final assistant answers when preparing history for subsequent model requests (normal conversations, automatic/manual compaction, and branch summarization). On-disk session records, answer text, tool calls, tool results, tool-step reasoning, in-progress/error/aborted output, and signed/redacted reasoning structures remain intact.
 _Avoid_: Prompt stripping, transcript pruning, rewriting session logs, blanket thinking deletion
-
 
