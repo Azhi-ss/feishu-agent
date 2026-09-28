@@ -2,7 +2,7 @@
 // owner's 1-on-1 Feishu chat. Inert by default — activation is explicit via
 // /remote start or FEISHU_REMOTE=1, so the offline-startup invariant holds.
 // Inbound owner text is injected with pi.sendUserMessage; turn ownership is an
-// active-turn flag plus a FIFO follow-up queue drained one item per turn end
+// active-turn flag plus a FIFO queue drained one item per settled run
 // (which structurally avoids Pi's "agent already processing" error). Each
 // phone-triggered turn opens ONE Feishu streaming card; assistant text streams
 // into it in coalesced segments and the card is finalized with the complete
@@ -183,10 +183,10 @@ export function remoteBridgeExtension(): ExtensionFactory {
       return card;
     }
 
-    function submit(next: QueuedMessage, deliverAs?: "followUp"): void {
+    function submit(next: QueuedMessage): void {
       activeTurn = { chatId: next.chatId };
       try {
-        pi.sendUserMessage(next.text, deliverAs ? { deliverAs } : undefined);
+        pi.sendUserMessage(next.text);
       } catch (error) {
         activeTurn = undefined;
         if (isStaleRunner(error)) {
@@ -377,20 +377,13 @@ export function remoteBridgeExtension(): ExtensionFactory {
 
     pi.on("agent_end", async (event) => {
       const turn = activeTurn;
-      if (!turn) {
-        const next = queue.shift();
-        if (next) submit(next, "followUp");
-        return;
-      }
+      if (!turn) return;
       activeTurn = undefined;
       const card = activeCard;
       activeCard = undefined;
       const reply = lastAssistantText(event.messages) ?? "";
-      // Drain the queue BEFORE awaiting the outbound send so activeTurn is never
-      // undefined while turns can still start: an inbound message arriving during
-      // the card finalize would otherwise start an untracked turn and steal the next reply.
-      const next = queue.shift();
-      if (next) submit(next, "followUp");
+      // Pi remains busy while this handler finalizes the card, so inbound
+      // messages stay in our queue until agent_settled starts the next run.
       if (!card) return;
       const session = await card.open;
       if (!session) {
@@ -402,6 +395,15 @@ export function remoteBridgeExtension(): ExtensionFactory {
       await session.finalize(shards[0]);
       const gw = gateway;
       for (const shard of shards.slice(1)) await gw?.sendMessage(turn.chatId, shard).catch(() => {});
+    });
+
+    pi.on("agent_settled", () => {
+      // An aborted run does not drain follow-ups queued during agent_end in
+      // Pi 0.87.1. Start the next message only after settlement; Pi defers the
+      // fresh run until every agent_settled handler has finished.
+      if (activeTurn) return;
+      const next = queue.shift();
+      if (next) submit(next);
     });
 
     async function switchBridge(ctx: ExtensionContext): Promise<void> {

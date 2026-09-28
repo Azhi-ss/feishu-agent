@@ -22,7 +22,7 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 - CLI 用户可见文案用英文（与现有输出一致）；SPEC.md / CONTEXT.md 保持中文，README / CONTEXT 保持英文。
 - **Vendored 第三方资源**（当前为 `themes/`）必须在同目录登记来源 URL、版本/日期与同步步骤（见 `themes/CREDITS.md`）；从上游同步后重跑 `npm test`。Vendored 内容不通过 npm 依赖引入。
 - **空 `catch`** 必须注释吞掉了什么错误、为什么 best-effort，且 `try` 只包一条语句。
-- **Pi SDK 钉版本且属 pre-stable**：升级版本号前先读上游 CHANGELOG 的 extension/editor/theme 行为变更，升完在 Node 22 与 24 下跑全量测试，破坏点写进 commit/issue；不盲目追新——已知 0.85.x 的 turn 结算回归会挂 Remote Bridge 电话回合（blocked-tool 场景），锁在 0.84.x 直到上游修复或 bridge 层适配。
+- **Pi SDK 钉版本且属 pre-stable**：当前钉在 0.87.1；升级前先读上游 CHANGELOG 的 extension/editor/theme 行为变更，升完在 Node 22 与 24 下跑全量测试，破坏点写进 commit/issue。0.85.x 曾出现 Remote Bridge 电话回合的 blocked-tool 结算回归；每次升级必须通过工具拦截与停止后队列续跑回归，不盲目追新。
 
 ## 硬边界（动这些之前先停下来和用户讨论）
 

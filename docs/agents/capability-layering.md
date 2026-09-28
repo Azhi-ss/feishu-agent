@@ -7,9 +7,9 @@ cannot provide execution, a lifecycle hook, or a distribution boundary.
 Source: distilled from Wu Zikang's Pi v0.82.1 layering article (2026-08); the
 mechanism taxonomy and permission boundaries are stable, but concrete field
 names and event sets are version-sensitive — refresh them against the pinned
-Pi SDK in `package.json` (currently 0.84.x; see the AGENTS.md 0.85.x
-regression note) before writing code against an API shown in any external
-article.
+Pi SDK in `package.json` (currently 0.87.1; see the AGENTS.md SDK upgrade
+and Remote Bridge regression requirements) before writing code against an API
+shown in any external article.
 
 ## The five things a "plugin request" may actually be
 
