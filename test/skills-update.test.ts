@@ -23,6 +23,7 @@ case "$*" in
   "update --json") touch "${updated}"; echo '{"ok":true,"version":"1.0.94"}';;
   "--version") [ -f "${updated}" ] && echo "lark-cli 1.0.94" || echo "lark-cli 1.0.0";;
   "skills list --json") echo '["docs"]';;
+  "skills list docs") echo '{"ok":true,"entries":[{"path":"docs/SKILL.md","is_dir":false}]}';;
   "skills read docs") echo '---
 name: docs
 description: official

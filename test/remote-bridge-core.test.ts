@@ -5,6 +5,7 @@ import test from "node:test";
 import type { ModelResponder } from "./helpers/remote-bridge-fixture.js";
 import {
   fixture,
+  feishuLoopback,
   echoModel,
   runPty,
   closeServer,
@@ -13,6 +14,21 @@ import {
   sseDone,
   SECRET,
 } from "./helpers/remote-bridge-fixture.js";
+
+test("the connect handshake poll stays empty so scripted phone messages arrive only after it returns", async () => {
+  const feishu = await feishuLoopback([
+    { delayMs: 0, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "after-handshake", messageType: "text", text: "after-handshake" } },
+  ]);
+  try {
+    const handshake = await fetch(`${feishu.url}/events`);
+    assert.deepEqual(await handshake.json(), []);
+    const delivered = await fetch(`${feishu.url}/events`);
+    const events = (await delivered.json()) as Array<{ text?: string }>;
+    assert.equal(events[0]?.text, "after-handshake");
+  } finally {
+    await closeServer(feishu.server);
+  }
+});
 
 test("default startup opens no gateway connection; /remote status shows off", async () => {
   const f = await fixture(echoModel, []);

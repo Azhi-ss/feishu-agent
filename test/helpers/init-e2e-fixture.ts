@@ -97,6 +97,7 @@ case "$*" in
   "doctor") if [ -f ${JSON.stringify(join(control, "fail-doctor"))} ]; then rm ${JSON.stringify(join(control, "fail-doctor"))}; echo "doctor injected failure" >&2; exit 7; fi; echo "doctor ok";;
   "--version") if [ -f ${JSON.stringify(join(control, "lark-version"))} ]; then cat ${JSON.stringify(join(control, "lark-version"))}; else echo "lark-cli 9.9.9"; fi;;
   "skills list --json") if [ -f ${JSON.stringify(join(control, "fail-skills"))} ]; then rm ${JSON.stringify(join(control, "fail-skills"))}; echo "skill injected failure" >&2; exit 8; fi; echo '["docs"]';;
+  "skills list docs") echo '{"ok":true,"entries":[{"path":"docs/SKILL.md","is_dir":false}]}';;
   "skills read docs") printf -- '---\nname: docs\ndescription: OFFICIAL_SKILL_SENTINEL\n---\nUse the official docs workflow.\n';;
   *) exit 2;;
 esac

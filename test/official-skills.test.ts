@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -9,7 +9,7 @@ function fake(root: string) {
   const bin = join(root, "bin");
   const log = join(root, "calls");
   mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, "lark-cli"), `#!/bin/sh\necho "$@" >> "${log}"\ncase "$*" in\n  "--version") echo "lark-cli 1.2.3";;\n  "skills list --json") echo '["docs"]';;\n  "skills read docs") echo '---\nname: docs\ndescription: official\n---\nbody';;\n  *) exit 2;;\nesac\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "lark-cli"), `#!/bin/sh\necho "$@" >> "${log}"\ncase "$*" in\n  "--version") echo "lark-cli 1.2.3";;\n  "skills list --json") echo '["docs"]';;\n  "skills list docs") echo '{"ok":true,"entries":[{"path":"docs/SKILL.md","is_dir":false}]}';;\n  "skills read docs") echo '---\nname: docs\ndescription: official\n---\nbody';;\n  *) exit 2;;\nesac\n`, { mode: 0o755 });
   return { log, env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` } };
 }
 
@@ -79,6 +79,8 @@ case "$*" in
   "--version") echo "lark-cli 1.0.92";;
   "skills list --json") echo '{"ok":true,"skills":[{"name":"lark-approval","description":"审批"},{"name":"lark-im","description":"消息"}]}'
 ;;
+  "skills list lark-approval") echo '{"ok":true,"entries":[{"path":"lark-approval/SKILL.md","is_dir":false}]}';;
+  "skills list lark-im") echo '{"ok":true,"entries":[{"path":"lark-im/SKILL.md","is_dir":false}]}';;
   "skills read lark-approval") echo '---\nname: lark-approval\ndescription: approval\n---\nbody';;
   "skills read lark-im") echo '---\nname: lark-im\ndescription: im\n---\nbody';;
   *) exit 2;;
@@ -111,6 +113,7 @@ case "$*" in
   "update --json") touch "${updated}"; echo '{"ok":true,"version":"1.0.94"}';;
   "--version") [ -f "${updated}" ] && echo "lark-cli 1.0.94" || echo "lark-cli 1.0.0";;
   "skills list --json") echo '["docs"]';;
+  "skills list docs") echo '{"ok":true,"entries":[{"path":"docs/SKILL.md","is_dir":false}]}';;
   "skills read docs") echo '---
 name: docs
 description: official
@@ -156,6 +159,47 @@ esac
   const calls = readFileSync(log, "utf8");
   assert.match(calls, /^update --json\n?$/);
   assert.doesNotMatch(calls, /skills list|--version/);
+});
+
+test("official skill sync writes embedded reference files next to SKILL.md", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-official-refs-"));
+  const cache = join(root, "cache");
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "lark-cli"), `#!/bin/sh
+case "$*" in
+  "--version") echo "lark-cli 1.2.3";;
+  "skills list --json") echo '["docs"]';;
+  "skills list docs") echo '{"ok":true,"entries":[{"path":"docs/SKILL.md","is_dir":false},{"path":"docs/references","is_dir":true}]}';;
+  "skills list docs/references") echo '{"ok":true,"entries":[{"path":"docs/references/fetch.md","is_dir":false}]}';;
+  "skills read docs") printf '%s\\n' '---' 'name: docs' 'description: official' '---' 'See references/fetch.md';;
+  "skills read docs/references/fetch.md") printf '%s\\n' '# fetch' 'use +fetch';;
+  *) exit 2;;
+esac
+`, { mode: 0o755 });
+  const result = await syncOfficialSkills(cache, false, { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` });
+  assert.equal(result.source, "current");
+  assert.equal(readFileSync(join(result.cacheDir, "docs", "references", "fetch.md"), "utf8"), "# fetch\nuse +fetch\n");
+});
+
+test("official skill sync refuses a reference path that leaves the skill directory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-official-escape-"));
+  const cache = join(root, "cache");
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "lark-cli"), `#!/bin/sh
+case "$*" in
+  "--version") echo "lark-cli 1.2.3";;
+  "skills list --json") echo '["docs"]';;
+  "skills read docs") printf '%s\\n' '---' 'name: docs' 'description: official' '---' 'body';;
+  "skills list docs") echo '{"ok":true,"entries":[{"path":"docs/../../outside.md","is_dir":false}]}';;
+  *) exit 2;;
+esac
+`, { mode: 0o755 });
+  const result = await syncOfficialSkills(cache, false, { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` });
+  assert.equal(result.source, "none");
+  assert.equal(existsSync(join(cache, "outside.md")), false);
+  assert.equal(existsSync(join(root, "outside.md")), false);
 });
 
 test("without the update option lark-cli update is never invoked", async () => {
