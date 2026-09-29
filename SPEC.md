@@ -172,7 +172,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 启动读取 `lark-cli --version`（本地命令，无网络请求），缓存目录以完整 CLI 版本命名。
 - Interactive、Print 运行时在入口设置 `PI_OFFLINE=1`（仅该进程），关闭 Pi 内核的启动期网络检查：既不再出现上游 `pi update` 新版本提示，也不出现 `pi update --extensions` 包更新提示——这两个提示对 Feishu 都是错误入口（pi-coding-agent 版本由 feishu 自己的 package.json 钉死，`pi update --extensions` 操作的是 `~/.pi/agent` 的另一套包）。init/install/update 管理命令不设置该变量，npm 安装不受影响；真实模型、Mem0、lark 调用也不受影响。
 - 当前版本缓存完整且带成功标记时直接复用。
-- 版本变化时，通过 `lark-cli skills list/read` 导出官方 Skills 到临时目录，完成校验后原子移动到版本缓存目录。
+- 版本变化时，通过 `lark-cli skills list/read` 把该版本嵌在 CLI 里的 Skill 树导出到临时目录：每个 Skill 的 `SKILL.md`，以及 `skills list <skill>` 逐层列出的参考文件，按相对路径写入。校验后原子移动到版本缓存。CLI 未嵌入的 `assets/`、`scripts/` 不会被造出来。列出的路径必须留在该 Skill 目录内，否则本次同步失败并回退。
 - 同步失败时使用最近一次成功版本并产生 Startup Warning；不存在任何成功缓存时仍可启动，但必须明确报告官方 Skills 不可用。
 - `feishu skills sync` 忽略已有缓存并强制同步。`feishu skills sync --update` 是显式一键升级：先以 `lark-cli update --json` 升级 CLI（联网 + 全局安装，长超时），成功后再按新版本重建官方 Skills 缓存；CLI 升级失败则中止且不动缓存。
 - 升级 lark-cli 属于用户显式手动操作（`lark-cli update`，或一键的 `feishu skills sync --update`）；启动与 init 路径不做任何网络更新检查，启动时只读取与当前 CLI 版本匹配的缓存（不自动重建）。CLI 升级后缓存不会在启动时自动重建，需显式 `feishu skills sync`（或 `--update`、或重跑 init）。
@@ -473,6 +473,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 
 3. **Official Skill cache**
    - 首次版本同步、缓存复用、版本变化、原子发布、同步失败回退和无缓存告警。
+   - 同步把 CLI 内嵌参考文件写到版本缓存里的相对路径；越出该 Skill 目录的路径导致本次同步失败。
    - Runtime 入口强制跳过 Pi 内置启动期网络检查（上游 `pi update` 版本提示与 `pi update --extensions` 包更新提示），管理命令不受影响。
    - `feishu skills sync` 强制刷新。
    - `feishu skills sync --update` 先调 `lark-cli update --json` 再按新版本重建；update 失败则中止且不动缓存；不带 `--update` 时绝不调用 update（临时 HOME + PATH 注入 fake lark-cli，见 `test/skills-update.test.ts`、`test/official-skills.test.ts`）。

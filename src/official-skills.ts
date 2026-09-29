@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 
@@ -11,6 +11,61 @@ const CLI_UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function safeVersion(version: string): string {
   return Buffer.from(version).toString("base64url");
+}
+
+function assertSkillName(name: string): void {
+  if (name !== basename(name) || name === "." || name === ".." || name.includes("\0")) {
+    throw new Error(`Official Skill name is not a single path segment: ${name}`);
+  }
+}
+
+function skillRelativePath(skillName: string, entryPath: string): string {
+  const parts = entryPath.split("/");
+  if (parts[0] !== skillName || parts.some((part) => part === "" || part === "." || part === "..")) {
+    throw new Error(`Official Skill path is not confined to ${skillName}.`);
+  }
+  return parts.slice(1).join("/");
+}
+
+function listedEntries(payload: unknown): { path: string; isDir: boolean }[] {
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { entries?: unknown }).entries)) {
+    throw new Error("Official Skill file list format not recognized.");
+  }
+  const entries: { path: string; isDir: boolean }[] = [];
+  for (const entry of (payload as { entries: unknown[] }).entries) {
+    if (!entry || typeof entry !== "object") throw new Error("Official Skill file list format not recognized.");
+    const path = (entry as { path?: unknown }).path;
+    const isDir = (entry as { is_dir?: unknown }).is_dir;
+    if (typeof path !== "string" || typeof isDir !== "boolean") throw new Error("Official Skill file list format not recognized.");
+    entries.push({ path, isDir });
+  }
+  return entries;
+}
+
+// Reference files live inside the lark-cli binary. `skills read <name>` is only SKILL.md;
+// the local cache must also materialize every file `skills list` reports under that skill.
+async function exportEmbeddedFiles(skillName: string, directory: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const pending = [skillName];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const dirPath = pending.pop()!;
+    if (seen.has(dirPath)) continue;
+    seen.add(dirPath);
+    const listed = listedEntries(JSON.parse(await runCli(["skills", "list", dirPath], env)) as unknown);
+    for (const entry of listed) {
+      const relative = skillRelativePath(skillName, entry.path);
+      if (entry.isDir) {
+        if (!relative) throw new Error(`Official Skill path is not confined to ${skillName}.`);
+        pending.push(entry.path);
+        continue;
+      }
+      if (relative === "SKILL.md") continue;
+      if (!relative) throw new Error(`Official Skill path is not confined to ${skillName}.`);
+      const destination = join(directory, relative);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, await runCli(["skills", "read", entry.path], env, CLI_TIMEOUT_MS, 8 * 1024 * 1024));
+    }
+  }
 }
 
 function skillNames(payload: unknown): string[] {
@@ -141,9 +196,11 @@ export async function syncOfficialSkills(
   try {
     const names = skillNames(JSON.parse(await runCli(["skills", "list", "--json"], env)) as unknown);
     for (const name of names) {
-      const directory = join(temporary, basename(name));
+      assertSkillName(name);
+      const directory = join(temporary, name);
       mkdirSync(directory, { recursive: true });
       writeFileSync(join(directory, "SKILL.md"), await runCli(["skills", "read", name], env));
+      await exportEmbeddedFiles(name, directory, env);
     }
     if (loadSkillsFromDir({ dir: temporary, source: "lark-cli-official" }).skills.length !== names.length) throw new Error("Official Skill export validation failed.");
     writeFileSync(join(temporary, ".success"), version);
