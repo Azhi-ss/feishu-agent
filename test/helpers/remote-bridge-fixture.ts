@@ -124,6 +124,13 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
         timer.unref();
         return;
       }
+      // The gateway awaits this first poll before it reports connected. Waiting
+      // here for delayMs < 2s delivered the phone message during that handshake,
+      // so the TUI painted it before "remote:connected" and then aborted the turn.
+      if (state.polls === 1) {
+        flush([]);
+        return;
+      }
       waitOrFlush();
       return;
     }
