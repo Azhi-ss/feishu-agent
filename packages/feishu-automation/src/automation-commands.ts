@@ -35,6 +35,7 @@ import {
   publishCancelRequest,
   recordedFloor,
   resolveLarkProfile,
+  resolvedLocal,
   resolveScheduleLabel,
   saveJob,
   scheduleEligibilityNotice,
@@ -43,7 +44,6 @@ import {
   validateName,
   type JobRecord,
   type OccurrenceState,
-  type OneShotSchedule,
   type Schedule,
 } from "./automation.js";
 import { runJobManual } from "./automation-runner.js";
@@ -708,12 +708,6 @@ function currentOccurrence(state: ReturnType<typeof loadScheduleStateFor>, job: 
   return state.occurrences.reduce((latest, entry) => entry.dueMs > latest.dueMs ? entry : latest);
 }
 
-/** Latest ledger entry, if any. */
-function latestOccurrence(state: ReturnType<typeof loadScheduleStateFor>): OccurrenceState | null {
-  if (!state || state.occurrences.length === 0) return null;
-  return state.occurrences.reduce((latest, entry) => entry.dueMs > latest.dueMs ? entry : latest);
-}
-
 function scheduledStateFor(job: JobRecord, occurrence: OccurrenceState | null | undefined, now: number): string {
   if (job.state === "removed") return "removed";
   if (job.state === "paused") return "paused";
@@ -745,7 +739,7 @@ function scheduleSummary(schedule: Schedule) {
   if (schedule.kind === "oneshot") {
     return {
       kind: "oneshot" as const,
-      resolvedLocal: resolveOneShotLabel(schedule),
+      resolvedLocal: resolvedLocal(schedule),
       timeZone: schedule.timeZone,
       offset: schedule.offset,
       latenessMinutes: schedule.latenessMinutes,
@@ -767,18 +761,6 @@ function scheduleSummary(schedule: Schedule) {
     anchoredAt: new Date(schedule.anchorMs).toISOString(),
     catchUpMinutes: schedule.catchUpMinutes,
   };
-}
-
-function resolveOneShotLabel(schedule: OneShotSchedule): string {
-  // Local wrapper kept out of automation.ts to preserve its one-shot-only API.
-  const dtf = new Intl.DateTimeFormat("en-CA", {
-    timeZone: schedule.timeZone, hourCycle: "h23",
-    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  });
-  if (schedule.offset) {
-    return `${dtf.format(new Date(schedule.dueMs)).replace(", ", " ")} ${schedule.timeZone} (absolute ${schedule.offset})`;
-  }
-  return `${schedule.wall.replace("T", " ")} ${schedule.timeZone}`;
 }
 
 function jobSummary(root: string, job: JobRecord) {

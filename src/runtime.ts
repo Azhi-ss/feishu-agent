@@ -103,12 +103,8 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
   return runtime;
 }
 
-export async function createRuntime(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, currentRequest?: string) {
-  return createRuntimeForMode(cwd, projectRoot, projectKey, agentHome, resume, currentRequest);
-}
-
 export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string): Promise<number> {
-  const runtime = await createRuntime(cwd, projectRoot, projectKey, agentHome, false, prompt);
+  const runtime = await createRuntimeForMode(cwd, projectRoot, projectKey, agentHome, false, prompt);
   const code = await runPrintMode(runtime, { mode: "text", initialMessage: prompt });
   if (code) return code;
   // runPrintMode disposes the runtime in its own finally (matching upstream main.js);

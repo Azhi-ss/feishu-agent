@@ -13,7 +13,6 @@ import {
   listJobs,
   loadJob,
   loadScheduleState,
-  nextOccurrence,
   nowMs,
   occurrenceDeadline,
   occurrenceId,
@@ -241,9 +240,4 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
     releaseWorkspaceLock(lockPath);
     log("Automation Trigger stopped.");
   }
-}
-
-/** Planned next occurrence for CLI summaries; null when none is forthcoming. */
-export function nextDueFor(job: JobRecord, now: number): number | null {
-  return nextOccurrence(job.schedule, now, job);
 }

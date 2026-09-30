@@ -203,11 +203,6 @@ export function setClock(f: Fixture, ms: number): void {
   renameSync(staged, f.clockFile);
 }
 
-export function setClockAndWait(f: Fixture, ms: number, predicate: () => boolean): Promise<void> {
-  setClock(f, ms);
-  return waitFor(predicate);
-}
-
 export async function waitStarted(serve: Serve): Promise<void> {
   await waitFor(() => /Trigger started/i.test(serve.stderr));
 }
