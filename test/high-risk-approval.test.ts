@@ -131,25 +131,42 @@ test("Print: explicit destructive request drives one fake-model lark-cli --yes e
   } finally { await closeServer(f.server); }
 });
 
-test("Print: vague request cannot authorize model-added --yes and fails nonzero with guidance", async () => {
+test("Print: vague request cannot authorize model-added --yes and exits 3 with guidance", async () => {
   const f = await fixture([toolResponse([exactCommand], "vague-1")]);
   try {
     const result = await runBounded(f.project, f.env, ["-p", "整理一下文档"]);
     assert.equal(result.timedOut, false);
-    assert.notEqual(result.code, 0);
-    assert.match(result.stdout + result.stderr, /Blocked lark-cli --yes/);
+    assert.equal(result.code, 3, result.stderr);
+    assert.match(result.stderr, /Blocked lark-cli --yes/);
     assert.deepEqual(larkCalls(f.trace), []);
   } finally { await closeServer(f.server); }
 });
 
-test("Print: destructive write without --yes fast-fails nonzero instead of hanging on confirmation", async () => {
+test("Print: destructive write without --yes exits 3 instead of hanging on confirmation", async () => {
   const f = await fixture([toolResponse([ambiguousCommand], "noyes-1")]);
   try {
     const result = await runBounded(f.project, f.env, ["-p", "delete the document"]);
     assert.equal(result.timedOut, false);
-    assert.notEqual(result.code, 0);
-    assert.match(result.stdout + result.stderr, /High-risk lark-cli|rerun with --yes/);
+    assert.equal(result.code, 3, result.stderr);
+    assert.match(result.stderr, /High-risk lark-cli|rerun with --yes/);
     assert.deepEqual(larkCalls(f.trace), []);
+  } finally { await closeServer(f.server); }
+});
+
+test("Print: after a blocked --yes, continuing the session with explicit intent runs the delete", async () => {
+  const f = await fixture([toolResponse([exactCommand], "blocked-1"), toolResponse([exactCommand], "confirmed-1"), textResponse("CONFIRMED-DONE")]);
+  try {
+    const blocked = await runBounded(f.project, f.env, ["-p", "整理一下文档"]);
+    assert.equal(blocked.code, 3, blocked.stderr);
+    assert.deepEqual(larkCalls(f.trace), []);
+    const id = /^Feishu Session: (\S+)$/m.exec(blocked.stderr)?.[1];
+    assert(id, blocked.stderr);
+
+    const confirmed = await runBounded(f.project, f.env, ["--session", id, "-p", "确认删除 doc-1"]);
+    assert.equal(confirmed.timedOut, false);
+    assert.equal(confirmed.code, 0, confirmed.stderr);
+    assert.match(confirmed.stdout, /CONFIRMED-DONE/);
+    assert.deepEqual(larkCalls(f.trace), ["CALL|doc delete doc-1 --as user --yes"]);
   } finally { await closeServer(f.server); }
 });
 

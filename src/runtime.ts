@@ -8,6 +8,7 @@ import {
   runPrintMode,
   type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
+import { ASK_USER_TOOL } from "./core-extension.js";
 import { FeishuResourceLoader } from "./resources.js";
 import { cwdMismatchNotice, sessionManagerFor } from "./sessions.js";
 import { CORE_TOOLS } from "./policy.js";
@@ -92,7 +93,7 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
 
   const createSession: CreateAgentSessionRuntimeFactory = async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
     const services = { cwd: runtimeCwd, agentDir: agentHome, modelRuntime, settingsManager, resourceLoader, diagnostics: [] };
-    const created = await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model });
+    const created = await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model, excludeTools: interactive ? [ASK_USER_TOOL] : undefined });
     created.session.setActiveToolsByName([...new Set([...CORE_TOOLS, ...created.session.getActiveToolNames()])]);
     return { ...created, services, diagnostics: [] };
   };
@@ -103,17 +104,27 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
   return runtime;
 }
 
-export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string): Promise<number> {
-  const runtime = await createRuntimeForMode(cwd, projectRoot, projectKey, agentHome, false, prompt);
+export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string, sessionId?: string): Promise<number> {
+  const runtime = await createRuntimeForMode(cwd, projectRoot, projectKey, agentHome, false, prompt, false, sessionId);
+  process.stderr.write(`Feishu Session: ${runtime.session.sessionManager.getSessionId()}\n`);
+  const history = runtime.session.state.messages.length;
   const code = await runPrintMode(runtime, { mode: "text", initialMessage: prompt });
   if (code) return code;
   // runPrintMode disposes the runtime in its own finally (matching upstream main.js);
   // a second dispose re-emits session_shutdown on an invalidated extension ctx.
-  const approvalError = runtime.session.state.messages.flatMap((message) => message.role === "toolResult" && message.isError ? message.content : [])
+  // A continued session replays earlier turns; only this run's messages decide the exit code.
+  const turn = runtime.session.state.messages.slice(history);
+  const approvalError = turn.flatMap((message) => message.role === "toolResult" && message.isError ? message.content : [])
     .find((part) => part.type === "text" && /High-risk lark-cli|Blocked lark-cli/.test(part.text));
   if (approvalError?.type === "text") {
     process.stderr.write(`${approvalError.text}\n`);
-    return 1;
+    return 3;
+  }
+  const asked = turn.find((message) => message.role === "toolResult" && message.toolName === ASK_USER_TOOL && !message.isError);
+  if (asked?.role === "toolResult") {
+    const { question, options = [] } = asked.details as { question: string; options?: string[] };
+    process.stdout.write(`${[question, ...options.map((option, index) => `${index + 1}. ${option}`)].join("\n")}\n`);
+    return 3;
   }
   return 0;
 }

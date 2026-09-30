@@ -94,6 +94,8 @@ npx skills add Azhi-ss/feishu-agent --skill feishu-control --global --agent pi -
 
 The installer copies both `SKILL.md` and `feishu-send` into the host Agent's Skill directory. Then use `/skill:feishu-control <task>` or explicitly ask the Host Agent to use Feishu Agent. Review the Skill before accepting the install; it runs `feishu` with the current user's permissions.
 
+A delegation can take several turns. Exit code 3 means Feishu Agent is waiting for the user, either with a question on stdout or with a high-risk confirmation request on stderr. The Host relays it, then continues the same session with the user's reply: `feishu-send --session <id> "<reply>"`, where `<id>` comes from the `Feishu Session:` line on stderr. Reinstall the Skill after updating this repository so the Host gets the new protocol.
+
 ## Initialize
 
 ```bash
@@ -122,8 +124,11 @@ feishu -p "task"          # one Print-mode turn
 feishu -c                 # continue this Feishu Project's latest session
 feishu -r                 # select a session in this Feishu Project
 feishu --session <id>     # resume an exact session in this Feishu Project
+feishu --session <id> -p "reply"   # continue that session with one Print-mode turn
 feishu --lark-profile finance -p "task"
 ```
+
+Every Print run writes `Feishu Session: <id>` to stderr. Print exits 0 when the task is done, 3 when Feishu Agent is waiting for your answer or confirmation, and any other nonzero code on failure. In Print mode Feishu Agent asks through a Print-only `ask_user` tool: the question and numbered options go to stdout, and your reply continues the session with `feishu --session <id> -p "..."`. To confirm a blocked destructive `lark-cli` write, continue the session with an explicit request such as "yes, delete doc X".
 
 In Interactive mode, `/find-skill <query>` searches the public Skill index; selecting a result shows its source, install count, declared license, and private target path before confirmation. You can also use `/find-skill install <owner/repo@skill-name>` for an explicit result. Installation writes only to `~/.feishu-agent/skills/`—never the real HOME's ordinary Pi global directories—and Print mode searches without waiting for install confirmation. `/remote [start|stop|status]` is provided by the independently published Feishu Remote Package (`@azhi-ss/feishu-remote`) to control the active session from mobile Feishu (see [docs/remote-bridge.md](docs/remote-bridge.md)). The package is transport only: ordinary Pi can install it with `pi install npm:@azhi-ss/feishu-remote`, and does not gain Feishu Agent skills or policy.
 

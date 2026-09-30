@@ -9,7 +9,7 @@ The dedicated assistant whose working domain is Feishu and whose capabilities, i
 _Avoid_: Pi Agent, coding agent, general agent, Pi fork, general software-development assistant
 
 **Feishu Runtime**:
-The composition of Pi `AgentSessionRuntime` with Pi's interactive TUI or one-shot print runner, plus Feishu-specific resource loading, package paths, prompts, memory, and tools. Third-party extensions that hard-code `~/.pi/agent` are initialized through a temporary compatibility Home mapped to `~/.feishu-agent/`, while Bash and ordinary subprocesses retain the user's real Home. Local session management and export remain available; persisted sessions resume through `feishu --session <id>`, `feishu -c`, or the `feishu -r` selector rather than ordinary `pi --session-dir ... --session ...`. If the executable is not on PATH, `FEISHU_RESUME_COMMAND` supplies the displayed full path. A Feishu-specific editor rejects `/share`, `/import`, `/login`, and `/logout` before Pi can execute them, although Pi's inherited autocomplete may still display those names. Core tools, the non-replaceable system identity, and the outer command-policy editor are applied after package resources, so installed extensions cannot override those boundaries.
+The composition of Pi `AgentSessionRuntime` with Pi's interactive TUI or one-shot print runner, plus Feishu-specific resource loading, package paths, prompts, memory, and tools. Third-party extensions that hard-code `~/.pi/agent` are initialized through a temporary compatibility Home mapped to `~/.feishu-agent/`, while Bash and ordinary subprocesses retain the user's real Home. Local session management and export remain available; persisted sessions resume through `feishu --session <id>`, `feishu -c`, or the `feishu -r` selector rather than ordinary `pi --session-dir ... --session ...`, and one Print turn continues an exact session through `feishu --session <id> -p <prompt>`. If the executable is not on PATH, `FEISHU_RESUME_COMMAND` supplies the displayed full path. A Feishu-specific editor rejects `/share`, `/import`, `/login`, and `/logout` before Pi can execute them, although Pi's inherited autocomplete may still display those names. Core tools, the non-replaceable system identity, and the outer command-policy editor are applied after package resources, so installed extensions cannot override those boundaries.
 _Avoid_: Forked Pi runtime, modified Pi core, patched third-party package, JSON mode, RPC mode, session sharing, external session import, credential mutation, extension-owned core policy
 
 **Long-term Memory**:
@@ -36,6 +36,10 @@ _Avoid_: Filesystem sandbox, container isolation, permission boundary
 An assistant delegated a bounded task by Feishu Agent, with its own conversation and access to the same complete Feishu Skill catalog as its parent.
 _Avoid_: Ordinary Pi child, independently discovered skill catalog, shared conversation
 
+**Delegation Session**:
+A Feishu session that a Host Agent drives one Print turn at a time through `feishu-send`. Every run reports `Feishu Session: <id>`; exit code 3 means Feishu Agent is waiting for the user's answer or explicit confirmation, and the Host continues the same session with `--session <id>`, carrying the user's reply verbatim. The session file is the checkpoint: no process stays alive between turns, and the user can take over with `feishu --session <id>`.
+_Avoid_: Background daemon, retained agent process, RPC session, most-recent-session continuation, Host-authored approval
+
 **Feishu Project**:
 The Git repository root that owns project-level Feishu skills, packages, settings, instructions, and sessions (but not the fixed person-scoped Mem0 bucket). When no Git root exists, the startup working directory is the project. Runtime file and Bash paths remain relative to the directory where `feishu` was launched rather than automatically changing to the project root.
 _Avoid_: Arbitrary subdirectory as project identity, process-wide workspace, monorepo package root, forced root working directory
@@ -49,7 +53,7 @@ The existing `lark-cli` configuration, selected profile, and authenticated user 
 _Avoid_: Feishu Agent token copy, separate Lark login, implicit identity switching
 
 **High-risk Approval**:
-Turn-scoped permission for a destructive `lark-cli` write (delete/remove/revoke/withdraw). When the user's current-turn message explicitly asks for a destructive action, the agent may include `--yes`; otherwise the guard blocks it with guidance, and without `--yes` the CLI's own confirmation gate pauses execution (Print mode fast-fails).
+Turn-scoped permission for a destructive `lark-cli` write (delete/remove/revoke/withdraw). When the user's current-turn message explicitly asks for a destructive action, the agent may include `--yes`; otherwise the guard blocks it with guidance, and without `--yes` the CLI's own confirmation gate pauses execution (Print mode fast-fails with exit code 3; the user's explicit confirmation continues the same Delegation Session).
 _Avoid_: Mandatory duplicate confirmation, blanket approval, inferred destructive intent, metadata-probing per-target approval
 
 **Feishu Package**:

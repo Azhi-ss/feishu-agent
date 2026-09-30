@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# feishu-send — delegate one task to the Feishu Agent (feishu -p) and return its answer.
-# stdout = final assistant text; stderr = non-fatal warnings / errors; exit code passthrough.
+# feishu-send — delegate one turn to the Feishu Agent (feishu -p) and return its answer.
+# Exit 0 = done (stdout = final answer); 3 = waiting for the user (stdout = question, or stderr =
+# high-risk confirmation guidance); anything else = failure. stderr carries "Feishu Session: <id>";
+# pass it back with --session to continue the same delegation.
 set -uo pipefail
 
 usage() {
-  echo "Usage: feishu-send [--profile <lark-profile>] <message>" >&2
+  echo "Usage: feishu-send [--profile <lark-profile>] [--session <id>] <message>" >&2
   exit 2
 }
 
 profile=""
+session=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile) [[ $# -ge 2 ]] || usage; profile="$2"; shift 2 ;;
+    --session) [[ $# -ge 2 ]] || usage; session="$2"; shift 2 ;;
     -h|--help) usage ;;
     -*) echo "Unknown option: $1" >&2; usage ;;
     *) break ;;
@@ -25,6 +29,7 @@ timeout_s="${FEISHU_CONTROL_TIMEOUT:-300}"
 # Run in the caller's current project directory by default (Feishu Project = current Git root),
 # so the Feishu Agent sees this project's .feishu-agent resources. Set FEISHU_CONTROL_CWD to force
 # a fixed cross-project scope (e.g. $HOME/feishu-workspace for consolidated Feishu memory).
+# Sessions are partitioned per Feishu Project: continue a session from the same directory.
 workdir="${FEISHU_CONTROL_CWD:-$PWD}"
 
 if ! command -v feishu >/dev/null 2>&1; then
@@ -34,6 +39,7 @@ fi
 
 args=()
 [[ -n "$profile" ]] && args=(--lark-profile "$profile")
+[[ -n "$session" ]] && args+=(--session "$session")
 args+=(-p "$message")
 
 cd "$workdir" || exit 1
@@ -41,6 +47,6 @@ status=0
 timeout -k 10 "$timeout_s" feishu "${args[@]}" || status=$?
 
 if [[ $status -eq 124 ]]; then
-  echo "feishu-send: timed out after ${timeout_s}s (partial work may have completed; sessions in ~/.feishu-agent/sessions/)." >&2
+  echo "feishu-send: timed out after ${timeout_s}s (partial work may have completed; inspect or continue the Feishu Session reported above)." >&2
 fi
 exit "$status"

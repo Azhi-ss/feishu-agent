@@ -66,7 +66,11 @@ const HELP = `Usage:
   feishu -r                      Select a session in this Feishu Project
   feishu -c                      Continue this Feishu Project's latest session
   feishu --session <id>          Resume an exact session in this Feishu Project
+  feishu --session <id> -p <prompt>
+                                  Continue that session with one Print-mode turn
   feishu --lark-profile <name>   Use a profile for this invocation only
+
+Print mode reports "Feishu Session: <id>" on stderr and exits 3 when Feishu Agent is waiting for your answer or confirmation.
 
 Interactive command:
   /find-skill <query>             Search and install a private Feishu Skill
@@ -98,7 +102,9 @@ function normalizeAndValidateArgs(input: string[]): string[] {
   if (args.length === 0) return args;
   if (args.length === 1 && ["--help", "-h", "-c", "-r", "list"].includes(args[0])) return args;
   if (args[0] === "--session") {
-    if (args.length !== 2 || !args[1] || args[1].startsWith("-")) fail("--session requires a session ID.");
+    if (!args[1] || args[1].startsWith("-")) fail("--session requires a session ID.");
+    if (args.length === 2) return args;
+    if (args[2] !== "-p" || args.length !== 4 || !args[3] || args[3].startsWith("-")) fail("Usage: feishu --session <id> [-p <prompt>]");
     return args;
   }
 
@@ -275,12 +281,13 @@ else {
       else fail(`${args[0]} requires a package source.`);
     } catch (error) { fail(`Feishu Package command failed: ${error instanceof Error ? error.message : String(error)}`); }
   }
-  else if (args[0] === "-p") {
+  else if (args[0] === "-p" || (args[0] === "--session" && args[2] === "-p")) {
     const cwd = realpathSync(process.cwd());
     const root = projectRoot(cwd);
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
     const { runPrint } = await import("./runtime.js");
-    runPrint(args[1], cwd, root, projectKeyFor(root), agentHome)
+    const resumed = args[0] === "--session";
+    runPrint(resumed ? args[3] : args[1], cwd, root, projectKeyFor(root), agentHome, resumed ? args[1] : undefined)
       .then((code) => { process.exitCode = code; })
       .catch((error: unknown) => {
         process.stderr.write(`Feishu Agent: ${error instanceof Error ? error.message : String(error)}\n`);

@@ -70,6 +70,8 @@ npx skills add Azhi-ss/feishu-agent --skill feishu-control --global --agent pi -
 
 安装器会同时复制 `SKILL.md` 和 `feishu-send`。安装后可以使用 `/skill:feishu-control <任务>`，或明确要求 Host Agent 使用 Feishu Agent。安装前请先审阅 Skill；它会以当前用户权限运行 `feishu`。
 
+一次委派可以分多轮完成。退出码 3 表示 Feishu Agent 在等用户：stdout 是它的问题，或 stderr 是高危操作的确认请求。Host 原样转告后，用用户的回复续接同一会话：`feishu-send --session <id> "<回复>"`，`<id>` 取自 stderr 中的 `Feishu Session:` 行。更新本仓库后请重新安装该 Skill，Host 才能拿到新协议。
+
 ## 初始化
 
 ```bash
@@ -86,8 +88,11 @@ feishu -p "任务"          # 单次 Print 模式
 feishu -c                 # 继续当前 Feishu Project 的最近会话
 feishu -r                 # 在当前 Feishu Project 中选择会话
 feishu --session <id>     # 精确恢复当前 Feishu Project 中的某个会话
+feishu --session <id> -p "回复"   # 用一次 Print 回合续接该会话
 feishu --lark-profile finance -p "任务"
 ```
+
+每次 Print 运行都会在 stderr 输出 `Feishu Session: <id>`。Print 完成时退出码为 0，Feishu Agent 等你回答或确认时为 3，其他非零表示失败。Print 模式下 Feishu Agent 通过 Print 专有的 `ask_user` 工具反问：问题和编号选项写到 stdout，你的回复用 `feishu --session <id> -p "..."` 续接。被拦截的破坏性 `lark-cli` 写操作，用明确的请求（例如“确认删除文档 X”）续接同一会话即可放行。
 
 交互式会话中可用 `/find-skill <关键词>` 搜索公开 Skill 目录；选中后会先显示来源、安装量、许可证和目标路径，再确认是否安装。也可用 `/find-skill install <owner/repo@skill-name>` 直接指定结果。安装只写入 `~/.feishu-agent/skills/`，不会调用真实 HOME 下的普通 Pi 全局安装；Print 模式只搜索，不等待安装确认。`/remote [start|stop|status]` 由独立发布的 Feishu Remote Package（`@azhi-ss/feishu-remote`）提供，用手机飞书私聊驱动当前会话（参见 [docs/remote-bridge.md](docs/remote-bridge.md)）。该包只做传输：普通 Pi 可用 `pi install npm:@azhi-ss/feishu-remote` 安装，但不会因此获得 Feishu Agent 的 Skills 或策略。
 

@@ -93,6 +93,8 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 72. 作为自动化用户，我希望 `feishu -p "任务"` 单次运行并退出，从而可用于简单脚本。
 73. 作为用户，我希望 Print 模式无法交互确认时明确失败而不是挂起，从而自动化行为可预测。
 74. 作为用户，我希望首版不包含 JSON 和 RPC 模式，从而实现范围保持最小。
+85. 作为通过 Host Agent 委派飞书任务的用户，我希望 `feishu --session <id> -p <prompt>` 在当前 Project 分区内续接同一个会话，且每次 Print 运行都在 stderr 报告会话 ID，从而同一件事可以多轮迭代（改稿、确认后再执行）而不丢上下文。
+86. 作为通过 Host Agent 委派飞书任务的用户，我希望 Print 模式下飞书 Agent 缺少必要信息、或高危操作需要我确认时以退出码 3 结束并给出问题，从而 Host 能区分“做完了”和“在等我回答”，拿到我的答复后用同一会话续接。
 75. 作为用户，我希望 `/share` 被提交前拦截，从而不能误把飞书会话上传为 GitHub Gist。
 76. 作为用户，我希望 `/import` 被提交前拦截，从而外部会话不能污染 Feishu 会话和自动记忆。
 77. 作为用户，我接受禁用命令仍可能出现在 Pi 原生自动补全中，从而无需为此 Fork 或重写整套 TUI。
@@ -207,7 +209,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 ### 8. Core policy precedence
 
-- 保留内置工具名：`read`、`edit`、`write`、`bash`、`grep`、`find`、`ls`。
+- 保留内置工具名：`read`、`edit`、`write`、`bash`、`grep`、`find`、`ls`；另保留 Print 模式反问工具名 `ask_user`（§13.1）。
 - 第三方 Extension 注册同名工具时，核心工具保留，冲突来源产生 Warning；插件其他资源继续加载。
 - Extension 可追加 System Prompt，但不得替换全局基础身份。
 - Extension 可请求自定义 Editor，但 Feishu Command Policy Editor 必须作为最外层提交拦截器。
@@ -218,6 +220,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 - 启用 Pi 的基础文件工具与 Bash。
 - Bash 可运行项目工具链、Git 和 `lark-cli`；不提供额外 `lark_cli` Tool。
+- Print 模式额外提供反问工具 `ask_user`（§13.1）；Interactive 会话（含 Remote Bridge 驱动的回合）不暴露它，模型直接在对话里提问。
 - System Prompt 明确：飞书操作优先使用 `lark-cli` Shortcut，陌生命令先查 `--help` 或 `schema`。
 - Agent 可以检查项目材料或编写辅助代码，但必须直接服务于飞书交付或 `lark-cli` 工作流。
 - 与飞书无关的普通开发请求返回简洁转介，建议使用普通 `pi`。
@@ -247,6 +250,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - Guard 只做一件事：Bash Tool Call 中的 `lark-cli` 破坏性命令（delete/remove/revoke/withdraw）带 `--yes` 时，要求用户本轮消息明确表达破坏性意图（中文“删除/移除/撤销/撤回”或对应英文动词）；否则拦截。
 - 不解析命令目标、身份、范围，不查 lark-cli 元数据，不做一次性消费；批准按“当前轮次用户意图”生效。用户确认目标后下一轮重新执行即可。
 - 不带 `--yes` 时：TUI 模式透传给 `lark-cli` 自身的 Confirmation Gate；Print 模式快速失败，返回非零退出码与可操作报错（提示用户明确要求后重跑加 `--yes`），不等待输入。
+- Print 模式下两类拦截都以退出码 3（等待用户，§13.1）结束，报错写到 stderr。用户明确表达破坏性意图后，以 `feishu --session <id> -p <用户原话>` 在同一会话续接即可放行：批准来源仍是该轮用户消息，Guard 逻辑不变。
 - 拦截报错必须给出下一步指引（如何合法完成），不只是拦截原因。
 - System Prompt 与 Feishu 核心 Extension 共同约束此规则；核心 Extension 可审计 Bash Tool Call，但不能声称构成 OS 级安全边界。
 
@@ -277,6 +281,15 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - Pi 自动补全仍可能展示禁用命令；首版接受此限制。
 - 禁用内置命令仅防误用，不限制 Bash 的网络或文件能力。
 - **Replay Reasoning Trim（#45）**：在发送给模型的历史上下文准备阶段，内置自动裁剪已正常完成（`stopReason: "stop"`）、不含 toolCall、具备最终文本回答且无不可省略标记（如 `redacted`、加密签名或非纯文本签名）的 Assistant 消息中的推理内容；回答正文、工具调用与结果、工具步骤推理、报错/截断/取消状态及磁盘原始会话记录保持完整不变。同一语义规则统一覆盖后续对话请求、自动压缩、手动压缩（`/compact`）与分支摘要（`/tree` 切换）。计算失败时原子回退到原始输入并输出安全诊断，不设任何用户开关、配置项或模型名称分支。
+
+### 13.1. Print continuation and ask_user
+
+- `feishu --session <id> -p <prompt>` 以 Print 模式续接当前 Project 分区内的精确会话，查找规则同 `feishu --session <id>`；ID 不存在时在调用模型前失败，不新建会话。不提供 `-c -p`、`-r -p`：同一 Project 的“最近会话”可能是用户自己的 Interactive 会话。
+- 每次 Print 运行在调用模型前向 stderr 输出一行 `Feishu Session: <id>`，超时或失败时也能据此检查或续接。
+- Print 退出码：`0` 完成，stdout 为最终回复；`3` 等待用户，stdout 为 `ask_user` 的问题与编号选项，或 stderr 为高危拦截的可操作报错（§11）；其他非零为失败。续接运行只依据本次运行新增的消息判定退出码，历史里的反问或拦截不影响新一轮。
+- `ask_user` 是 Print 专有的保留工具，参数为必填 `question` 与可选字符串数组 `options`；调用即以 `terminate` 结束本轮，不再请求模型。同一条模型回复里的其他工具不执行。用户的答复作为同一会话的下一条消息到达。Interactive 会话（含 `/reload` 之后）不暴露该工具。
+- `FEISHU_UNATTENDED=1` 运行同样可能以退出码 3 结束；Automation 按非零记为失败，不自动续接。
+- 两次 Print 之间不保留进程，会话文件就是 checkpoint。Host 只能原样转发用户的答复或确认，不得自拟批准（`skills/feishu-control/`）；用户随时可用 `feishu --session <id>` 在 TUI 接管。
 
 ### 14. Initialization
 
@@ -313,6 +326,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu -c`
 - `feishu -r`
 - `feishu --session <id>`
+- `feishu --session <id> -p <prompt>`（续接精确会话的单次 Print 回合，§13.1）
 - `feishu --lark-profile <profile>`
 - 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`、`/remote [start|stop|status|switch]`（`/remote` 由已安装的 Feishu Remote Package 提供，不是内联核心命令）
 
@@ -515,6 +529,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 
 9. **Core tool precedence**
    - 恶意 Fixture Extension 尝试覆盖 `bash` 或 `read` 时，核心实现仍被使用并产生 Warning。
+   - 恶意 Fixture Extension 注册 `ask_user` 时产生同样的 Warning；Interactive 工具列表在 `/reload` 前后都不含 `ask_user`。
    - Extension 其他非冲突工具仍可用。
    - Extension 尝试替换 System Prompt 或 Editor 时，基础身份和外层命令策略仍保留。
 
@@ -523,13 +538,15 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
     - Profile Override 不修改用户默认 Profile。
     - System Prompt 要求默认 `--as user`，明确 Bot 场景允许 `--as bot`。
     - 用户本轮消息明确要求破坏性动作时可携带 `--yes`；否则不得自行加 `--yes`。
-    - Print 模式下未批准的高风险操作快速失败并给出重跑指引。
+    - Print 模式下未批准的高风险操作以退出码 3 快速失败并给出重跑指引；用明确意图续接同一会话后放行。
 
 11. **Sessions**
     - 当前 Project 会话隔离于其他 Project 和普通 Pi。
     - 从不同子目录恢复时采用当前启动 CWD，并显示原会话 CWD 提示。
     - 持久化 Interactive 会话的 Feishu 退出提示为 `feishu --session <id>`，精确恢复只查当前 Project 分区，不把普通 Pi 命令作为恢复入口；`feishu` 不在 PATH 时显示 `FEISHU_RESUME_COMMAND`。
     - 会话文件不出现在项目目录。
+    - Print 运行在 stderr 报告 `Feishu Session: <id>`；`--session <id> -p` 续接同一会话文件且模型收到之前的上下文；未知 ID 在调用模型前失败。
+    - `ask_user` 以退出码 3 结束且之后不再请求模型，stdout 为问题与编号选项；经 `feishu-send --session` 续接后正常完成。
 
 12. **Private Skill discovery**
     - `/find-skill` 搜索只在显式调用时访问回环 Fake/测试替代的搜索端点；启动和初始化零搜索、零第三方安装。
@@ -570,6 +587,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 - Fork 或修改 Pi Core。
 - 修改、Patch 或维护 `@mem0/pi-agent-plugin` Fork。
 - JSON 与 RPC 运行模式。
+- Print 按“最近会话”续接（`-c -p`、`-r -p`），以及两次委派回合之间的常驻进程或后台守护。
 - OS Sandbox、容器或 VM 级文件隔离。
 - 禁止 Bash 网络访问或阻止用户主动读取其他 Agent 文件。
 - 从 Pi 自动补全列表彻底删除禁用命令。

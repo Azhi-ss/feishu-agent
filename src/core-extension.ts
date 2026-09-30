@@ -90,3 +90,40 @@ export function corePolicyExtension(currentRequest?: string, switchSelectedSessi
     });
   };
 }
+
+export const ASK_USER_TOOL = "ask_user";
+
+export function askUserExtension(): ExtensionFactory {
+  return (pi: ExtensionAPI) => {
+    pi.on("tool_call", (event, ctx) => {
+      if (event.toolName === ASK_USER_TOOL || !currentReplyAsksUser(ctx)) return;
+      return { block: true, terminate: true, reason: "ask_user ends this run. This tool was not executed; wait for the user's answer." };
+    });
+    pi.registerTool({
+      name: ASK_USER_TOOL,
+      label: "Ask user",
+      description: "Ask the user one question when a missing detail or an explicit confirmation blocks the task. Call it alone: any other tool in the same response is not executed. This ends the current run; the user's answer arrives as the next message in this session. Do not guess instead of asking.",
+      promptSnippet: "Ask one blocking question alone, then end this run",
+      parameters: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "The question, self-contained for someone who has not seen this session." },
+          options: { type: "array", items: { type: "string" }, description: "Optional short answer choices." },
+        },
+        required: ["question"],
+        additionalProperties: false,
+      },
+      execute: async (_toolCallId, params) => ({ content: [{ type: "text", text: "Question delivered to the user; their answer will arrive as the next message." }], details: params, terminate: true }),
+    });
+  };
+}
+
+function currentReplyAsksUser(ctx: ExtensionContext): boolean {
+  const branch = ctx.sessionManager.getBranch();
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index];
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    return entry.message.content.some((part) => part.type === "toolCall" && part.name === ASK_USER_TOOL);
+  }
+  return false;
+}
