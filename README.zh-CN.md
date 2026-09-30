@@ -38,6 +38,16 @@ Feishu Agent 以源码方式运行 CLI，**未发布到 npm**。
 - **[Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 编码助手**——`npm i -g @earendil-works/pi-coding-agent`。Feishu 复用 `~/.pi/agent/` 下 Pi 的模型凭证，且禁用了自身的 `/login`，因此需先用普通 `pi` 完成模型认证（`pi auth` 可检查就绪状态）。
 - **`MEM0_API_KEY`**（来自 [mem0.ai](https://mem0.ai)）——`feishu init` 初始化长期记忆时必需；只从环境变量读取、绝不落盘；运行时若 Mem0 不可用会优雅降级。
 
+### 引导安装
+
+在本仓库的克隆目录里运行：
+
+```bash
+bash scripts/setup.sh
+```
+
+脚本会构建并链接 Feishu，执行 `lark-cli auth login`，让你在普通 `pi` 里用 `/login` 完成模型登录，并把 `MEM0_API_KEY` 只传给当次 `feishu init`。密钥不会写入磁盘。之后每个新终端仍需自行 `export MEM0_API_KEY=...`。
+
 ### 构建并链接
 
 ```bash

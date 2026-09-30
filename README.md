@@ -38,6 +38,16 @@ Feishu Agent runs as a CLI from source — it is **not published to npm**.
 - **[Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)** coding agent — `npm i -g @earendil-works/pi-coding-agent`. Feishu reuses Pi's model credentials from `~/.pi/agent/` and disables its own `/login`, so authenticate a model with ordinary `pi` first (`pi auth` checks readiness).
 - **`MEM0_API_KEY`** from [mem0.ai](https://mem0.ai) — required by `feishu init` for long-term memory. Read only from the environment, never written to disk; memory degrades gracefully at runtime if Mem0 is later unavailable.
 
+### Guided setup
+
+From a clone of this repository:
+
+```bash
+bash scripts/setup.sh
+```
+
+The script builds and links Feishu, runs `lark-cli auth login`, asks you to log in with ordinary `pi` `/login`, and passes `MEM0_API_KEY` only to that `feishu init` process. It does not write the key to disk. Later shells still need `export MEM0_API_KEY=...`.
+
 ### Build and link
 
 ```bash
