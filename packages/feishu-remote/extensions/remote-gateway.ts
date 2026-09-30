@@ -47,7 +47,10 @@ interface FeishuResponse<T = unknown> {
 }
 
 interface FeishuClient {
-  im: { v1: { message: { create(payload: unknown): Promise<FeishuResponse<{ message_id?: string }>> } } };
+  im: { v1: { message: {
+    create(payload: unknown): Promise<FeishuResponse<{ message_id?: string }>>;
+    get(payload: { path: { message_id: string } }): Promise<FeishuResponse<{ items?: Array<{ msg_type?: string; body?: { content?: string } }> }>>;
+  } } };
   cardkit: {
     v1: {
       card: {
@@ -106,22 +109,7 @@ export class FeishuGateway implements RemoteGateway {
     this.closed = false;
     const dispatcher = this.sdk.createDispatcher();
     dispatcher.register({
-      "im.message.receive_v1": (raw) => {
-        const event = raw as {
-          sender?: { sender_id?: { open_id?: string } };
-          message?: { message_id?: string; chat_id?: string; chat_type?: string; message_type?: string; content?: string };
-        };
-        const message = event.message;
-        if (!message?.message_id || !message.chat_id || !message.chat_type || !message.message_type) return;
-        onEvent({
-          ownerOpenId: event.sender?.sender_id?.open_id ?? "",
-          chatId: message.chat_id,
-          chatType: message.chat_type,
-          messageId: message.message_id,
-          messageType: message.message_type,
-          text: message.message_type === "text" ? parseTextContent(message.content) : "",
-        });
-      },
+      "im.message.receive_v1": (raw) => this.emitInbound(raw, onEvent),
     });
 
     const domain = this.credentials.brand === "lark" ? "lark" : "feishu";
@@ -297,6 +285,45 @@ export class FeishuGateway implements RemoteGateway {
     return this.#appSecret;
   }
 
+  private async emitInbound(raw: unknown, onEvent: (event: RemoteInboundEvent) => void): Promise<void> {
+    const event = raw as {
+      sender?: { sender_id?: { open_id?: string } };
+      message?: { message_id?: string; parent_id?: string; chat_id?: string; chat_type?: string; message_type?: string; content?: string };
+    };
+    const message = event.message;
+    if (!message?.message_id || !message.chat_id || !message.chat_type || !message.message_type) return;
+    let text = message.message_type === "text" ? parseTextContent(message.content) : "";
+    if (message.message_type === "text" && message.parent_id) {
+      const quote = await this.quoteParent(message.parent_id);
+      if (quote) text = `[replying to]\n${quote}\n\n${text}`;
+    }
+    if (this.closed) return;
+    onEvent({
+      ownerOpenId: event.sender?.sender_id?.open_id ?? "",
+      chatId: message.chat_id,
+      chatType: message.chat_type,
+      messageId: message.message_id,
+      messageType: message.message_type,
+      text,
+    });
+  }
+
+  private async quoteParent(messageId: string): Promise<string> {
+    let response: FeishuResponse<{ items?: Array<{ msg_type?: string; body?: { content?: string } }> }>;
+    try {
+      response = await this.client().im.v1.message.get({ path: { message_id: messageId } });
+    } catch {
+      // A failed parent lookup must not drop the owner's reply.
+      return "";
+    }
+    if (response.code !== undefined && response.code !== 0) return "";
+    const item = response.data?.items?.[0];
+    const plain = plainMessage(item?.msg_type, item?.body?.content);
+    if (!plain) return "";
+    // ponytail: 2000 chars; raise if a real brief the owner replies to gets clipped mid-item
+    return plain.length > 2000 ? `${plain.slice(0, 2000)}…` : plain;
+  }
+
   private client(): FeishuClient {
     const appSecret = this.requireSecret();
     const domain = this.credentials.brand === "lark" ? "lark" : "feishu";
@@ -317,6 +344,34 @@ function parseTextContent(content: string | undefined): string {
   } catch {
     return content;
   }
+}
+
+function plainMessage(msgType: string | undefined, content: string | undefined): string {
+  if (!content || msgType === "interactive") return "";
+  if (msgType === "text") return parseTextContent(content).trim();
+  if (msgType !== "post") return "";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Malformed post JSON is not quoted.
+    return "";
+  }
+  const localized = parsed as { zh_cn?: PostBody; en_us?: PostBody };
+  const body = localized.zh_cn ?? localized.en_us;
+  if (!body) return "";
+  const lines: string[] = [];
+  if (body.title?.trim()) lines.push(body.title.trim());
+  for (const row of body.content ?? []) {
+    const line = row.map((node) => node.text ?? "").join("");
+    if (line.trim()) lines.push(line);
+  }
+  return lines.join("\n").trim();
+}
+
+interface PostBody {
+  title?: string;
+  content?: Array<Array<{ text?: string }>>;
 }
 
 function feishuErrorDetail(error: unknown): string | undefined {

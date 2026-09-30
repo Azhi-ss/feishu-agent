@@ -128,10 +128,13 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
   let handlers: Record<string, (event: unknown) => unknown> = {};
   let wsOptions: { appId: string; appSecret: string; domain: "feishu" | "lark"; onReconnecting: () => void; onReconnected: () => void } | undefined;
   const client = {
-    im: { v1: { message: { create: async (payload: unknown) => {
-      calls.push({ operation: "send", payload });
-      return { code: 0, data: { message_id: "om_card-message" } };
-    } } } },
+    im: { v1: { message: {
+      create: async (payload: unknown) => {
+        calls.push({ operation: "send", payload });
+        return { code: 0, data: { message_id: "om_card-message" } };
+      },
+      get: async () => { throw new Error("unexpected parent fetch"); },
+    } } },
     cardkit: {
       v1: {
         card: {
@@ -199,6 +202,63 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
   assert.deepEqual(recovered, [true]);
   await gateway.close();
   assert.equal(calls.at(-1)?.operation, "ws-close");
+});
+
+test("FeishuGateway quotes the message a text reply points at", async () => {
+  const fetched: string[] = [];
+  const long = "y".repeat(2500);
+  const parents: Record<string, () => Promise<{ code: number; data: { items: Array<{ msg_type: string; body: { content: string } }> } }>> = {
+    om_digest: async () => ({
+      code: 0,
+      data: { items: [{ msg_type: "post", body: { content: JSON.stringify({ zh_cn: { title: "日报", content: [[{ tag: "md", text: "第一篇：主动学习\n第二篇：知识图谱" }]] } }) } }] },
+    }),
+    om_long: async () => ({
+      code: 0,
+      data: { items: [{ msg_type: "post", body: { content: JSON.stringify({ zh_cn: { content: [[{ tag: "md", text: long }]] } }) } }] },
+    }),
+    om_card: async () => ({
+      code: 0,
+      data: { items: [{ msg_type: "interactive", body: { content: "{\"card\":true}" } }] },
+    }),
+    om_fail: async () => { throw new Error("lookup failed secret-must-stay-in-memory"); },
+  };
+  let handlers: Record<string, (event: unknown) => unknown> = {};
+  const sdk: FeishuGatewaySdk = {
+    createClient: () => ({
+      im: { v1: { message: {
+        create: async () => ({ code: 0, data: { message_id: "om_out" } }),
+        get: async (payload: { path: { message_id: string } }) => {
+          fetched.push(payload.path.message_id);
+          return parents[payload.path.message_id]!();
+        },
+      } } },
+      cardkit: { v1: { card: { create: async () => ({ code: 0 }), settings: async () => ({ code: 0 }) }, cardElement: { content: async () => ({ code: 0 }) } } },
+    }),
+    createDispatcher: () => ({ register: (registered) => { handlers = registered; } }),
+    createWsClient: (options) => ({ start: async () => { options.onReady(); }, close: () => undefined }),
+  };
+  const gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner" }, "secret-must-stay-in-memory", sdk);
+  const received: RemoteInboundEvent[] = [];
+  await gateway.start((event) => received.push(event), () => undefined);
+  const inbound = (messageId: string, text: string, parentId?: string) => handlers["im.message.receive_v1"]?.({
+    sender: { sender_id: { open_id: "ou_owner" } },
+    message: { message_id: messageId, chat_id: "oc_1", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text }), parent_id: parentId },
+  });
+
+  await inbound("om_reply_digest", "存第二篇", "om_digest");
+  await inbound("om_reply_long", "再看看", "om_long");
+  await inbound("om_reply_card", "停", "om_card");
+  await inbound("om_reply_fail", "继续", "om_fail");
+  await inbound("om_plain", "普通消息");
+
+  assert.equal(received[0]?.text, "[replying to]\n日报\n第一篇：主动学习\n第二篇：知识图谱\n\n存第二篇");
+  assert.match(received[1]?.text ?? "", /^\[replying to]\ny{2000}…\n\n再看看$/);
+  assert.equal(received[2]?.text, "停");
+  assert.equal(received[3]?.text, "继续");
+  assert.equal(received[4]?.text, "普通消息");
+  assert.deepEqual(fetched, ["om_digest", "om_long", "om_card", "om_fail"]);
+  assert.equal(received.some((event) => event.text.includes("secret-must-stay-in-memory")), false);
+  await gateway.close();
 });
 
 test("FeishuGateway rejects a hard initial WS failure without leaking the secret", async () => {
