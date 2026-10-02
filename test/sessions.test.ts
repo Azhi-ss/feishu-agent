@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { projectKeyFor, sessionManagerFor, cwdMismatchNotice } from "../src/sessions.js";
+import { projectKeyFor } from "../src/policy.js";
+import { sessionManagerFor, cwdMismatchNotice } from "../src/sessions.js";
 
 test("session keys partition projects while launch cwd remains current", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-sessions-"));

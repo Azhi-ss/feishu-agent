@@ -15,7 +15,7 @@ import {
   requestRemoteHandover,
   waitForRemoteLockRelease,
 } from "../packages/feishu-remote/extensions/remote-lock.js";
-import { remoteBridgeExtension } from "../packages/feishu-remote/index.js";
+import { remoteBridgeExtension } from "../packages/feishu-remote/extensions/remote-bridge.js";
 
 const APP_ID = "cli_lock_unit";
 

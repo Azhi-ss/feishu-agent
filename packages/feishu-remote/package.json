@@ -6,7 +6,6 @@
   "license": "MIT",
   "keywords": ["pi-package", "pi-extension", "feishu", "lark"],
   "files": [
-    "index.ts",
     "extensions/**/*.ts",
     "README.md"
   ],
@@ -19,7 +18,7 @@
     "access": "public"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./extensions/remote-bridge.ts"]
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.73.3"

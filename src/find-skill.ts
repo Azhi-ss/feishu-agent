@@ -128,7 +128,7 @@ function formatInstalls(count: number): string {
   return `${count} install${count === 1 ? "" : "s"}`;
 }
 
-export function formatSearchResults(results: SkillSearchResult[]): string {
+function formatSearchResults(results: SkillSearchResult[]): string {
   return results.map((result) => {
     const spec = skillSpec(result) ?? `${result.source}@${result.name}`;
     return `${spec} · ${formatInstalls(result.installs)} · https://skills.sh/${result.slug}`;

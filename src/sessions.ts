@@ -2,14 +2,13 @@ import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { projectKeyFor } from "./policy.js";
-export { projectKeyFor } from "./policy.js";
 
 export interface SessionSelection {
   manager: SessionManager;
   originalCwd?: string;
 }
 
-export function sessionDirectory(agentHome: string, projectRoot: string): string {
+function sessionDirectory(agentHome: string, projectRoot: string): string {
   const dir = join(agentHome, "sessions", projectKeyFor(projectRoot));
   mkdirSync(dir, { recursive: true });
   return dir;

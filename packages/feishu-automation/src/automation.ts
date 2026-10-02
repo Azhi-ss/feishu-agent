@@ -778,7 +778,7 @@ export function releaseWorkspaceLock(lockPath: string): void {
   lockOwners.delete(lockPath);
 }
 
-export function readLockRecord(lockPath: string): Record<string, unknown> | null {
+function readLockRecord(lockPath: string): Record<string, unknown> | null {
   let raw: string;
   try {
     raw = readFileSync(lockPath, "utf8");
@@ -840,11 +840,11 @@ export interface ScheduleState {
   occurrences: OccurrenceState[];
 }
 
-export function oneshotOccurrenceId(dueMs: number): string {
+function oneshotOccurrenceId(dueMs: number): string {
   return `oneshot:${dueMs}`;
 }
 
-export function scheduleStatePath(workspace: Workspace, name: string): string {
+function scheduleStatePath(workspace: Workspace, name: string): string {
   return join(workspace.jobs, name, "schedule.json");
 }
 
@@ -930,7 +930,7 @@ export function loadScheduleState(workspace: Workspace, name: string): ScheduleS
  * The embedded timestamp must equal the entry's own dueMs, so a replaced id
  * cannot silently stand in for a different instant.
  */
-export function validOccurrenceId(id: string, dueMs: number): boolean {
+function validOccurrenceId(id: string, dueMs: number): boolean {
   const one = /^oneshot:(-?\d+)$/.exec(id);
   if (one) return Number(one[1]) === dueMs;
   const cron = /^cron:(-?\d+)$/.exec(id);
@@ -967,7 +967,7 @@ export function saveScheduleState(workspace: Workspace, state: ScheduleState): v
 }
 
 /** The occurrence for one due instant, or null when nothing is recorded. */
-export function findOccurrence(state: ScheduleState | null, id: string): OccurrenceState | null {
+function findOccurrence(state: ScheduleState | null, id: string): OccurrenceState | null {
   return state?.occurrences.find((entry) => entry.id === id) ?? null;
 }
 
@@ -1102,7 +1102,7 @@ export function listJobs(root: string): { jobs: JobRecord[]; warnings: string[] 
   return { jobs, warnings };
 }
 
-export function jobPath(root: string, name: string): string {
+function jobPath(root: string, name: string): string {
   return join(workspacePaths(root).jobs, name, "job.json");
 }
 
@@ -1199,7 +1199,7 @@ export function saveJob(root: string, job: JobRecord): void {
 
 const lifecycleDepth = new Map<string, number>();
 
-export function lifecycleLockPath(workspace: Workspace): string {
+function lifecycleLockPath(workspace: Workspace): string {
   return join(workspace.root, "lifecycle.lock");
 }
 
@@ -1277,7 +1277,7 @@ export function discardPendingOccurrences(workspace: Workspace, job: JobRecord, 
 }
 
 /** Bounded request file used to ask a run's owner to cancel its supervised child. */
-export function cancelRequestPath(workspace: Workspace, name: string): string {
+function cancelRequestPath(workspace: Workspace, name: string): string {
   return join(workspace.jobs, name, "cancel.json");
 }
 

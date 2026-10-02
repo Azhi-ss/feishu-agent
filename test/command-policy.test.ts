@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prohibitedCommand } from "../src/command-policy.js";
+import { prohibitedCommand } from "../src/core-extension.js";
 
 test("command policy rejects exact prohibited commands only", () => {
   for (const input of ["/share", "/import file", "/login provider", "/logout"]) assert(prohibitedCommand(input));

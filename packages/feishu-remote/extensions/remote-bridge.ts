@@ -480,3 +480,5 @@ export function remoteBridgeExtension(): ExtensionFactory {
     });
   };
 }
+
+export default remoteBridgeExtension();
