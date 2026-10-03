@@ -77,8 +77,6 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
     if (!runtime) throw new Error("Feishu session selector is not ready.");
     await runtimeHostSwitchOverride(runtime, path, cwd);
   });
-  await resourceLoader.reload();
-  for (const warning of resourceLoader.warnings) process.stderr.write(`Startup Warning: ${warning}\n`);
   const available = await modelRuntime.getAvailable();
   const configuredProvider = settingsManager.getDefaultProvider();
   const configuredModel = settingsManager.getDefaultModel();
@@ -92,6 +90,10 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
   }
 
   const createSession: CreateAgentSessionRuntimeFactory = async ({ cwd: runtimeCwd, sessionManager, sessionStartEvent }) => {
+    // dispose() marks this loader's extension runtime stale. /new, /fork, and
+    // /resume reuse the loader, so each session has to load a fresh runtime.
+    await resourceLoader.reload();
+    if (!sessionStartEvent) for (const warning of resourceLoader.warnings) process.stderr.write(`Startup Warning: ${warning}\n`);
     const services = { cwd: runtimeCwd, agentDir: agentHome, modelRuntime, settingsManager, resourceLoader, diagnostics: [] };
     const created = await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model, excludeTools: interactive ? [ASK_USER_TOOL] : undefined });
     created.session.setActiveToolsByName([...new Set([...CORE_TOOLS, ...created.session.getActiveToolNames()])]);
