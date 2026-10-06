@@ -27,7 +27,7 @@ import {
   type JobRecord,
   type Workspace,
 } from "./automation.js";
-import { recordRunSummary, settleScheduledOccurrence, startAdmittedRun, type AdmittedRun } from "./automation-runner.js";
+import { attachRunFailure, recordRunSummary, recoverOpenRun, settleScheduledOccurrence, startAdmittedRun, type AdmittedRun } from "./automation-runner.js";
 
 export function liveTrigger(workspace: Workspace): { pid: number; startedAt: string } | null {
   const held = readLiveLock(join(workspace.root, "trigger.lock"));
@@ -89,10 +89,10 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
       // ordinary stop bounding stays unknown.
       const result = outcome === "cancelled" ? "cancelled" : stopping && outcome !== "timeout" ? "unknown" : outcome;
       settleScheduledOccurrence(workspace, job.name, id, result, run.runId, exitCode, dueMs);
-      recordRunSummary(workspace, job.name, {
+      recordRunSummary(workspace, job.name, attachRunFailure(workspace, job.name, {
         runId: run.runId, startedAt: run.startedAt, endedAt: new Date(nowMs()).toISOString(),
         outcome: result, exitCode, trigger: "scheduled",
-      });
+      }));
       run.release();
       log(`Scheduled run of "${job.name}" (${new Date(dueMs).toISOString()}) settled as ${result}.`);
     }).catch(fatal).finally(() => { owned.delete(job.name); });
@@ -110,8 +110,9 @@ export async function serve(workspace: Workspace, options: { log: (line: string)
       const live = readLiveLock(jobLockPath(workspace, job.name));
       if (live?.runId === occurrence.runId) continue;
       const previous = job.runs.find((run) => run.runId === occurrence.runId);
-      const outcome = previous?.outcome ?? "unknown";
-      settleScheduledOccurrence(workspace, job.name, occurrence.id, outcome, occurrence.runId, previous?.exitCode ?? null, occurrence.dueMs);
+      const recovered = recoverOpenRun(workspace, job.name, previous, occurrence.runId, previous?.startedAt ?? occurrence.startedAt ?? new Date(occurrence.dueMs).toISOString());
+      const outcome = recovered?.outcome ?? previous?.outcome ?? "unknown";
+      settleScheduledOccurrence(workspace, job.name, occurrence.id, outcome, occurrence.runId, recovered?.exitCode ?? previous?.exitCode ?? null, occurrence.dueMs);
       log(`Recovered unsupervised scheduled run "${job.name}" (${new Date(occurrence.dueMs).toISOString()}); recorded ${outcome} without replay.`);
     }
   };

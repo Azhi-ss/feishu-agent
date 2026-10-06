@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { hermeticEnv } from "./helpers/hermetic-env.js";
 import { writeMemoryConfig } from "../src/memory.js";
+import { runFailureLine } from "../src/runtime.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "dist/src/cli.js");
@@ -152,5 +153,57 @@ test("print run without FEISHU_UNATTENDED keeps the normal memory flow (ping, re
     assert.doesNotMatch([result.stdout, result.stderr].join("\n"), new RegExp(apiKeySentinel));
   } finally {
     await Promise.all([closeServer(modelServer), closeServer(mem0Server)]);
+  }
+});
+
+test("runFailureLine quotes the last assistant error and skips aborts", () => {
+  assert.equal(runFailureLine([
+    { role: "assistant", stopReason: "aborted", errorMessage: "Operation aborted" },
+    { role: "assistant", stopReason: "error", errorMessage: "Connection\nerror." },
+  ]), "Feishu run failed: Connection error.");
+  assert.equal(runFailureLine([{ role: "assistant", stopReason: "stop", errorMessage: "nope" }]), undefined);
+  assert.equal(runFailureLine([{ role: "assistant", stopReason: "error", errorMessage: "x".repeat(400) }]), `Feishu run failed: ${"x".repeat(240)}`);
+});
+
+test("a model error leaves one Feishu run failed line", { timeout: 20_000 }, async () => {
+  const modelServer = createServer((_request, response) => {
+    response.writeHead(500, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "upstream reset" } }));
+  });
+  await new Promise<void>((done) => modelServer.listen(0, "127.0.0.1", done));
+  const modelAddress = modelServer.address();
+  assert(modelAddress && typeof modelAddress !== "string");
+  const f = fixture(`http://127.0.0.1:${modelAddress.port}/v1`);
+  writeFileSync(join(f.feishu, "settings.json"), JSON.stringify({
+    defaultProvider: "fake", defaultModel: "fake-model", quietStartup: true, collapseChangelog: true,
+    retry: { enabled: false },
+  }));
+  try {
+    const result = await run(f.cwd, hermeticEnv({ HOME: f.home, PI_OFFLINE: "1", FEISHU_UNATTENDED: "1" }));
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Feishu run failed: /);
+    assert.doesNotMatch(result.stderr, /MEM0/);
+  } finally {
+    await closeServer(modelServer);
+  }
+});
+
+test("an unattended print run exits itself when FEISHU_RUN_TIMEOUT_MS elapses", { timeout: 20_000 }, async () => {
+  const modelServer = createServer(() => { /* hold the socket */ });
+  await new Promise<void>((done) => modelServer.listen(0, "127.0.0.1", done));
+  const modelAddress = modelServer.address();
+  assert(modelAddress && typeof modelAddress !== "string");
+  const f = fixture(`http://127.0.0.1:${modelAddress.port}/v1`);
+  try {
+    const result = await run(f.cwd, hermeticEnv({
+      HOME: f.home,
+      PI_OFFLINE: "1",
+      FEISHU_UNATTENDED: "1",
+      FEISHU_RUN_TIMEOUT_MS: "1000",
+    }));
+    assert.equal(result.code, 124);
+    assert.match(result.stderr, /Feishu run failed: timed out after 1000ms/);
+  } finally {
+    await closeServer(modelServer);
   }
 });

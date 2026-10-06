@@ -81,6 +81,20 @@ export interface RunSummary {
   outcome: RunOutcome;
   exitCode: number | null;
   trigger: "manual" | "scheduled";
+  /** Last `Feishu run failed:` stderr line. Absent on older records. */
+  detail?: string;
+}
+
+const RUN_FAILURE_PREFIX = "Feishu run failed:";
+
+/** Last searchable failure line from a Print stderr log. */
+export function runFailureDetail(stderr: string): string | undefined {
+  let found: string | undefined;
+  for (const line of stderr.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith(RUN_FAILURE_PREFIX)) found = trimmed.slice(0, 300);
+  }
+  return found;
 }
 
 // ----------------------------------------------------------------------------
@@ -1180,7 +1194,8 @@ function validRunSummary(run: RunSummary | null): boolean {
     && (run.endedAt === null || (typeof run.endedAt === "string" && Number.isFinite(Date.parse(run.endedAt))))
     && ["completed", "failed", "timeout", "cancelled", "unknown"].includes(run.outcome)
     && ["manual", "scheduled"].includes(run.trigger)
-    && (run.exitCode === null || Number.isInteger(run.exitCode));
+    && (run.exitCode === null || Number.isInteger(run.exitCode))
+    && (run.detail === undefined || (typeof run.detail === "string" && run.detail.startsWith(RUN_FAILURE_PREFIX) && run.detail.length <= 300));
 }
 
 export function saveJob(root: string, job: JobRecord): void {

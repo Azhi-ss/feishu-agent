@@ -786,7 +786,12 @@ function jobSummary(root: string, job: JobRecord) {
     schedule: scheduleSummary(job.schedule),
     timeoutMinutes: job.timeoutMinutes,
     createdAt: job.createdAt,
-    latestRun: latest ? { outcome: latest.outcome, startedAt: latest.startedAt, trigger: latest.trigger } : null,
+    latestRun: latest ? {
+      outcome: latest.outcome,
+      startedAt: latest.startedAt,
+      trigger: latest.trigger,
+      ...(latest.detail ? { detail: latest.detail } : {}),
+    } : null,
     triggerRunning: trigger !== null,
     triggerPid: trigger?.pid ?? null,
   };

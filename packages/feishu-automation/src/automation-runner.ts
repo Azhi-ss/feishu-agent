@@ -10,7 +10,7 @@
 import { spawn } from "node:child_process";
 import { executable } from "./executable.js";
 import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,7 @@ import {
   mutateJobRecord,
   mutateOccurrence,
   nowMs,
+  runFailureDetail,
   saveJob,
   scheduleEligibilityNotice,
   stopGraceMs,
@@ -137,11 +138,13 @@ export function startAdmittedRun(
 
   const childEnv: NodeJS.ProcessEnv = { ...options.env ?? process.env };
   for (const key of SECRET_ENV) delete childEnv[key];
+  const timeoutMs = options.timeoutMsOverride ?? job.timeoutMinutes * 60000;
   Object.assign(childEnv, {
     HOME: home,
     FEISHU_UNATTENDED: "1",
     LARK_PROFILE: job.profile,
     PI_OFFLINE: "1",
+    FEISHU_RUN_TIMEOUT_MS: String(timeoutMs),
   });
 
   let stdoutFd: number | undefined;
@@ -214,7 +217,6 @@ export function startAdmittedRun(
     });
   });
 
-  const timeoutMs = options.timeoutMsOverride ?? job.timeoutMinutes * 60000;
   let timedOut = false;
   let killEscalation: NodeJS.Timeout | undefined;
   // Signal only this retained ChildProcess while its exit has not been observed.
@@ -294,6 +296,44 @@ export function settleScheduledOccurrence(
   }));
 }
 
+function readRunFailureDetail(workspace: Workspace, name: string, runId: string): string | undefined {
+  let text: string;
+  try { text = readFileSync(join(workspace.jobs, name, "runs", `${runId}.stderr.log`), "utf8"); }
+  catch { return undefined; } // missing or unreadable stderr: settlement still uses the exit code
+  return runFailureDetail(text);
+}
+
+/** Attach the stderr receipt. A child timeout line upgrades failed → timeout. */
+export function attachRunFailure(workspace: Workspace, name: string, summary: RunSummary): RunSummary {
+  if (summary.outcome !== "failed" && summary.outcome !== "timeout") return summary;
+  const detail = readRunFailureDetail(workspace, name, summary.runId);
+  if (!detail) return summary;
+  const outcome = summary.outcome === "failed" && detail.includes("timed out") ? "timeout" : summary.outcome;
+  return { ...summary, outcome, detail };
+}
+
+/**
+ * Fill an open run (no endedAt) from the stderr receipt. A settled record is
+ * left alone. Returns the summary it wrote, or undefined when there is nothing to add.
+ */
+export function recoverOpenRun(workspace: Workspace, name: string, run: RunSummary | undefined, runId: string, startedAt: string): RunSummary | undefined {
+  if (run?.endedAt) return undefined;
+  const detail = readRunFailureDetail(workspace, name, runId);
+  if (!detail) return undefined;
+  const outcome: RunOutcome = detail.includes("timed out") ? "timeout" : "failed";
+  const summary: RunSummary = {
+    runId,
+    startedAt: run?.startedAt ?? startedAt,
+    endedAt: new Date(nowMs()).toISOString(),
+    outcome,
+    exitCode: run?.exitCode ?? (outcome === "timeout" ? 124 : 1),
+    trigger: run?.trigger ?? "scheduled",
+    detail,
+  };
+  recordRunSummary(workspace, name, summary);
+  return summary;
+}
+
 /** Append a run summary while the caller still owns the per-job lock. */
 export function recordRunSummary(workspace: Workspace, name: string, summary: RunSummary): void {
   // Persist the durable result under the lifecycle lock while the run lock is
@@ -353,10 +393,10 @@ export async function runJobManual(
   process.off("SIGTERM", onInterrupt);
   options.signal?.removeEventListener("abort", onInterrupt);
 
-  recordRunSummary(workspace, job.name, {
+  recordRunSummary(workspace, job.name, attachRunFailure(workspace, job.name, {
     runId: admitted.runId, startedAt: admitted.startedAt, endedAt: new Date(nowMs()).toISOString(),
     outcome, exitCode, trigger: "manual",
-  });
+  }));
   admitted.release();
 
   let scheduleNotice: string;

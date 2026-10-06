@@ -287,6 +287,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu --session <id> -p <prompt>` 以 Print 模式续接当前 Project 分区内的精确会话，查找规则同 `feishu --session <id>`；ID 不存在时在调用模型前失败，不新建会话。不提供 `-c -p`、`-r -p`：同一 Project 的“最近会话”可能是用户自己的 Interactive 会话。
 - 每次 Print 运行在调用模型前向 stderr 输出一行 `Feishu Session: <id>`，超时或失败时也能据此检查或续接。
 - Print 退出码：`0` 完成，stdout 为最终回复；`3` 等待用户，stdout 为 `ask_user` 的问题与编号选项，或 stderr 为高危拦截的可操作报错（§11）；其他非零为失败。续接运行只依据本次运行新增的消息判定退出码，历史里的反问或拦截不影响新一轮。
+- 本轮新增的 Assistant 消息若 `stopReason` 为 `error` 且 `errorMessage` 非空，Print 在返回前向 stderr 追加一行 `Feishu run failed: <message>`（空白折叠，正文最多 240 字）。已有非零退出码保持不变，否则改为 1。`aborted` 的原文不改写。
 - `ask_user` 是 Print 专有的保留工具，参数为必填 `question` 与可选字符串数组 `options`；调用即以 `terminate` 结束本轮，不再请求模型。同一条模型回复里的其他工具不执行。用户的答复作为同一会话的下一条消息到达。Interactive 会话（含 `/reload` 之后）不暴露该工具。
 - `FEISHU_UNATTENDED=1` 运行同样可能以退出码 3 结束；Automation 按非零记为失败，不自动续接。
 - 两次 Print 之间不保留进程，会话文件就是 checkpoint。Host 只能原样转发用户的答复或确认，不得自拟批准（`skills/feishu-control/`）；用户随时可用 `feishu --session <id>` 在 TUI 接管。
@@ -429,6 +430,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 - 同任务至多一份，覆盖定时/手动竞争；到点仍有本任务运行则 skip、不排队、不结束后补跑，手动重复返回 already-running。
 - 同一 managed 工位最多两个不同任务并行，手动也占同一容量；其他 scheduled 工作等待但不延长窗口。等待的重复任务最多保留最新未开始一轮，派发前重查资格；过窗则重复 skip、一次性 expired，不建无界队列。
 - 默认执行时限十分钟，可按任务改，从实际启动而非排队计时。超时终止并记录 timeout，不自动重跑；确认所属进程退出后释放容量，不凭陈旧 PID 误杀无关进程。
+- 无人值守子进程另收 `FEISHU_RUN_TIMEOUT_MS`（runner 在 spawn 前写入，不是 CLI 旗标）。到点它自己写一行 `Feishu run failed: timed out after Nm` 并以 124 退出。监督者仍在时以其判定为准。监督者已不在且运行记录仍是 `endedAt: null` 时，恢复只读 `runs/<runId>.stderr.log` 的最后一行 `Feishu run failed:`，写入 `runs[].detail`（最长 300 字；没有该字段的旧记录仍可加载）。该行含 `timed out` 则记 timeout，否则记 failed。不向账本 PID 发信号。
 - 失败、超时、取消、结果不明均不自动整任务重试；后续正常重复日程保持 enabled。保留退出码、诊断、输出；unknown 不等于“没产生写入”，部分完成不回滚，手动重跑时提示可能重复。
 - runner 完成不是所有业务写入成功的证明；不把模型自称成功或缺失回执变成 exactly-once 保证。保留成功、失败、超时、取消、unknown、过期与 skip 的区别。
 - 本地版本化 JSON、任务文本与运行记录，原子更新、有限本地协调；记录足够的 occurrence/运行身份防止重启自动重新派发。坏记录/未知版本保留并报错，不清空证据或自动重启任务。
