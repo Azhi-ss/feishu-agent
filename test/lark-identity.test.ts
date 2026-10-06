@@ -17,7 +17,7 @@ test("Lark identity guidance is explicit and token-copy free", async () => {
   mkdirSync(home, { recursive: true }); mkdirSync(project, { recursive: true });
   const loader = new FeishuResourceLoader(home, project, "key"); await loader.reload();
   const prompt = loader.getSystemPrompt()!;
-  assert.match(prompt, /--as user/); assert.match(prompt, /--as bot/); assert.match(prompt, /--help or schema/); assert.match(prompt, /without copying tokens/);
+  assert.match(prompt, /--as user/); assert.match(prompt, /--as bot/); assert.match(prompt, /lark-cli skills read/); assert.match(prompt, /--help only when that skill does not name the command/); assert.match(prompt, /without copying tokens/);
   assert.equal(existsSync(join(home, "lark.json")), false);
 });
 
