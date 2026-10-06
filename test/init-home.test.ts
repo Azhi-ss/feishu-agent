@@ -15,6 +15,7 @@ test("init creates an idempotent private Home without overwriting choices", () =
   const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-")), ".feishu-agent");
   const first = initializeHome(agent, "alice");
   assert.equal(first.identity, "feishu:alice");
+  assert.match(readFileSync(join(agent, "SYSTEM.md"), "utf8"), /lark-cli skills read <name>/);
   const custom = "You are Feishu Agent. CUSTOM SYSTEM\n"; writeFileSync(join(agent, "SYSTEM.md"), custom);
   const settings = '{"defaultProvider":"fake","defaultModel":"one"}\n'; writeFileSync(join(agent, "settings.json"), settings);
   const second = initializeHome(agent, "bob");
@@ -24,6 +25,7 @@ test("init creates an idempotent private Home without overwriting choices", () =
   const reset = initializeHome(agent, "bob", { identity: true, system: true });
   assert.equal(reset.identity, "feishu:bob");
   assert.notEqual(readFileSync(join(agent, "SYSTEM.md"), "utf8"), custom);
+  assert.match(readFileSync(join(agent, "SYSTEM.md"), "utf8"), /lark-cli skills read <name>/);
   assert.doesNotMatch(readFileSync(join(agent, "mem0-config.json"), "utf8"), /apiKey/);
   assert.throws(() => initializeHome(join(agent, "bad"), ""), /explicit stable/);
 });

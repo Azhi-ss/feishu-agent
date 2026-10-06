@@ -10,8 +10,16 @@ import {
   scheduleEligibilityNotice,
   cronFirstAtOrAfter,
   cronLastAtOrBefore,
+  runFailureDetail,
   type CronSchedule,
 } from "../packages/feishu-automation/src/automation.js";
+
+test("run failure detail keeps the last receipt", () => {
+  assert.equal(runFailureDetail("noise\nFeishu run failed: Connection error.\n"), "Feishu run failed: Connection error.");
+  assert.equal(runFailureDetail("Feishu run failed: one\nFeishu run failed: timed out after 10m\n"), "Feishu run failed: timed out after 10m");
+  assert.equal(runFailureDetail("Connection error.\n"), undefined);
+  assert.equal(runFailureDetail(`Feishu run failed: ${"x".repeat(400)}`)?.length, 300);
+});
 
 test("parseDurationMinutes accepts positive minute/hour/day values and rejects the rest", () => {
   assert.equal(parseDurationMinutes("1m"), 1);

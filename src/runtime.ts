@@ -106,29 +106,66 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
   return runtime;
 }
 
+const RUN_FAILURE_PREFIX = "Feishu run failed:";
+
+/** Last assistant error in this turn, as one searchable stderr line. Aborts are left as Pi wrote them. */
+export function runFailureLine(messages: readonly object[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: string; stopReason?: string; errorMessage?: unknown };
+    if (message?.role !== "assistant" || message.stopReason !== "error" || typeof message.errorMessage !== "string") continue;
+    const text = message.errorMessage.replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    return `${RUN_FAILURE_PREFIX} ${text.slice(0, 240)}`;
+  }
+  return undefined;
+}
+
+/** Set by the automation runner. Not a CLI flag. Ignored unless this process is unattended. */
+function unattendedTimeoutMs(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  if (env.FEISHU_UNATTENDED !== "1") return undefined;
+  const raw = env.FEISHU_RUN_TIMEOUT_MS;
+  if (!raw || !/^[1-9][0-9]*$/.test(raw)) return undefined;
+  const ms = Number(raw);
+  return Number.isSafeInteger(ms) && ms <= 2_147_483_647 ? ms : undefined;
+}
+
 export async function runPrint(prompt: string, cwd: string, projectRoot: string, projectKey: string, agentHome: string, sessionId?: string): Promise<number> {
-  const runtime = await createRuntimeForMode(cwd, projectRoot, projectKey, agentHome, false, prompt, false, sessionId);
-  process.stderr.write(`Feishu Session: ${runtime.session.sessionManager.getSessionId()}\n`);
-  const history = runtime.session.state.messages.length;
-  const code = await runPrintMode(runtime, { mode: "text", initialMessage: prompt });
-  if (code) return code;
-  // runPrintMode disposes the runtime in its own finally (matching upstream main.js);
-  // a second dispose re-emits session_shutdown on an invalidated extension ctx.
-  // A continued session replays earlier turns; only this run's messages decide the exit code.
-  const turn = runtime.session.state.messages.slice(history);
-  const approvalError = turn.flatMap((message) => message.role === "toolResult" && message.isError ? message.content : [])
-    .find((part) => part.type === "text" && /High-risk lark-cli|Blocked lark-cli/.test(part.text));
-  if (approvalError?.type === "text") {
-    process.stderr.write(`${approvalError.text}\n`);
-    return 3;
+  const timeoutMs = unattendedTimeoutMs();
+  // The supervisor may already be gone (it never signals a PID from the ledger).
+  // This process has to notice its own deadline. unref so a finished run does not wait on it.
+  const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+    const label = timeoutMs >= 60_000 ? `${Math.round(timeoutMs / 60_000)}m` : `${timeoutMs}ms`;
+    process.stderr.write(`${RUN_FAILURE_PREFIX} timed out after ${label}\n`, () => process.exit(124));
+  }, timeoutMs);
+  timer?.unref();
+  try {
+    const runtime = await createRuntimeForMode(cwd, projectRoot, projectKey, agentHome, false, prompt, false, sessionId);
+    process.stderr.write(`Feishu Session: ${runtime.session.sessionManager.getSessionId()}\n`);
+    const history = runtime.session.state.messages.length;
+    const code = await runPrintMode(runtime, { mode: "text", initialMessage: prompt });
+    // runPrintMode disposes the runtime in its own finally (matching upstream main.js);
+    // a second dispose re-emits session_shutdown on an invalidated extension ctx.
+    // A continued session replays earlier turns; only this run's messages decide the exit code.
+    const turn = runtime.session.state.messages.slice(history);
+    const failure = runFailureLine(turn);
+    if (failure) process.stderr.write(`${failure}\n`);
+    if (code) return code;
+    const approvalError = turn.flatMap((message) => message.role === "toolResult" && message.isError ? message.content : [])
+      .find((part) => part.type === "text" && /High-risk lark-cli|Blocked lark-cli/.test(part.text));
+    if (approvalError?.type === "text") {
+      process.stderr.write(`${approvalError.text}\n`);
+      return 3;
+    }
+    const asked = turn.find((message) => message.role === "toolResult" && message.toolName === ASK_USER_TOOL && !message.isError);
+    if (asked?.role === "toolResult") {
+      const { question, options = [] } = asked.details as { question: string; options?: string[] };
+      process.stdout.write(`${[question, ...options.map((option, index) => `${index + 1}. ${option}`)].join("\n")}\n`);
+      return 3;
+    }
+    return failure ? 1 : 0;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  const asked = turn.find((message) => message.role === "toolResult" && message.toolName === ASK_USER_TOOL && !message.isError);
-  if (asked?.role === "toolResult") {
-    const { question, options = [] } = asked.details as { question: string; options?: string[] };
-    process.stdout.write(`${[question, ...options.map((option, index) => `${index + 1}. ${option}`)].join("\n")}\n`);
-    return 3;
-  }
-  return 0;
 }
 
 export async function runInteractive(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, selectSession = false, sessionId?: string): Promise<void> {
