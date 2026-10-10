@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-process.env.MEM0_TELEMETRY = "false";
 process.env.PI_CODING_AGENT_DIR ??= join(homedir(), ".feishu-agent");
 
 import { execFileSync } from "node:child_process";
@@ -37,7 +36,6 @@ function inspect(): void {
     contextFiles,
     skills: [],
     tools: CORE_TOOLS,
-    mem0Telemetry: process.env.MEM0_TELEMETRY,
     home: process.env.HOME,
     environmentMarker: process.env.FEISHU_TEST_MARKER,
     larkProfile: process.env.LARK_PROFILE,
@@ -45,15 +43,14 @@ function inspect(): void {
   }));
 }
 
-const MEM0_PACKAGE = "npm:@mem0/pi-agent-plugin@0.1.5";
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 type ThinkingLevel = typeof THINKING_LEVELS[number];
 
 const HELP = `Usage:
   feishu                         Start Interactive Feishu Runtime
   feishu -p <prompt>             Run one Print-mode turn
-  feishu init [--identity ID] [--model provider/model] [--thinking LEVEL]
-                 [--reset-identity] [--reset-model] [--reset-system]
+  feishu init [--model provider/model] [--thinking LEVEL]
+                 [--reset-model] [--reset-system]
                                   Initialize/reset explicit Feishu choices
   feishu install <source> [-l]   Install a Feishu Package
   feishu remove <source> [-l]    Remove a Feishu Package
@@ -63,6 +60,7 @@ const HELP = `Usage:
   feishu config [-l] set <source> <extensions|skills|prompts|themes> <on|off>
                                   Open or script Feishu Package resource settings
   feishu skills sync [--update]  Rebuild official Skills cache; --update also self-updates lark-cli first
+  feishu tasks refresh           Refresh the local list of your unfinished Feishu tasks
   feishu -r                      Select a session in this Feishu Project
   feishu -c                      Continue this Feishu Project's latest session
   feishu --session <id>          Resume an exact session in this Feishu Project
@@ -113,8 +111,8 @@ function normalizeAndValidateArgs(input: string[]): string[] {
       if (args.length !== 2 || !args[1] || args[1].startsWith("-")) fail("Print mode requires a prompt and accepts no extra arguments.");
       return args;
     case "init": {
-      const valueFlags = new Set(["--identity", "--model", "--thinking"]);
-      const resetFlags = new Set(["--reset-identity", "--reset-model", "--reset-system"]);
+      const valueFlags = new Set(["--model", "--thinking"]);
+      const resetFlags = new Set(["--reset-model", "--reset-system"]);
       const seen = new Set<string>();
       for (let index = 1; index < args.length; index++) {
         const flag = args[index];
@@ -151,29 +149,25 @@ function normalizeAndValidateArgs(input: string[]): string[] {
     case "skills":
       if (args[1] !== "sync" || args.length > 3 || (args.length === 3 && args[2] !== "--update")) fail("Usage: feishu skills sync [--update]");
       return args;
+    case "tasks":
+      if (args[1] !== "refresh" || args.length !== 2) fail("Usage: feishu tasks refresh");
+      return args;
     default:
       if (args[0].startsWith("-")) fail(`Unsupported option: ${args[0]}`);
       fail(`Unknown command: ${args[0]}`);
   }
 }
 
-async function promptInitChoices(home: string, agentHome: string, identity: string | undefined, model: string | undefined, resetIdentity: boolean, resetModel: boolean): Promise<{ identity: string; model?: string }> {
-  const { existingIdentity } = await import("./init.js");
-  const savedIdentity = existingIdentity(agentHome);
+async function promptInitChoices(home: string, agentHome: string, model: string | undefined, resetModel: boolean): Promise<{ model?: string }> {
   const settings = existsSync(join(agentHome, "settings.json")) ? JSON.parse(readFileSync(join(agentHome, "settings.json"), "utf8") || "{}") as { defaultProvider?: string; defaultModel?: string } : {};
   const savedModel = settings.defaultProvider && settings.defaultModel ? `${settings.defaultProvider}/${settings.defaultModel}` : undefined;
-  if (!resetIdentity && savedIdentity) identity = savedIdentity;
   if (!resetModel && savedModel) model = savedModel;
-  if (identity && model) return { identity, model };
+  if (model) return { model };
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    if (!identity) fail("Fresh unattended feishu init requires --identity <stable-id> or FEISHU_MEMORY_IDENTITY.");
-    if (!model) fail("Select an authenticated model explicitly with --model provider/model; no persistent state was created.");
-    return { identity, model };
+    fail("Select an authenticated model explicitly with --model provider/model; no persistent state was created.");
   }
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    if (!identity) identity = (await prompt.question("Stable Memory Identity: ")).trim();
-    if (!identity) fail("Init requires a non-empty stable Memory Identity.");
     if (!model) {
       const piHome = join(home, ".pi", "agent");
       const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
@@ -185,7 +179,7 @@ async function promptInitChoices(home: string, agentHome: string, identity: stri
       if (!Number.isInteger(selected) || selected < 1 || selected > models.length) fail("Select a valid authenticated model number.");
       model = models[selected - 1];
     }
-    return { identity, model };
+    return { model };
   } finally { prompt.close(); }
 }
 
@@ -196,18 +190,15 @@ else {
   else if (args[0] === "init") {
     const home = realpathSync(homedir());
     const agentHome = join(home, ".feishu-agent");
-    const identityIndex = args.indexOf("--identity");
     const modelIndex = args.indexOf("--model");
     const choices = await promptInitChoices(
       home,
       agentHome,
-      identityIndex >= 0 ? args[identityIndex + 1] : process.env.FEISHU_MEMORY_IDENTITY,
       modelIndex >= 0 ? args[modelIndex + 1] : undefined,
-      args.includes("--reset-identity"),
       args.includes("--reset-model"),
     );
     const { initializeHome } = await import("./init.js");
-    const result = initializeHome(agentHome, choices.identity, { identity: args.includes("--reset-identity"), system: args.includes("--reset-system") });
+    initializeHome(agentHome, { system: args.includes("--reset-system") });
     const thinkingIndex = args.indexOf("--thinking");
     const thinking = thinkingIndex >= 0 ? args[thinkingIndex + 1] as ThinkingLevel : undefined;
     const { checkReadiness } = await import("./readiness.js");
@@ -216,9 +207,6 @@ else {
     const root = projectRoot(realpathSync(process.cwd()));
     const { packageManager } = await import("./packages.js");
     const manager = packageManager(agentHome, root, projectKeyFor(root));
-    if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && entry.source === MEM0_PACKAGE && entry.installedPath)) {
-      await manager.installAndPersist(MEM0_PACKAGE);
-    }
     const { isRemotePackageConfigured, REMOTE_PACKAGE_SOURCE } = await import("./remote-package.js");
     if (!manager.listConfiguredPackages().some((entry) => entry.scope === "user" && isRemotePackageConfigured(entry, agentHome))) {
       await manager.installAndPersist(REMOTE_PACKAGE_SOURCE);
@@ -229,7 +217,17 @@ else {
       if (!existsSync(join(skills.cacheDir, ".success"))) fail(skills.warning);
       process.stderr.write(`Startup Warning: ${skills.warning}\n`);
     }
-    process.stdout.write(`Feishu Agent Home: ${agentHome}\nMemory Identity: ${result.identity}\nModel: ${readiness.model}\nMem0 Package: ready\nRemote Package: ready\nOfficial Skills: ${skills.version}\nLark doctor: ${readiness.doctor}\nMemory: ${readiness.memory}\n`);
+    process.stdout.write(`Feishu Agent Home: ${agentHome}\nModel: ${readiness.model}\nRemote Package: ready\nOfficial Skills: ${skills.version}\nLark doctor: ${readiness.doctor}\n`);
+  }
+  else if (args[0] === "tasks") {
+    const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    try {
+      const { refreshTaskList } = await import("./tasks.js");
+      const count = refreshTaskList(agentHome);
+      process.stdout.write(`Refreshed ${count} unfinished Feishu task${count === 1 ? "" : "s"}.\n`);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : "Could not refresh Feishu tasks. The previous list was kept.");
+    }
   }
   else if (args[0] === "skills" && args[1] === "sync") {
     const update = args.length === 3;

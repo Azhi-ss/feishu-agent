@@ -83,7 +83,7 @@ and update across projects?**
 - **Skill layer**: official `lark-*` Skills, `/find-skill`, and the host
   `skills/feishu-control/` distribution resource. Skill-bundled scripts are
   real supply-chain surface even though they are "just Markdown + scripts".
-- **Package layer**: pinned `@mem0/pi-agent-plugin`, the allow-listed
+- **Package layer**: the allow-listed
   `@azhi-ss/feishu-remote`, and resource filtering in `src/resources.ts`.
   Pinning and allow-listing are provenance controls, not sandboxes — the
   AGENTS.md isolation boundary says so in user-facing terms.

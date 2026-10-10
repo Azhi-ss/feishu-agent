@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, lstatSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,12 +40,12 @@ test("init recovers from interrupted package installation and completes only mis
   await new Promise<void>((resolve) => mem0Server.listen(0, "127.0.0.1", resolve));
   const address = mem0Server.address(); assert(address && typeof address !== "string"); env.MEM0_API_HOST = `http://127.0.0.1:${address.port}`;
   try {
-    const first = await run(project, env, ["init", "--identity", "alice", "--model", "fake/fake-model"]); assert.notEqual(first.code, 0); assert.match(first.stderr, /interrupted/);
+    const first = await run(project, env, ["init", "--model", "fake/fake-model"]); assert.notEqual(first.code, 0); assert.match(first.stderr, /interrupted/);
     const systemBefore = readFileSync(join(home, ".feishu-agent", "SYSTEM.md"));
-    const second = await run(project, env, ["init", "--identity", "bob", "--model", "fake/fake-model"]); assert.equal(second.code, 0, second.stderr);
+    const second = await run(project, env, ["init", "--model", "fake/fake-model"]); assert.equal(second.code, 0, second.stderr);
     assert.deepEqual(readFileSync(join(home, ".feishu-agent", "SYSTEM.md")), systemBefore);
-    assert.match(readFileSync(join(home, ".feishu-agent", "mem0-config.json"), "utf8"), /feishu:alice/);
-    const settings = JSON.parse(readFileSync(join(home, ".feishu-agent", "settings.json"), "utf8")); assert.equal(settings.packages.filter((entry: string) => entry.includes("@mem0/pi-agent-plugin")).length, 1); assert.deepEqual(settings.packages.filter((entry: string) => entry.includes("@azhi-ss/feishu-remote")), ["npm:@azhi-ss/feishu-remote@0.1.0"]);
+    assert.equal(existsSync(join(home, ".feishu-agent", "mem0-config.json")), false);
+    const settings = JSON.parse(readFileSync(join(home, ".feishu-agent", "settings.json"), "utf8")); assert.equal(settings.packages.filter((entry: string) => entry.includes("@mem0/")).length, 0); assert.deepEqual(settings.packages.filter((entry: string) => entry.includes("@azhi-ss/feishu-remote")), ["npm:@azhi-ss/feishu-remote@0.1.0"]);
   } finally { mem0Server.close(); }
 });
 
@@ -70,12 +70,12 @@ test("fresh HOME CLI init is idempotent and immediately ready for Print without 
     const firstHome = join(home, ".feishu-agent");
     mkdirSync(firstHome, { recursive: true });
     writeFileSync(join(firstHome, "settings.json"), JSON.stringify({ npmCommand: [join(bin, "fake-npm")] }));
-    const first = await run(project, env, ["init", "--identity", "alice", "--model", "fake/fake-model", "--thinking", "medium"]);
-    assert.equal(first.code, 0, first.stderr); assert.match(first.stdout, /Memory Identity: feishu:alice/); assert.match(first.stdout, /Official Skills: lark-cli 9\.9\.9/); assert.doesNotMatch(first.stdout + first.stderr, new RegExp(secret));
-    const settings = JSON.parse(readFileSync(join(home, ".feishu-agent", "settings.json"), "utf8")); assert.equal(settings.defaultThinkingLevel, "medium"); assert.equal(settings.packages.filter((entry: string) => entry.includes("@mem0/pi-agent-plugin")).length, 1); assert.deepEqual(settings.packages.filter((entry: string) => entry.includes("@azhi-ss/feishu-remote")), ["npm:@azhi-ss/feishu-remote@0.1.0"]);
+    const first = await run(project, env, ["init", "--model", "fake/fake-model", "--thinking", "medium"]);
+    assert.equal(first.code, 0, first.stderr); assert.doesNotMatch(first.stdout, /Memory Identity:/); assert.match(first.stdout, /Official Skills: lark-cli 9\.9\.9/); assert.doesNotMatch(first.stdout + first.stderr, new RegExp(secret));
+    const settings = JSON.parse(readFileSync(join(home, ".feishu-agent", "settings.json"), "utf8")); assert.equal(settings.defaultThinkingLevel, "medium"); assert.equal(settings.packages.filter((entry: string) => entry.includes("@mem0/")).length, 0); assert.deepEqual(settings.packages.filter((entry: string) => entry.includes("@azhi-ss/feishu-remote")), ["npm:@azhi-ss/feishu-remote@0.1.0"]);
     const print = await run(project, env, ["-p", "ping"]); assert.equal(print.code, 0, print.stderr); assert.match(print.stdout, /pong/);
-    const second = await run(project, env, ["init", "--identity", "bob", "--model", "fake/fake-model"]); assert.equal(second.code, 0, second.stderr); assert.match(second.stdout, /Memory Identity: feishu:alice/);
-    const rerunSettings = JSON.parse(readFileSync(join(home, ".feishu-agent", "settings.json"), "utf8")); assert.equal(rerunSettings.packages.filter((entry: string) => entry.includes("@mem0/pi-agent-plugin")).length, 1);
+    const second = await run(project, env, ["init", "--model", "fake/fake-model"]); assert.equal(second.code, 0, second.stderr); assert.match(second.stdout, /Model: fake\/fake-model/);
+    const rerunSettings = JSON.parse(readFileSync(join(home, ".feishu-agent", "settings.json"), "utf8")); assert.equal(rerunSettings.packages.filter((entry: string) => entry.includes("@mem0/")).length, 0);
     assert.equal(statSync(join(project, ".pi"), { throwIfNoEntry: false }), undefined);
     for (const path of files(join(home, ".feishu-agent"))) assert.doesNotMatch(readFileSync(path).toString(), new RegExp(secret), path);
   } finally { modelServer.close(); mem0Server.close(); }

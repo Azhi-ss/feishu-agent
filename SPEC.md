@@ -12,7 +12,7 @@
 
 Feishu Agent 使用独立的 `~/.feishu-agent/` 作为 Agent Home，自定义 ResourceLoader 只加载明确允许的 Feishu 资源。模型提供商凭证只读复用普通 Pi 的认证文件，但默认模型、设置、包、Skills、提示词、会话和长期记忆全部隔离。
 
-长期记忆使用 `@mem0/pi-agent-plugin`。`feishu init` 自动安装和配置该包，启用项目级自动学习；自动捕获用户消息和 Assistant 文本回复，不捕获原始工具结果。Mem0 不可用时 Feishu Agent 降级运行而不是拒绝启动。
+Feishu 不内置 Mem0。`feishu init` 不采集记忆身份，不检查 `MEM0_API_KEY`，也不安装记忆包。用户显式安装的 `pi-hermes-memory` 会加载；它的文件跟 `PI_CODING_AGENT_DIR`（`~/.feishu-agent`）走，不写 `~/.pi/agent`。已安装的 `@mem0/pi-agent-plugin` 不加载。TUI 在该扩展已加载时显示 `● mem`，否则显示 `○ mem off`。
 
 Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash 直接调用现有 `lark-cli`。现有 `lark-cli` Profile 与登录态继续复用，不复制飞书 Token。
 
@@ -21,24 +21,12 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 1. 作为飞书重度用户，我希望运行 `feishu` 启动专用助手，从而不把普通 Coding Agent 的能力和记忆混入飞书工作。
 2. 作为现有 Pi 用户，我希望 Feishu Agent 复用 Pi SDK 和 TUI，从而继续获得模型切换、会话树、压缩和终端交互体验。
 3. 作为维护者，我希望 Feishu Agent 是薄壳而非 Pi Fork，从而可以跟随 Pi 升级而不长期合并上游源码。
-4. 作为用户，我希望 `~/.feishu-agent/` 成为独立 Agent Home，从而隔离设置、包、Skills、提示词、会话和 Mem0 状态。
+4. 作为用户，我希望 `~/.feishu-agent/` 成为独立 Agent Home，从而隔离设置、包、Skills、提示词和会话。
 5. 作为用户，我希望 Feishu Agent 只读复用 `~/.pi/agent/auth.json` 和模型目录，从而无需重复登录模型提供商。
 6. 作为用户，我希望 Feishu Agent 拥有独立默认模型，从而修改 Feishu 偏好时不影响普通 Pi。
 7. 作为新设备用户，我希望 `feishu init` 展示已认证模型并让我选择默认模型，从而完成可预测的首次配置。
 8. 作为用户，我希望 Feishu Agent 禁用 `/login` 和 `/logout`，从而不会意外修改普通 Pi 共用的认证状态。
-9. 作为用户，我希望通过 `feishu init` 显式设置稳定的 Mem0 Identity，从而跨设备共享同一 Feishu Agent 记忆。
-10. 作为用户，我希望 Mem0 Identity 使用独立的 `feishu:<identity>` 命名空间，从而普通 Pi 无法召回 Feishu Agent 的云端记忆。
-11. 作为用户，我希望 `MEM0_API_KEY` 只从环境变量读取，从而密钥不写入本地配置文件。
-12. 作为用户，我希望 `feishu init` 验证 `MEM0_API_KEY` 可用但不显示其值，从而兼顾可用性和保密性。
-13. 作为用户，我希望 Mem0 自动学习每轮用户消息和 Assistant 文本回复，从而长期积累偏好与项目知识。
-14. 作为用户，我希望自动学习固定为 Project Scope，从而不同项目的飞书内容不会互相召回。
-15. 作为用户，我希望跨项目偏好只能显式写入 Global Scope，从而全局知识不会由普通会话自动扩散。
-16. 作为用户，我希望原始 `read`、Bash 和 `lark-cli` 工具输出不被自动上传 Mem0，从而减少飞书正文、邮件和逐字稿的暴露面。
-17. 作为用户，我希望 Mem0 暂时不可用时仍可操作飞书和本地文件，从而长期记忆不是启动的单点故障。
-18. 作为用户，我希望启动时明确看到 Mem0 降级告警，从而不会误以为本次会话仍在学习和召回。
-19. 作为隐私敏感用户，我希望 Feishu Agent 强制设置 `MEM0_TELEMETRY=false`，从而关闭 Mem0 插件的 PostHog 使用遥测。
-20. 作为用户，我希望 `feishu init` 自动安装 `@mem0/pi-agent-plugin`，从而不需要额外的手动安装步骤。
-21. 作为用户，我希望运行 `feishu install npm:@mem0/pi-agent-plugin` 安装全局 Feishu 包，从而命令语义与 Pi 熟悉习惯一致。
+9. 作为用户，我希望长期记忆只来自显式安装的 `pi-hermes-memory`，文件在 Feishu Agent Home，从而不再使用 Mem0，也不把记忆写进 `~/.pi/agent`。编号 10–21 随 Mem0 一并移除，其后编号保持不变。
 22. 作为项目维护者，我希望运行 `feishu install -l <package>` 安装项目级包，从而项目能力可随项目配置管理。
 23. 作为用户，我希望 `feishu list`、`remove`、`update --extensions` 和 `config` 管理 Feishu 包，从而不必使用普通 `pi` 修改它们。
 24. 作为用户，我希望普通 `pi list` 看不到 Feishu Agent 的安装记录，从而两个 Agent 的包空间保持隔离。
@@ -72,7 +60,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 51. 作为用户，我希望 Bash 能运行现有项目工具链和 `lark-cli`，从而无需额外的专用 CLI 包装工具。
 52. 作为用户，我希望 Agent 可以读取项目代码、Git 历史、实验记录和进展，从而基于真实项目状态生成飞书内容。
 53. 作为用户，我希望 Agent 可以修改直接服务于飞书交付的草稿、XML、Markdown 和辅助脚本，从而完成端到端工作流。
-54. 作为用户，我希望与飞书无关的普通开发请求被转交普通 `pi`，从而 Feishu Mem0 不学习大量无关编码内容。
+54. 作为用户，我希望与飞书无关的普通开发请求被转交普通 `pi`，从而飞书会话不堆进无关编码内容。
 55. 作为用户，我希望个人飞书资源操作默认显式使用 `--as user`，从而调用者身份明确。
 56. 作为用户，我希望只有在我要求或接口强制时使用 `--as bot`，从而不会悄悄切换操作者。
 57. 作为用户，我希望 Feishu Agent 复用已有 `lark-cli` Profile 和登录态，从而不需要重复飞书授权。
@@ -81,7 +69,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 60. 作为用户，我希望明确请求某个准确的高风险飞书操作时，Agent 可以直接携带 `--yes`，从而不重复询问同一意图。
 61. 作为用户，我希望目标、身份或影响范围不明确时仍停下确认，从而破坏性意图不能被推断。
 62. 作为用户，我希望一次高风险批准只适用于该准确操作，从而不能扩展成其他删除或撤回动作。
-63. 作为用户，我希望 Feishu Project 以 Git Root 识别，从而从仓库任意子目录启动都共享配置、Skills、会话与 Mem0 Scope。
+63. 作为用户，我希望 Feishu Project 以 Git Root 识别，从而从仓库任意子目录启动都共享配置、Skills 与会话。
 64. 作为非 Git 目录用户，我希望启动目录回退为 Feishu Project，从而仍能正常使用专用 Agent。
 65. 作为用户，我希望运行时工作目录保持 `feishu` 的启动目录，从而相对路径符合当前终端位置。
 66. 作为用户，我希望项目身份和运行时工作目录分离，从而 Monorepo 可共享项目资源但保留子目录操作上下文。
@@ -95,12 +83,13 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 74. 作为用户，我希望首版不包含 JSON 和 RPC 模式，从而实现范围保持最小。
 85. 作为通过 Host Agent 委派飞书任务的用户，我希望 `feishu --session <id> -p <prompt>` 在当前 Project 分区内续接同一个会话，且每次 Print 运行都在 stderr 报告会话 ID，从而同一件事可以多轮迭代（改稿、确认后再执行）而不丢上下文。
 86. 作为通过 Host Agent 委派飞书任务的用户，我希望 Print 模式下飞书 Agent 缺少必要信息、或高危操作需要我确认时以退出码 3 结束并给出问题，从而 Host 能区分“做完了”和“在等我回答”，拿到我的答复后用同一会话续接。
+87. 作为用户，我希望 TUI 横幅在 `feishuStartup.sections` 包含 `tasks` 时列出分配给我且未完成的飞书任务名字，从而打开助手就能看到待办；名单只由我显式刷新，启动不被任务请求拖住。
 75. 作为用户，我希望 `/share` 被提交前拦截，从而不能误把飞书会话上传为 GitHub Gist。
 76. 作为用户，我希望 `/import` 被提交前拦截，从而外部会话不能污染 Feishu 会话和自动记忆。
 77. 作为用户，我接受禁用命令仍可能出现在 Pi 原生自动补全中，从而无需为此 Fork 或重写整套 TUI。
 78. 作为用户，我希望本地 `/export` 仍可用，从而可以人工检查和脱敏后再处理会话。
 79. 作为用户，我希望 `/new`、`/resume`、`/tree`、`/fork`、`/clone` 和 `/compact` 仍可用，从而保留 Pi 的本地会话能力。
-80. 作为用户，我希望 `feishu init` 创建 Agent Home、系统提示词、默认配置、Mem0 设置和 Skills 缓存，从而一次初始化即可使用。
+80. 作为用户，我希望 `feishu init` 创建 Agent Home、系统提示词、默认配置和 Skills 缓存，从而一次初始化即可使用。
 81. 作为用户，我希望 `feishu init` 执行 `lark-cli doctor`，从而提前发现飞书配置或连接问题。
 82. 作为用户，我希望初始化检查复用的 Pi 模型认证，从而在进入 TUI 前发现无可用模型。
 83. 作为用户，我希望初始化可重复执行且不会覆盖已有身份、模型和自定义系统提示词，除非我明确选择重置，从而配置不会意外丢失。
@@ -135,7 +124,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 ### 4. Project and cwd model
 
 - Feishu Project 优先使用 `git rev-parse --show-toplevel`；失败时使用启动目录。
-- Project Root 用于项目 Settings、Packages、Skills、项目说明和 Session 分区。Mem0 `app_id` 不随 Project Root 变化：自动记忆按人隔离，所有 Feishu Project 与机器共用固定桶 `feishu`（配合稳定用户 `feishu:<identity>`，见 issue #35）；Session 分区与项目 Package 仍按 Project Root 路径隔离。
+- Project Root 用于项目 Settings、Packages、Skills、项目说明和 Session 分区。Session 分区与项目 Package 按 Project Root 路径隔离。
 - Runtime CWD 保持用户启动 `feishu` 时的目录；文件工具与 Bash 相对路径基于该目录。
 - 从会话池恢复会话时，默认采用当前启动目录作为本次 Runtime CWD，并对“会话原创建目录与当前目录不同”显示提示。该默认值闭合了 Grilling 中最后一个非阻塞遗漏，并保持“启动目录优先”的既有原则。
 - Session Header 仍保留原创建目录用于审计；恢复时不删除或篡改历史值。
@@ -256,18 +245,11 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 ### 12. Long-term memory
 
-- 默认安装 `@mem0/pi-agent-plugin`，不自研 Memory Backend。
-- 配置：`autoCapture=true`、`defaultScope=project`、`contextInjection=true`。
-- `MEM0_API_KEY` 只从进程环境读取，不写入文件、不打印、不进入日志或 Session。
-- `feishu init` 显式采集稳定身份并写成 `feishu:<identity>`；运行时强制该 `userId`，不允许外部 `MEM0_USER_ID` 覆盖造成串库。
-- 自动捕获采用插件默认语义：仅用户消息和 Assistant 文本回复，不包含 Tool Result。
-- 自动捕获固定 Project Scope；Global Memory 只能由显式 Memory 命令或 Tool Action 写入。
-- 强制为 Feishu 进程设置 `MEM0_TELEMETRY=false`。
-- 启动健康检查超时默认 5 秒，环境变量 `MEM0_HEALTH_TIMEOUT_MS` 可覆盖；该预算同时是网络不可用时启动被阻塞的上限。
-- Mem0 加载、健康检查、召回或捕获失败时产生显式 Warning，但不得使 Runtime 创建失败。
-- 启动加载与健康检查失败仍是整场降级（不挂载记忆扩展）。运行期召回/捕获/Dream 失败是暂时降级：冷却期（默认 5 分钟）内跳过全部记忆调用，冷却结束后在轮次边界用真实调用探测，成功即恢复状态与召回/捕获，失败重新计时；其他工具始终可用。
-- `FEISHU_UNATTENDED=1` 的无人值守进程不注册 Mem0 扩展（无 Recall、Capture、Dream，且不需要 API key）；见 §16。
-- 不修改第三方包源码；升级继续使用原始 npm 包。
+- 不内置 Mem0，不采集记忆身份，不读取 `MEM0_API_KEY`，不向 Mem0 发请求。`feishu init` 不安装记忆包。
+- 显式安装的 `pi-hermes-memory` 由包加载器加载。存储根目录是 `PI_CODING_AGENT_DIR`（默认 `~/.feishu-agent`）：`pi-hermes-memory/`、`projects-memory/`、`sessions/`、`hermes-memory-config.json`。插件文档里的 `~/.pi/agent` 不使用。
+- 已安装的 `@mem0/pi-agent-plugin` 不加载。
+- TUI 状态栏：该扩展已加载时显示 `● mem`，否则 `○ mem off`。Print 模式不画状态栏。
+- 无人值守进程不依赖记忆；个性化写在工位说明和任务文件里。见 §16。
 
 ### 13. Session storage and commands
 
@@ -294,21 +276,15 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 ### 14. Initialization
 
-- `feishu init` 是幂等引导流程，负责：
-  1. 创建 Agent Home 和必要子目录；
-  2. 初始化默认 `SYSTEM.md`；
-  3. 要求用户显式输入稳定 Memory Identity；
-  4. 检查 `MEM0_API_KEY` 是否存在并验证连接，但不显示值；
-  5. 自动安装 `@mem0/pi-agent-plugin`；
-  6. 自动安装 Feishu Remote Package（CLI 安装根下的绝对路径，禁止依赖用户 cwd 的相对路径）；
-  7. 写入非敏感 Mem0 配置；
-  8. 写入独立 Feishu Settings 和默认模型；
-  9. 强制关闭 Mem0 Telemetry；
-  10. 同步官方 Skills；
-  11. 执行 `lark-cli doctor`；
-  12. 验证至少一个模型凭证可用。
+- `feishu init` 是幂等引导流程，顺序如下：
+  1. 选定已认证模型；
+  2. 创建 Agent Home、必要子目录、默认 `SYSTEM.md` 和默认私有 Skills；缺失时写入只含主题的 Settings；
+  3. 验证至少一个模型凭证可用，并在缺失时写入默认模型与思考等级；
+  4. 执行 `lark-cli doctor`；
+  5. 自动安装 Feishu Remote Package（CLI 安装根下的绝对路径，禁止依赖用户 cwd 的相对路径）；
+  6. 同步官方 Skills。
 - 已存在配置不得被静默覆盖；重新执行时显示当前值并只补齐缺失项。
-- 重置 Identity、默认模型或 `SYSTEM.md` 必须使用显式重置选项。
+- 重置默认模型或 `SYSTEM.md` 必须使用显式重置选项。
 
 ### 15. CLI surface
 
@@ -323,6 +299,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu update [source|--extensions]`
 - `feishu config`
 - `feishu skills sync [--update]`（`--update` 先显式 `lark-cli update` 再按新版本重建缓存；仅显式调用才联网）
+- `feishu tasks refresh`（用户身份拉取分配给自己且未完成的任务，写入 Agent Home 本地名单；失败保留上一份）
 - 本体不再提供 `feishu automation` 子命令；可选 `@azhi-ss/feishu-automation` Package 提供独立 `feishu-automation` CLI 和 Skill（§16.5）。
 - `feishu -c`
 - `feishu -r`
@@ -333,6 +310,14 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/find-skill` 属于 Runtime 内的交互命令，不新增顶层 `feishu` 参数。
 
+### 15.1 未完成任务名单
+
+- `feishu tasks refresh` 执行 `lark-cli task +get-my-tasks --complete=false --as user --page-all`，只把任务名字和截止日期写入 `~/.feishu-agent/tasks.json`。不写入正文、负责人、提醒、子任务或本次新增了哪些任务。已完成任务不写入。成功但没有未完成任务时写入空名单。
+- 失败（Agent Home 不存在、找不到 `lark-cli`、命令非零、输出不是用户身份的任务列表）不覆盖已有文件，stderr 说明下一步，进程非零退出。
+- `feishuStartup.sections` 含 `tasks` 且名单非空时，横幅增加 Tasks 段。每行只有名字；有截止日期时后接短日期（当年 `M/D`，跨年 `YYYY/M/D`）。全天截止按 UTC 日历日，其余按本地日历日。排序：过期、今天到期、未来日期、无日期。不超过 5 条时逐条显示。超过 5 条时整段仍是 5 行：前 4 个名字，最后一行 `+N`（N 为未显示的条数）。
+- 未设置 `feishuStartup`，或 `sections` 省略时，默认段不含 `tasks`。名单缺失、为空或损坏时不显示 Tasks 段，TUI 仍可使用。
+- 启动、`/new`、`/reload` 只读这份名单，不调用 `lark-cli task`，也不为任务访问网络。
+
 ### 16. Unattended Automation
 
 术语见根目录 `CONTEXT.md` 的「Unattended Automation」词条；架构取舍见 ADR-0002、ADR-0003 修订与 ADR-0005。§16.2–16.4 保留已有 Briefing 部署及独立 Sweep 里程碑；新跨平台管理能力以 §16.5 为准，不隐式迁移或启用这些旧任务。
@@ -340,7 +325,7 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
 #### 16.1 形态
 
 - 唯一常驻的是与模型会话分离的 Trigger；既有 Briefing 使用外部系统定时器，新的管理能力使用独立应用级调度进程。每次自动化是一个全新的短命 `feishu -p` print run，跑完即退，不保留模型上下文。
-- 无人运行设置 `FEISHU_UNATTENDED=1`，不注册 Mem0 扩展（无召回、捕获或 dream），不需要 `MEM0_API_KEY`；个性化与任务上下文写在工位说明和任务文件中，不依赖历史会话。
+- 无人运行设置 `FEISHU_UNATTENDED=1`。飞书没有长期记忆，个性化与任务上下文写在工位说明和任务文件中，不依赖历史会话。
 - 无人运行从独立非 git Automation Workspace 启动，位于 Agent Home 之外。旧 Briefing 工位、策略与制品保持不动；新任务使用独立 managed 工位。会话继续按工位路径分区；任务迁移不意味着迁移凭证、会话或自动接力。
 - Trigger 不持有模型会话、不将密钥写入服务配置；每次执行只读复用模型认证，lark-cli 自管登录态。普通 Interactive/Print/init 不隐式安装、启动或等待 Trigger，也不增加调度相关网络请求。
 - 旧 Briefing 系统单元仍是部署制品；新 `feishu automation` 管理面列入 §15，不再沿用「一律不增加 CLI」或 Linux-only 的限制。
@@ -396,7 +381,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 
 - 下文历史 `feishu automation <verb>` 均由 `feishu-automation <verb>` 替代；所有既有 flags、确认、任务格式和日程/运行合同保留。`feishu-automation --help` 提供完整参数说明。
 - 本体 Interactive/Print/init 不包含调度管理、IPC admission 或自动化 Skill 安装；保留通用 `FEISHU_UNATTENDED=1` 无记忆 Print 执行。Package 自己的 worker 完成 admission 后通过 PATH 调用 `feishu -p <prompt>`，绝不调用普通 Pi。后台服务显式解析所需可执行路径，不复制秘密环境。
-- Package 显式安装不等于启用服务；Skill 使用随包 CLI，不假设 npm 全局 bin 可用。安装、移除复用现有 `feishu install/remove`，服务必须先显式 stop 再移除包。Remote/Mem0 安装策略本轮不变。
+- Package 显式安装不等于启用服务；Skill 使用随包 CLI，不假设 npm 全局 bin 可用。安装、移除复用现有 `feishu install/remove`，服务必须先显式 stop 再移除包。Remote 仍由 `feishu init` 自动安装。`feishu init` 不安装记忆包。已安装的 `pi-hermes-memory` 会加载；`@mem0/pi-agent-plugin` 不加载。
 - 原 `~/feishu-jobs` 记录与旧 `~/feishu-automation` Briefing 文件保留；不自动迁移、启动或重放。旧服务停用后保留可恢复文件；旧私有 automation Skill 如存在，先归档再移出加载目录，不覆盖用户修改。升级/init 不擅自清理其他用户的运行时资料。
 
 **状态：PRD [#38](https://github.com/Azhi-ss/feishu-agent/issues/38) 的 #39–#44 六个分片已交付，并通过共享离线 macOS/Linux × Node 22/24 验收（提交 `a430a86`，[CI 35186457536](https://github.com/Azhi-ss/feishu-agent/actions/runs/35186457536) 六项全绿）。#39 提供一次性任务创建/查看/手动运行，#40 增加显式前台 `serve`、两小时默认窗口、持久化消费与重启恢复，#41 增加数字五字段 cron 重复与固定间隔（显式时区、DST 跳过/重叠只算一次、latest-only 补跑、同任务 overlap 跳过）；#42 已提供生命周期编辑，#43 增加显式 launchd/user-systemd `start/stop/status` 托管同一 `serve`；#44 补齐私有 automation Skill 的完整计划→确认→创建/编辑回执及管理流程，复用默认安装器，真实 CLI/fake 模型覆盖交互确认与手动/定时 Print；未部署真实服务或迁移旧任务。** 本节取代旧 systemd-only 管理草案（#37、ADR-0004）；保留 ADR-0002 的短命无记忆执行，采用 ADR-0005 的独立 Trigger 和 ADR-0003 修订的提示词约束。完整 PRD 与用户故事见[跨平台 Automation 规格](docs/designs/cross-platform-automation-spec.md)。
@@ -574,7 +559,12 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
     - 无 `lark-cli` 配置时环境变量身份可用；坏配置不回退环境变量。
     - 允许名单包装保留 `/remote`，其他包装同名命令被剥掉。
 
-15. **Automation**
+15. **Unfinished task list**
+    - `feishu tasks refresh` 以用户身份拉取未完成任务并只写入名字与截止日期；失败不覆盖已有 `tasks.json`，stderr 可操作。
+    - 横幅仅在 `feishuStartup.sections` 含 `tasks` 且名单非空时显示；排序为过期、今天、未来、无日期；超过 5 条时为 4 个名字加 `+N`，整段 5 行；全天日期按 UTC 日历日。
+    - 启动与 ResourceLoader reload 不调用 `lark-cli task`。
+
+16. **Automation**
     - 复用真实 CLI 主测试缝，按 §16.5 与完整 PRD 验证任务管理/确认、受控时间、并发/恢复、无人 Print、Skill 接线、服务替身、秘密扫描及 macOS/Linux × Node 22/24 行为矩阵。
     - 只验证提示词注入和既有 guard，不把模型遵守业务规则当作硬权限测试；不触碰真实任务或账户。
 

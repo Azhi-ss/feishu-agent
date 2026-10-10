@@ -11,7 +11,7 @@ test("Automation is opt-in, discoverable after package install and absent after 
   const f = await fixture();
   t.after(() => f.close());
   const source = join(repoRoot, "packages/feishu-automation");
-  const init = await run(f.project, f.env, ["init", "--identity", "alice", "--model", "fake/fake-model"]);
+  const init = await run(f.project, f.env, ["init", "--model", "fake/fake-model"]);
   assert.equal(init.code, 0, init.stderr);
   assert.equal(existsSync(join(f.agentHome, "skills/feishu-automation")), false);
   const before = await run(f.project, f.env, ["-p", "ping"]);

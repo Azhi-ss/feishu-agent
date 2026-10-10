@@ -72,3 +72,32 @@ test("Feishu loader keeps identity, allowed contexts, package prompts/themes, an
     if (oldAgentDir === undefined) delete process.env.PI_AGENT_DIR; else process.env.PI_AGENT_DIR = oldAgentDir;
   }
 });
+
+test("a leftover Mem0 package extension stays unloaded while pi-hermes-memory stays loaded", async () => {
+  const root = mkdtempSync(join(tmpdir(), "feishu-memory-packages-"));
+  const home = join(root, "home", ".feishu-agent");
+  const project = join(root, "project");
+  const mem0 = join(root, "node_modules", "@mem0", "pi-agent-plugin");
+  const hermes = join(root, "node_modules", "pi-hermes-memory");
+  mkdirSync(join(mem0, "ext"), { recursive: true });
+  mkdirSync(join(hermes, "ext"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(mem0, "package.json"), JSON.stringify({ name: "@mem0/pi-agent-plugin", version: "0.1.5", pi: { extensions: ["ext"] } }));
+  writeFileSync(join(mem0, "ext", "index.js"), "export default (pi) => { pi.registerCommand('mem0-should-not-load', { description: 'no', handler: async () => {} }); };\n");
+  writeFileSync(join(hermes, "package.json"), JSON.stringify({ name: "pi-hermes-memory", version: "0.9.10", pi: { extensions: ["ext"] } }));
+  writeFileSync(join(hermes, "ext", "index.js"), "export default (pi) => { pi.registerCommand('hermes-memory-on', { description: 'yes', handler: async () => {} }); };\n");
+  const { packageManager } = await import("../src/packages.js");
+  const manager = packageManager(home, project, "project");
+  await manager.installAndPersist(mem0);
+  await manager.installAndPersist(hermes);
+  const loader = new FeishuResourceLoader(home, project);
+  await loader.reload();
+  const paths = loader.getExtensions().extensions.map((extension) => extension.path);
+  assert.equal(paths.some((path) => path.includes("@mem0/pi-agent-plugin")), false);
+  assert.equal(paths.some((path) => path.includes("pi-hermes-memory")), true);
+  assert.equal(loader.getMemoryStatus(), "on");
+  const { ExtensionRunner, createExtensionRuntime } = await import("@earendil-works/pi-coding-agent");
+  const runner = new ExtensionRunner(loader.getExtensions().extensions, createExtensionRuntime(), project, {} as never, {} as never);
+  assert.equal(runner.getCommand("mem0-should-not-load"), undefined);
+  assert.ok(runner.getCommand("hermes-memory-on"));
+});

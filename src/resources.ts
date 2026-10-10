@@ -14,7 +14,7 @@ import { withCompatibilityHome } from "./compatibility-home.js";
 import { CORE_TOOLS } from "./policy.js";
 import { settingsManagerFor } from "./settings.js";
 import { ASK_USER_TOOL, askUserExtension, corePolicyExtension } from "./core-extension.js";
-import { startupBannerExtension } from "./startup-banner.js";
+import { startupBannerExtension, type StartupInventory } from "./startup-banner.js";
 import { findSkillExtension } from "./find-skill.js";
 import { reasoningTrimExtension } from "./reasoning-trim-extension.js";
 import { isAllowlistedRemoteExtension } from "./remote-package.js";
@@ -41,13 +41,13 @@ export class FeishuResourceLoader implements ResourceLoader {
   readonly warnings: string[] = [];
 
   private sessionSwitcher?: (path: string) => Promise<void>;
-  private memoryDiagnostic?: () => string | undefined;
   private skillsStatus = "unavailable" as SkillsStatus;
+  private memoryOn = false;
   private extensionLoader?: DefaultResourceLoader;
   private extensionPathsKey = "";
   private approvedDestructive = false;
 
-  constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project", private readonly currentRequest?: string, private readonly memoryExtension?: import("@earendil-works/pi-coding-agent").ExtensionFactory) {
+  constructor(private readonly agentHome: string, private readonly projectRoot: string, private readonly projectKey = "project", private readonly currentRequest?: string) {
     this.approvedDestructive = userApprovesDestructive(currentRequest);
   }
 
@@ -59,10 +59,6 @@ export class FeishuResourceLoader implements ResourceLoader {
 
   setSessionSwitcher(sessionSwitcher?: (path: string) => Promise<void>): void {
     this.sessionSwitcher = sessionSwitcher;
-  }
-
-  setMemoryDiagnostic(memoryDiagnostic?: () => string | undefined): void {
-    this.memoryDiagnostic = memoryDiagnostic;
   }
 
   async reload(): Promise<void> {
@@ -99,7 +95,7 @@ export class FeishuResourceLoader implements ResourceLoader {
       return loaded.length ? loaded : loadSkillsFromDir({ dir: dirname(entry.path), source: entry.metadata.source }).skills.filter((skill) => skill.filePath === entry.path);
     });
     const extensionPaths = resolved.extensions.filter((entry) => entry.enabled).map((entry) => entry.path)
-      .filter((path) => !path.includes("@mem0/pi-agent-plugin"));
+      .filter((path) => !path.includes("@mem0/pi-agent-plugin")); // leftover Mem0 installs stay unloaded
     for (const skill of [...official, ...packageSkills, ...global, ...project]) {
       const shadowed = selected.get(skill.name);
       if (shadowed) this.warnings.push(`Skill "${skill.name}" selected ${skill.filePath}; shadowed ${shadowed.filePath}`);
@@ -118,9 +114,8 @@ export class FeishuResourceLoader implements ResourceLoader {
         noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
         additionalExtensionPaths: extensionPaths,
         extensionFactories: [
-          ...(this.memoryExtension ? [{ name: "feishu-memory", hidden: true, factory: this.memoryExtension }] : []),
-          { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this.memoryDiagnostic, this) },
-          { name: "feishu-startup-banner", hidden: true, factory: startupBannerExtension() },
+          { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this) },
+          { name: "feishu-startup-banner", hidden: true, factory: startupBannerExtension(() => this.startupInventory()) },
           { name: "feishu-find-skill", hidden: true, factory: findSkillExtension(this.agentHome) },
           { name: "feishu-ask-user", hidden: true, factory: askUserExtension() },
           { name: "feishu-reasoning-trim", hidden: true, factory: reasoningTrimExtension() },
@@ -129,6 +124,7 @@ export class FeishuResourceLoader implements ResourceLoader {
     }
     await withCompatibilityHome(process.env.HOME!, this.agentHome, () => this.extensionLoader!.reload());
     this.extensions = this.extensionLoader.getExtensions();
+    this.memoryOn = this.extensions.extensions.some((extension) => extension.path.includes("pi-hermes-memory"));
     for (const error of this.extensions.errors) this.warnings.push(`Extension ${error.path} failed to load: ${error.error}`);
     for (const extension of this.extensions.extensions) {
       if (extension.path === "<inline:feishu-core-policy>" || extension.path === "<inline:feishu-startup-banner>" || extension.path === "<inline:feishu-find-skill>" || extension.path === "<inline:feishu-ask-user>") continue;
@@ -162,6 +158,25 @@ export class FeishuResourceLoader implements ResourceLoader {
   getAgentsFiles() { return { agentsFiles: this.agentsFiles }; }
   getSystemPrompt() { return this.prompt; }
   getSkillsStatus() { return this.skillsStatus; }
+  getMemoryStatus(): "on" | "off" { return this.memoryOn ? "on" : "off"; }
+
+  startupInventory(): StartupInventory {
+    const base = (path: string) => path.split(/[/\\]/).filter(Boolean).at(-1) ?? path;
+    const extensionName = (path: string) => {
+      const parts = path.split(/[/\\]/);
+      const modules = parts.lastIndexOf("node_modules");
+      if (modules >= 0 && parts[modules + 1]?.startsWith("@") && parts[modules + 2]) return `${parts[modules + 1]}/${parts[modules + 2]}`;
+      if (modules >= 0 && parts[modules + 1]) return parts[modules + 1];
+      return base(path);
+    };
+    return {
+      context: this.agentsFiles.map((file) => base(file.path)),
+      skills: this.skills.map((skill) => skill.name),
+      prompts: this.prompts.prompts.map((prompt) => `/${prompt.name}`),
+      extensions: this.extensions.extensions.filter((extension) => !extension.hidden).map((extension) => extensionName(extension.path)),
+      themes: this.themes.themes.map((item) => item.name).filter((name): name is string => Boolean(name)),
+    };
+  }
   getSystemPromptSource() { return undefined; }
   getAppendSystemPrompt() { return []; }
   getAppendSystemPromptSources() { return []; }

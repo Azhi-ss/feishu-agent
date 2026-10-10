@@ -49,13 +49,13 @@ test("core tool_call hook allows destructive --yes within an approving turn and 
   assert.deepEqual({ block: denied.block, terminate: denied.terminate }, { block: true, terminate: true });
   assert.match(denied.reason, /Blocked lark-cli --yes/);
 });
-test("status line shows only Memory and official Skill readiness, while Pi owns native model/context/footer data", async () => {
+test("status line shows official Skill readiness, while Pi owns native model/context/footer data", async () => {
   const handlerLists = new Map<string, Function[]>();
   const on = (name: string, handler: Function) => handlerLists.set(name, [...(handlerLists.get(name) ?? []), handler]);
   const calls: Array<[string, string | undefined]> = [];
   const theme = { fg: (color: string, text: string) => `[${color}]${text}[/${color}]` };
-  const resourceLoader = { getSystemPrompt: () => undefined, getSkillsStatus: () => "ready" as const };
-  corePolicyExtension(undefined, undefined, () => undefined, resourceLoader)({ on, registerCommand: () => {} } as never);
+  const resourceLoader = { getSystemPrompt: () => undefined, getSkillsStatus: () => "ready" as const, getMemoryStatus: () => "on" as const };
+  corePolicyExtension(undefined, undefined, resourceLoader)({ on, registerCommand: () => {} } as never);
   const ctx = {
     mode: "tui",
     model: { id: "must-not-appear" },
@@ -71,7 +71,7 @@ test("status line shows only Memory and official Skill readiness, while Pi owns 
 
   const degraded: Array<[string, string | undefined]> = [];
   const degradedHandlers = new Map<string, Function[]>();
-  corePolicyExtension(undefined, undefined, () => "degraded", { getSystemPrompt: () => undefined, getSkillsStatus: () => "cached" as const })({
+  corePolicyExtension(undefined, undefined, { getSystemPrompt: () => undefined, getSkillsStatus: () => "cached" as const, getMemoryStatus: () => "off" as const })({
     on: (name: string, handler: Function) => degradedHandlers.set(name, [...(degradedHandlers.get(name) ?? []), handler]),
     registerCommand: () => {},
   } as never);
@@ -176,7 +176,7 @@ test("skills status reflects dynamic resource loader status across reload", asyn
   const on = (name: string, handler: Function) => handlerLists.set(name, [...(handlerLists.get(name) ?? []), handler]);
   const calls: Array<[string, string | undefined]> = [];
   const theme = { fg: (_c: string, text: string) => text };
-  corePolicyExtension(undefined, undefined, () => undefined, loader)({ on, registerCommand: () => {} } as never);
+  corePolicyExtension(undefined, undefined, loader)({ on, registerCommand: () => {} } as never);
   const ctx = {
     mode: "tui",
     ui: { theme, setStatus: (key: string, value: string | undefined) => calls.push([key, value]), getEditorComponent: () => undefined, setEditorComponent: () => {}, notify: () => {} },

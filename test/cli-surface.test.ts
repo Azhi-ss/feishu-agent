@@ -32,7 +32,7 @@ function snapshot(root: string): Map<string, Buffer> {
 test("help exposes only the Feishu Agent surface and security boundary", () => {
   const result = run(["--help"]);
   assert.equal(result.status, 0);
-  for (const text of ["feishu -p", "feishu init", "feishu install", "feishu remove", "feishu list", "feishu update", "feishu config", "feishu skills sync", "/find-skill", "/remote", "-c", "-r", "--session", "feishu --session <id> -p <prompt>", "exits 3", "--lark-profile"]) assert.match(result.stdout, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  for (const text of ["feishu -p", "feishu init", "feishu install", "feishu remove", "feishu list", "feishu update", "feishu config", "feishu skills sync", "feishu tasks refresh", "/find-skill", "/remote", "-c", "-r", "--session", "feishu --session <id> -p <prompt>", "exits 3", "--lark-profile"]) assert.match(result.stdout, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(result.stdout, /not an OS sandbox/i);
   assert.match(result.stdout, /current-user permissions/i);
 });
@@ -51,6 +51,7 @@ test("exact command parsing rejects every malformed command surface before inspe
     ["--session", "id", "-p"], ["--session", "id", "-p", "--foo"], ["--session", "id", "-p", "ping", "extra"], ["--session", "-p", "ping"], ["-p", "ping", "--session", "id"], ["-c", "-p", "ping"],
     ["list", "extra"], ["install"], ["install", "pkg", "extra"], ["install", "--foo", "pkg"], ["remove", "pkg", "--local"],
     ["update", "a", "b"], ["update", "--extensions", "extra"], ["skills"], ["skills", "sync", "extra"],
+    ["tasks"], ["tasks", "sync"], ["tasks", "refresh", "extra"],
     ["config", "set", "pkg", "skills"], ["config", "set", "--model", "skills", "on"], ["config", "--foo"],
     ["init", "--identity", "--model", "fake/x"], ["init", "--model"], ["init", "--thinking", "--reset-model"],
     ["--lark-profile", "--help", "list"], ["--foo"],
@@ -64,7 +65,7 @@ test("exact command parsing rejects every malformed command surface before inspe
 
 test("init validates every value-bearing option, including thinking enum, before filesystem mutation", () => {
   const freshHome = mkdtempSync(join(tmpdir(), "feishu-invalid-thinking-fresh-"));
-  const fresh = run(["init", "--identity", "alice", "--model", "fake/model", "--thinking", "bogus"], {}, freshHome);
+  const fresh = run(["init", "--model", "fake/model", "--thinking", "bogus"], {}, freshHome);
   assert.notEqual(fresh.status, 0);
   assert.match(fresh.stderr, /--thinking must be one of off, minimal, low, medium, high, xhigh/);
   assert.equal(statSync(join(freshHome, ".feishu-agent"), { throwIfNoEntry: false }), undefined);
@@ -76,13 +77,13 @@ test("init validates every value-bearing option, including thinking enum, before
   writeFileSync(join(agentHome, "settings.json"), '{"defaultProvider":"fake","defaultModel":"model"}\n');
   writeFileSync(join(agentHome, "nested", "state.bin"), Buffer.from([0, 1, 2, 255]));
   const before = snapshot(agentHome);
-  const existing = run(["init", "--identity", "alice", "--model", "fake/model", "--thinking", "bogus"], {}, existingHome);
+  const existing = run(["init", "--model", "fake/model", "--thinking", "bogus"], {}, existingHome);
   assert.notEqual(existing.status, 0);
   assert.match(existing.stderr, /--thinking must be one of off, minimal, low, medium, high, xhigh/);
   assert.deepEqual(snapshot(agentHome), before);
 
   for (const args of [
-    ["init", "--identity", " "],
+    ["init"],
     ["init", "--model", "not-a-provider-model"],
     ["init", "--thinking", "--reset-model"],
     ["--lark-profile", "--help"],
@@ -93,11 +94,11 @@ test("init validates every value-bearing option, including thinking enum, before
   }
 });
 
-test("inspection forces telemetry off while preserving caller environment", () => {
-  const result = run(["-p", "ignored"], { FEISHU_AGENT_INSPECT: "1", MEM0_TELEMETRY: "true", FEISHU_TEST_MARKER: "kept" });
+test("inspection preserves caller environment", () => {
+  const result = run(["-p", "ignored"], { FEISHU_AGENT_INSPECT: "1", FEISHU_TEST_MARKER: "kept" });
   assert.equal(result.status, 0);
   const state = JSON.parse(result.stdout);
-  assert.equal(state.mem0Telemetry, "false");
+  assert.equal(state.mem0Telemetry, undefined);
   assert.equal(state.home, home);
   assert.equal(state.piCodingAgentDir, join(home, ".feishu-agent"));
   assert.equal(state.environmentMarker, "kept");

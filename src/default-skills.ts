@@ -975,6 +975,27 @@ metadata:
 **关键规则**：连线 \`connector\` 严禁写 \`label\`，说明直接写在 \`rect.text\` 内部。
 `;
 
+const FEISHU_HERMES_MEMORY = `---
+name: feishu-hermes-memory
+description: "纠正 pi-hermes-memory 文档里的 ~/.pi/agent 路径。当用户或插件提到记忆文件、MEMORY.md、sessions.db、hermes-memory-config、projects-memory、/memory-index-sessions，或要查看、修改记忆存放位置时使用。"
+---
+
+# Feishu Hermes Memory 路径
+
+\`pi-hermes-memory\` 的工具说明和 README 按普通 Pi 写成 \`~/.pi/agent\`。飞书在进程启动时把 \`PI_CODING_AGENT_DIR\` 设为 \`~/.feishu-agent\`，插件用这个变量解析路径。不要按文档去 \`~/.pi/agent\` 建目录或改文件，也不要 \`pi install\`。
+
+| 插件文档 | 飞书实际路径 |
+|---|---|
+| \`~/.pi/agent/memory/\` | 旧目录。插件启动时迁到 \`~/.feishu-agent/pi-hermes-memory/\`，不要再往旧目录写 |
+| \`~/.pi/agent/pi-hermes-memory/\` | \`~/.feishu-agent/pi-hermes-memory/\`（MEMORY.md、USER.md、failures.md、sessions.db、生成的流程 Skill） |
+| \`~/.pi/agent/projects-memory/<project>/\` | \`~/.feishu-agent/projects-memory/<project>/\` |
+| \`~/.pi/agent/sessions/\` | \`~/.feishu-agent/sessions/\`（飞书会话，按项目分区） |
+| \`~/.pi/agent/hermes-memory-config.json\` | \`~/.feishu-agent/hermes-memory-config.json\` |
+| \`~/.pi/agent/skills/\` | 不要写这里。飞书自己的 Skill 在 \`~/.feishu-agent/skills/\` |
+
+\`skill_manage\` 写出的流程 Skill 在 \`pi-hermes-memory/skills\` 或 \`projects-memory/<project>/skills\`。飞书技能索引不扫描这两处；要当飞书 Skill 用，再复制到 \`~/.feishu-agent/skills/<name>/\`。
+`;
+
 const FEISHU_PACKAGE_CURATOR = `---
 name: feishu-package-curator
 description: 为 Feishu Agent（feishu 命令）搜索、筛选和安装 Pi 社区插件包（Package），按 Feishu 边界规范执行并做装后验证。当用户想给 feishu 装插件/扩展/主题/skill 包，问"有没有好用的 pi 插件""帮我装个 xxx 插件""feishu 装扩展"时使用。不适用于给普通 Pi（pi 命令）装包。
@@ -1004,7 +1025,7 @@ metadata:
 - ✅ **推荐装**：纯 UI 类（主题包、status line、通知、趣味短语、/btw 这类侧边命令）、后台进程类、LSP/代码智能类、浏览器/搜索工具类。只用标准扩展 API，不与核心保护层冲突。
 - ⚠️ **逐个试**：子代理编排、plan mode、todo/任务管理、交互式 shell。能用，但要装后烟测。
 - ⛔ **建议不装**（说明原因，用户坚持可装，装后验证）：
-  - 记忆类（pi-memory、hermes-memory、gentle-engram 等）——feishu 已有 Mem0 记忆，两套记忆双重注入、身份串味。
+  - 记忆类（pi-memory、gentle-engram，以及第二套记忆包）——只装钉版本 \`npm:pi-hermes-memory@0.9.10\`。再装一套会双重注入。它的文档写 \`~/.pi/agent\`，实际根目录是 \`~/.feishu-agent\`，见 \`feishu-hermes-memory\`。
   - 权限/沙箱/审批类（guardrails、pi-sandbox、permission-system、verdict 等）——与 feishu 内置 lark-cli 高危命令 guard 重复，会双重拦截 bash。
   - 账号/settings 同步类（pi-accounts、pi-sync）——feishu 对 \`~/.pi\` 的 auth 只读复用，写入语义对不上。
   - 替代运行时类（pi-web、pi-telegram、pi-acp 等）——自带会话模型，与 feishu Remote Bridge/会话隔离冲突。
@@ -2015,6 +2036,7 @@ export const DEFAULT_SKILLS: DefaultSkill[] = [
   { name: "deslop-zh", body: DESLOP_ZH },
   { name: "feishu-pro-diagram", body: FEISHU_PRO_DIAGRAM },
   { name: "feishu-package-curator", body: FEISHU_PACKAGE_CURATOR },
+  { name: "feishu-hermes-memory", body: FEISHU_HERMES_MEMORY },
   { name: "feishu-tech-note-writer", body: FEISHU_TECH_NOTE_WRITER, files: FEISHU_TECH_NOTE_WRITER_FILES },
   { name: "volc-devinstance", body: VOLC_DEVINSTANCE, files: VOLC_DEVINSTANCE_FILES },
 ];

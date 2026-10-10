@@ -35,7 +35,7 @@ test("scripted conversation reads private Skill, confirms create/edit, manages t
   mkdirSync(join(init.home, "feishu-automation"), { recursive: true });
   writeFileSync(briefing, "LEGACY-BRIEFING-UNCHANGED\n");
   try {
-    const initialized = await run(f.root, env, ["init", "--identity", "alice", "--model", "fake/fake-model"]);
+    const initialized = await run(f.root, env, ["init", "--model", "fake/fake-model"]);
     assert.equal(initialized.code, 0, initialized.stderr);
     // Keep the real Mem0 package configured: unattended runs must skip it, not just
     // happen to have no package. Only the fake model's endpoint/catalog is replaced.

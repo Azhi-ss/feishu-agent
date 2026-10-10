@@ -16,9 +16,7 @@
     "test:e2e": "npm run build && node --test dist/test/e2e/*.test.js"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.1",
-    "@mem0/pi-agent-plugin": "0.1.5",
-    "mem0ai": "3.0.8"
+    "@earendil-works/pi-coding-agent": "0.87.1"
   },
   "devDependencies": {
     "@types/node": "22.19.19",

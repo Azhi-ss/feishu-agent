@@ -19,7 +19,7 @@ Feishu Agent drives Feishu/Lark work through natural language, backed by the 28 
 - **Run workflow automations** — summarize meetings and minutes, draft standup reports, and script multi-step Feishu workflows (`lark-workflow-*`, `lark-meeting`, `lark-minutes`).
 - **Manage calendar and approvals** — check schedules, book meeting rooms, and process approval tasks (`lark-calendar`, `lark-approval`).
 - **Operate Bitable / Base** — create tables, fields, records, views, and dashboards in Feishu Base (`lark-base`).
-- **Remember across sessions** — person-scoped long-term memory via Mem0: every project and machine shares one fixed bucket under `feishu:<identity>`; secrets and raw tool output stay out of capture.
+- **Remember across sessions** — optional, after `feishu install npm:pi-hermes-memory@0.9.10`. Files stay under `~/.feishu-agent/`, not `~/.pi/agent`.
 - **Author your own skills** — encode repeatable Feishu workflows as private skills (`feishu-skill-maker`).
 - **Write technical notes that render well in Feishu** — use the bundled LaTeX/XML guidance and process-report workflow templates.
 - **Extend with packages** — add MCP servers, web access, and subagents through Pi-compatible extensions.
@@ -36,7 +36,7 @@ Feishu Agent runs as a CLI from source — it is **not published to npm**.
 - **[`lark-cli`](https://github.com/larksuite/cli)** — the official Feishu/Lark CLI, npm package **`@larksuite/cli`**. Install with `npm i -g @larksuite/cli`, then run `lark-cli auth` to log in so `lark-cli doctor` passes.
   > Install `@larksuite/cli`, **not** the unrelated placeholder package literally named `lark-cli` on npm.
 - **[Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)** coding agent — `npm i -g @earendil-works/pi-coding-agent`. Feishu reuses Pi's model credentials from `~/.pi/agent/` and disables its own `/login`, so authenticate a model with ordinary `pi` first (`pi auth` checks readiness).
-- **`MEM0_API_KEY`** from [mem0.ai](https://mem0.ai) — required by `feishu init` for long-term memory. Read only from the environment, never written to disk; memory degrades gracefully at runtime if Mem0 is later unavailable.
+Memory is not part of setup. Install `pi-hermes-memory` later if you want it. `MEM0_API_KEY` is not required.
 
 ### Guided setup
 
@@ -46,7 +46,7 @@ From a clone of this repository:
 bash scripts/setup.sh
 ```
 
-The script builds and links Feishu, runs `lark-cli auth login`, asks you to log in with ordinary `pi` `/login`, and passes `MEM0_API_KEY` only to that `feishu init` process. It does not write the key to disk. Later shells still need `export MEM0_API_KEY=...`.
+The script builds and links Feishu, runs `lark-cli auth login`, asks you to log in with ordinary `pi` `/login`, then runs `feishu init`. It does not ask for a Mem0 key.
 
 ### Build and link
 
@@ -99,10 +99,10 @@ A delegation can take several turns. Exit code 3 means Feishu Agent is waiting f
 ## Initialize
 
 ```bash
-MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
+feishu init --model provider/model --thinking medium
 ```
 
-Initialization creates private state and nine bundled Feishu Skills under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, validates Mem0 connectivity without printing the key, installs pinned npm versions of the unmodified Mem0 package and Feishu Remote Package, synchronizes official `lark-cli` Skills, and runs `lark-cli doctor` under the invocation's selected profile. Re-running fills missing state and does not overwrite identity, model, customized `SYSTEM.md`, edited Skills, or an existing local/npm Remote Package source. Use `--reset-identity`, `--reset-model`, or `--reset-system` for explicit replacement.
+Initialization creates private state and ten bundled Feishu Skills under `~/.feishu-agent/`, requires an explicit authenticated Feishu model on fresh initialization, stores a supported Feishu-only thinking preference, runs `lark-cli doctor` under the invocation's selected profile, installs the pinned Feishu Remote Package, and synchronizes official `lark-cli` Skills. It does not install a memory package or ask for a memory identity. Re-running fills missing state and does not overwrite model, customized `SYSTEM.md`, edited Skills, or an existing local/npm Remote Package source. Use `--reset-model` or `--reset-system` for explicit replacement.
 
 ## Personal context
 
@@ -268,11 +268,11 @@ is diagnosed and retained for inspection, never guessed safe to replay.
 
 ### Defaults (what you get out of the box)
 
-`feishu init` sets up a minimal runtime plus nine bundled private Feishu Skills. Nothing else is preloaded beyond:
+`feishu init` sets up a minimal runtime plus ten bundled private Feishu Skills. Nothing else is preloaded beyond:
 
 | Capability | Source | Notes |
 |---|---|---|
-| Long-term memory | `@mem0/pi-agent-plugin` (pinned, auto-installed by `feishu init`) | Project-scoped semantic capture of user/assistant text; `MEM0_API_KEY` env-only |
+| Long-term memory | optional `pi-hermes-memory` (not installed by `feishu init`) | Files under `~/.feishu-agent/`. TUI shows `● mem` when that extension is loaded, otherwise `○ mem off`. Leftover `@mem0/pi-agent-plugin` is not loaded |
 | Remote Bridge | `@azhi-ss/feishu-remote` (pinned npm package, auto-installed by `feishu init`) | Phone control of the active session; transport only — not Feishu Skills, Mem0, or high-risk approval. Ordinary Pi may run `pi install npm:@azhi-ss/feishu-remote`. |
 | Core policy guard | built-in (hidden `feishu-core-policy` extension) | High-risk `lark-cli --yes` approval gate, blocked `/share` `/import` `/login` `/logout` |
 | Skill authoring | built-in `feishu-skill-maker` skill | Guide for creating new Feishu Skills |
@@ -285,6 +285,14 @@ is diagnosed and retained for inspection, never guessed safe to replay.
 
 The default TUI theme (`breezy-ocean`) is bundled and applied automatically; switch it in `/settings`. Prompt templates are not bundled; additional themes and templates load through packages as needed.
 
+Startup listing is Pi's. Set `"quietStartup": true` in `~/.feishu-agent/settings.json` (or Quiet startup in `/settings`) to hide Context, Skills, Prompts, Extensions, and Themes. Optional `"feishuStartup"` redraws the banner and a short list instead:
+
+```json
+"feishuStartup": { "banner": true, "skills": "count", "sections": ["context", "skills", "prompts", "extensions", "themes"] }
+```
+
+`skills` is `names`, `count`, or `hide`. `banner: false` drops the bird header. Add `"tasks"` to `sections` to list unfinished Feishu task names from `~/.feishu-agent/tasks.json` (a short date follows the name only when that task has a due date; at most five lines, with further names collapsed into `+N`). Refresh that file with `feishu tasks refresh`. Startup, `/new`, and `/reload` only read it. Omit `feishuStartup` to keep the default banner only.
+
 ### Recommended optional packages
 
 Pi-compatible extension packages install with `feishu install npm:<package>`. Feishu does **not** auto-install any of these — opt in per machine/project. For npm packages, verify the current version with `npm view <package>` before pinning. The Feishu subagents fork uses the local installation documented below.
@@ -295,7 +303,7 @@ Pi-compatible extension packages install with `feishu install npm:<package>`. Fe
 | `pi-mcp-adapter` | Use MCP (Model Context Protocol) servers as tools | You already have MCP servers (or want a specific vendor's MCP integration) |
 | [Feishu subagents fork](docs/subagents.md) | Native child delegation and scripted workflows with Feishu resources and policy | Long, parallelizable Feishu tasks; install the adapted local package |
 | `pi-background-tasks` | Durable background shell tasks, read-only delegated agents, attested local Pi runs | Letting long-running lark-cli jobs survive the session |
-| `pi-hermes-memory` | Persistent memory + session search + secret scanning, token-aware policy-only capture | Alternative/additional memory engine; note Feishu already ships Mem0 |
+| `pi-hermes-memory@0.9.10` | Persistent memory, session search, and secret scanning | The memory package for Feishu. Its docs say `~/.pi/agent`; Feishu stores it under `~/.feishu-agent/` |
 
 ```bash
 feishu install npm:pi-web-access        # recommended, global
@@ -318,17 +326,17 @@ Feishu Agent reuses existing `lark-cli` state without copying tokens. Personal-r
 
 ## Long-term Memory
 
-The direct `mem0ai` dependency is pinned to 3.0.8, the first compatible 3.x release using `uuid` 11.1.1; `npm audit --omit=dev` is clean for the installed production tree. Mem0 automatically captures user messages and Assistant text into one fixed, path-independent `feishu` bucket under the configured `feishu:<identity>`, so memory follows the person across projects and machines (sessions, Skills, packages, and settings stay per-project). Raw tool output is not auto-captured; Global memory requires an explicit action. The configured `feishu:<identity>` overrides external `MEM0_USER_ID`, `MEM0_API_KEY` remains environment-only, and telemetry is disabled. Startup performs a bounded health check; recall, capture, or Dream failure emits both terminal and Interactive warnings and disables later memory actions for that degraded session. A later healthy invocation recovers without changing unrelated Feishu settings.
+Feishu has no long-term memory. It does not capture turns, recall earlier facts, or contact a memory service. A Feishu Session file is the only continuity between turns.
 
 ## Offline release matrix
 
 The release suite compiles the real CLI and exercises it only with temporary homes/projects, PTYs, and loopback fake model, Mem0, Lark, and npm services—never real network endpoints or user credentials. It verifies:
 
-- a fresh HOME can run `feishu init`, an immediate Print turn, a mounted Interactive turn, a fake personal Lark command with explicit `--as user`, project-local sessions, and eligible user/Assistant memory capture;
+- a fresh HOME can run `feishu init`, an immediate Print turn, a mounted Interactive turn, a fake personal Lark command with explicit `--as user`, and project-local sessions;
 - hostile ordinary Pi home/project `.pi` and `.agents` resources stay unloaded, conflicting package core tools are rejected with warnings, and a replacement prompt or custom editor cannot replace the base identity or outer command guard;
-- two projects share the configured `feishu:<identity>` and its single fixed Mem0 bucket while keeping sessions, private Skills, package settings, and loaded package Skills independent;
-- degraded Mem0 and official Skill fallback emit visible warnings while core file, Bash, Lark, Print, and Interactive work continues;
-- recursive artifact and diagnostic scans reject Mem0 secrets and copied Lark tokens, while raw tool output remains local to sessions and is excluded from automatic Mem0 capture.
+- two projects keep sessions, private Skills, package settings, and loaded package Skills independent;
+- official Skill fallback emits a visible warning while core file, Bash, Lark, Print, and Interactive work continues;
+- recursive artifact and diagnostic scans reject copied Lark tokens, and raw tool output remains local to sessions.
 
 ## Isolation and limitations
 

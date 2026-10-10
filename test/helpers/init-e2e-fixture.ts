@@ -5,12 +5,10 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MEMORY_APP_ID } from "../../src/memory.js";
 import { REMOTE_PACKAGE_SOURCE, REMOTE_PACKAGE_VERSION, feishuRemotePackagePath } from "../../src/remote-package.js";
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 export const cli = join(repoRoot, "dist/src/cli.js");
-export const MEM0_PACKAGE = "npm:@mem0/pi-agent-plugin@0.1.5";
 
 export type Failure = "model" | "mem0" | "doctor" | "package" | "skills";
 
@@ -144,13 +142,13 @@ export function installs(path: string): string[] {
   return lines(path).filter((line) => line.includes("|install "));
 }
 
-export function assertCompleteSummary(output: string, home: string, identity: string, model: string): void {
+export function assertCompleteSummary(output: string, home: string, model: string): void {
   assert.match(output, new RegExp(`Feishu Agent Home: ${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  assert.match(output, new RegExp(`Memory Identity: feishu:${identity}`));
+  assert.doesNotMatch(output, /Memory Identity:/);
   assert.match(output, new RegExp(`Model: fake/${model}`));
-  assert.match(output, /Mem0 Package: ready/);
+  assert.doesNotMatch(output, /Mem0 Package:/);
   assert.match(output, /Remote Package: ready/);
   assert.match(output, /Official Skills: lark-cli 9\.9\.9/);
   assert.match(output, /Lark doctor: passed/);
-  assert.match(output, /Memory: available/);
+  assert.doesNotMatch(output, /Memory:/);
 }

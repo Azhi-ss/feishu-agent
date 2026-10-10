@@ -7,7 +7,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { hermeticEnv } from "./helpers/hermetic-env.js";
-import { writeMemoryConfig } from "../src/memory.js";
 import { runFailureLine } from "../src/runtime.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -40,7 +39,6 @@ function fixture(modelUrl: string) {
   writeFileSync(join(pi, "models.json"), JSON.stringify({ providers: { fake: { baseUrl: modelUrl, api: "openai-completions", models: [{ id: "fake-model", name: "Fake", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 256 }] } } }));
   writeFileSync(join(feishu, "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model", quietStartup: true, collapseChangelog: true }));
   writeFileSync(join(feishu, "SYSTEM.md"), "You are Feishu Agent.\n");
-  writeMemoryConfig(feishu, "alice");
   return { root, home, cwd, feishu };
 }
 
@@ -101,7 +99,7 @@ test("FEISHU_UNATTENDED=1 print run completes a model turn without touching Mem0
   }
 });
 
-test("print run without FEISHU_UNATTENDED keeps the normal memory flow (ping, recall, capture)", async () => {
+test("print run does not call Mem0", async () => {
   const mem0Hits: string[] = [];
   const modelServer = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -147,9 +145,7 @@ test("print run without FEISHU_UNATTENDED keeps the normal memory flow (ping, re
     const result = await run(f.cwd, env);
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /attended-pong/);
-    assert(mem0Hits.some((hit) => hit.endsWith("/v1/ping/")), `no health ping; hits: ${mem0Hits.join(", ")}`);
-    assert(mem0Hits.some((hit) => hit.includes("/search/")), `no recall search; hits: ${mem0Hits.join(", ")}`);
-    assert(mem0Hits.some((hit) => hit.includes("/add/")), `no turn-end capture; hits: ${mem0Hits.join(", ")}`);
+    assert.deepEqual(mem0Hits, []);
     assert.doesNotMatch([result.stdout, result.stderr].join("\n"), new RegExp(apiKeySentinel));
   } finally {
     await Promise.all([closeServer(modelServer), closeServer(mem0Server)]);

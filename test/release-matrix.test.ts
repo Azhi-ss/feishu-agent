@@ -7,7 +7,6 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { projectKeyFor } from "../src/policy.js";
-import { MEMORY_APP_ID, writeMemoryConfig } from "../src/memory.js";
 import { runPty as runHarness } from "./helpers/pty-harness.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -66,7 +65,7 @@ function skill(path: string, name: string, description: string): void {
   writeFileSync(join(path, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\nrelease fixture\n`);
 }
 
-test("fresh HOME release path reaches Print, mounted Interactive, personal fake Lark, sessions, and eligible memory capture", async () => {
+test("fresh HOME release path reaches Print, mounted Interactive, personal fake Lark, and sessions", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-release-fresh-"));
   const home = join(root, "home"), project = join(root, "project"), bin = join(root, "bin"), larkLog = join(root, "lark.log");
   mkdirSync(project, { recursive: true }); mkdirSync(bin, { recursive: true });
@@ -84,15 +83,7 @@ test("fresh HOME release path reaches Print, mounted Interactive, personal fake 
       response.writeHead(200, { "content-type": "text/event-stream" }); response.end(payload);
     });
   });
-  const memoryRequests: Array<{ url?: string; body: string }> = [];
-  const memoryServer = createServer((request, response) => {
-    let body = ""; request.on("data", (chunk) => body += chunk); request.on("end", () => {
-      memoryRequests.push({ url: request.url, body });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(request.url === "/v1/ping/" ? '{"status":"ok"}' : '{"results":[]}');
-    });
-  });
-  const [modelHost, memoryHost] = await Promise.all([listen(modelServer), listen(memoryServer)]);
+  const modelHost = await listen(modelServer);
   modelFiles(home, modelHost);
   mkdirSync(join(home, ".config", "lark-cli"), { recursive: true });
   writeFileSync(join(home, ".config", "lark-cli", "config.json"), '{"defaultProfile":"personal"}\n');
@@ -101,9 +92,9 @@ test("fresh HOME release path reaches Print, mounted Interactive, personal fake 
   fakeNpm(join(bin, "npm"));
   const agentHome = join(home, ".feishu-agent");
   assert.equal(existsSync(agentHome), false, "fresh HOME must not have a Feishu Agent Home before init");
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: secret, MEM0_API_HOST: memoryHost, PI_OFFLINE: "1", TERM: "xterm-256color", COLUMNS: "100", LINES: "30" };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1", TERM: "xterm-256color", COLUMNS: "100", LINES: "30" };
   try {
-    const initialized = await run(project, env, ["init", "--identity", "alice", "--model", "fake/fake-model"]);
+    const initialized = await run(project, env, ["init", "--model", "fake/fake-model"]);
     assert.equal(initialized.code, 0, initialized.stderr);
     const printed = await run(project, env, ["-p", "release print"]);
     assert.equal(printed.code, 0, printed.stderr); assert.match(printed.stdout, /RELEASE-PRINT-OK/);
@@ -113,15 +104,8 @@ test("fresh HOME release path reaches Print, mounted Interactive, personal fake 
     ]);
     assert.equal(interactive.code, 0, interactive.output);
     assert.match(interactive.output, /RELEASE-INTERACTIVE-LARK-OK/);
-    assert.match(readFileSync(larkLog, "utf8"), new RegExp(`${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\|false\\|calendar list --as user`));
+    assert.match(readFileSync(larkLog, "utf8"), new RegExp(`${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\|\\|calendar list --as user`));
 
-    const additions = memoryRequests.filter((entry) => entry.url === "/v3/memories/add/");
-    assert(additions.length >= 2, JSON.stringify(memoryRequests));
-    assert(additions.every((entry) => entry.body.includes('"user_id":"feishu:alice"')));
-    assert(additions.every((entry) => entry.body.includes(`"app_id":"${MEMORY_APP_ID}"`)));
-    assert(additions.some((entry) => entry.body.includes("release print") && entry.body.includes("RELEASE-PRINT-OK")));
-    assert(additions.some((entry) => entry.body.includes("inspect my personal calendar") && entry.body.includes("RELEASE-INTERACTIVE-LARK-OK")));
-    assert(additions.every((entry) => !entry.body.includes(rawToolOutput)), "raw tool output reached Mem0");
     assert(modelRequests.some((body) => body.includes("calendar list --as user")));
 
     const sessions = allFiles(join(agentHome, "sessions")).filter((path) => path.endsWith(".jsonl"));
@@ -134,7 +118,7 @@ test("fresh HOME release path reaches Print, mounted Interactive, personal fake 
       assert.doesNotMatch(body, new RegExp(larkToken), path);
     }
     assert.doesNotMatch(initialized.stdout + initialized.stderr + printed.stdout + printed.stderr + interactive.output, new RegExp(`${secret}|${larkToken}`));
-  } finally { modelServer.close(); memoryServer.close(); }
+  } finally { modelServer.close(); }
 });
 
 test("hostile Pi resources cannot replace core policy, package tools execute, and reload refreshes the extension registry", async () => {
@@ -244,7 +228,7 @@ export default pi => {
   } finally { modelServer.close(); }
 });
 
-test("two projects share one fixed Mem0 bucket and identity while keeping sessions, private and package Skills, and settings independent", async () => {
+test("two projects keep sessions, private and package Skills, and settings independent", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-release-projects-"));
   const home = join(root, "home"), bin = join(root, "bin"), one = join(root, "one"), two = join(root, "two");
   for (const path of [join(home, ".feishu-agent"), bin, one, two]) mkdirSync(path, { recursive: true });
@@ -254,14 +238,8 @@ test("two projects share one fixed Mem0 bucket and identity while keeping sessio
       modelBodies.push(body); response.writeHead(200, { "content-type": "text/event-stream" }); response.end(textResponse(`PROJECT-${modelBodies.length}-OK`));
     });
   });
-  const memoryBodies: Array<{ url?: string; body: string }> = [];
-  const memoryServer = createServer((request, response) => {
-    let body = ""; request.on("data", (chunk) => body += chunk); request.on("end", () => {
-      memoryBodies.push({ url: request.url, body }); response.writeHead(200, { "content-type": "application/json" }); response.end(request.url === "/v1/ping/" ? '{"status":"ok"}' : '{"results":[]}');
-    });
-  });
-  const [modelHost, memoryHost] = await Promise.all([listen(modelServer), listen(memoryServer)]);
-  modelFiles(home, modelHost); writeMemoryConfig(join(home, ".feishu-agent"), "alice");
+  const modelHost = await listen(modelServer);
+  modelFiles(home, modelHost);
   writeFileSync(join(home, ".feishu-agent", "SYSTEM.md"), "Shared Feishu identity.\n");
   writeFileSync(join(home, ".feishu-agent", "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model", quietStartup: true, collapseChangelog: true }));
   writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\ncase "$*" in "--version") echo "lark-cli release";; "skills list --json") echo "[]";; *) exit 2;; esac\n', { mode: 0o755 });
@@ -275,7 +253,7 @@ test("two projects share one fixed Mem0 bucket and identity while keeping sessio
   }
   const oneSettings = readFileSync(join(one, ".feishu-agent", "settings.json"));
   const twoSettings = readFileSync(join(two, ".feishu-agent", "settings.json"));
-  const env = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: secret, MEM0_API_HOST: memoryHost, PI_OFFLINE: "1" };
+  const env = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" };
   try {
     const first = await run(one, env, ["-p", "project one turn"]);
     const second = await run(two, env, ["-p", "project two turn"]);
@@ -285,46 +263,41 @@ test("two projects share one fixed Mem0 bucket and identity while keeping sessio
     assert.match(modelBodies[1], /PRIVATE-TWO-SKILL/); assert.match(modelBodies[1], /PACKAGE-TWO-SKILL/);
     assert.doesNotMatch(modelBodies[1], /PRIVATE-ONE-SKILL|PACKAGE-ONE-SKILL/);
 
-    const additions = memoryBodies.filter((entry) => entry.url === "/v3/memories/add/");
-    assert.equal(additions.length, 2, JSON.stringify(memoryBodies));
-    assert(additions.every((entry) => entry.body.includes('"user_id":"feishu:alice"')));
-    assert.deepEqual([...new Set(additions.map((entry) => JSON.parse(entry.body).app_id))], [MEMORY_APP_ID]);
     const sessionRoot = join(home, ".feishu-agent", "sessions");
     assert(allFiles(join(sessionRoot, projectKeyFor(one))).some((path) => path.endsWith(".jsonl")));
     assert(allFiles(join(sessionRoot, projectKeyFor(two))).some((path) => path.endsWith(".jsonl")));
     assert.deepEqual(readFileSync(join(one, ".feishu-agent", "settings.json")), oneSettings);
     assert.deepEqual(readFileSync(join(two, ".feishu-agent", "settings.json")), twoSettings);
-  } finally { modelServer.close(); memoryServer.close(); }
+  } finally { modelServer.close(); }
 });
 
-test("Mem0 degradation plus official Skill fallback warns visibly and leaves core work usable without leaking secrets", async () => {
+test("official Skill fallback warns visibly and leaves core work usable without leaking secrets", async () => {
   const root = mkdtempSync(join(tmpdir(), "feishu-release-degraded-"));
   const home = join(root, "home"), project = join(root, "project"), bin = join(root, "bin"), output = join(project, "continued.txt");
   for (const path of [join(home, ".feishu-agent"), project, bin]) mkdirSync(path, { recursive: true });
   const responses = [toolResponse("write", { path: output, content: "CORE-CONTINUED" }, "write-1"), textResponse("DEGRADED-RELEASE-OK")];
   const modelServer = createServer((_request, response) => { response.writeHead(200, { "content-type": "text/event-stream" }); response.end(responses.shift() ?? textResponse("unexpected")); });
-  const memoryServer = createServer((_request, response) => { response.writeHead(503, { "content-type": "text/plain" }); response.end(`offline ${secret}`); });
-  const [modelHost, memoryHost] = await Promise.all([listen(modelServer), listen(memoryServer)]);
-  modelFiles(home, modelHost); writeMemoryConfig(join(home, ".feishu-agent"), "alice");
+  const modelHost = await listen(modelServer);
+  modelFiles(home, modelHost);
   writeFileSync(join(home, ".feishu-agent", "SYSTEM.md"), "You are Feishu Agent.\n");
   writeFileSync(join(home, ".feishu-agent", "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "fake-model", quietStartup: true, collapseChangelog: true }));
   const oldVersion = "lark-cli 1.0.0";
   const cache = join(home, ".feishu-agent", "official-skills", Buffer.from(oldVersion).toString("base64url"));
   skill(join(cache, "docs"), "docs", "FALLBACK-OFFICIAL-SKILL"); writeFileSync(join(cache, ".success"), oldVersion);
   writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\ncase "$*" in "--version") echo "lark-cli 2.0.0";; "skills list --json") echo "offline" >&2; exit 8;; *) exit 2;; esac\n', { mode: 0o755 });
-  const env = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: secret, MEM0_API_HOST: memoryHost, PI_OFFLINE: "1" };
+  const env = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" };
   try {
     const result = await run(project, env, ["-p", "continue with a local file"]);
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /DEGRADED-RELEASE-OK/);
-    assert.match(result.stderr, /Long-term Memory health unavailable for this session/);
+    assert.doesNotMatch(result.stderr, /Long-term Memory/);
     assert.match(result.stderr, /Official Skills for lark-cli 2\.0\.0 unavailable; using lark-cli 1\.0\.0/);
     assert.equal(readFileSync(output, "utf8"), "CORE-CONTINUED");
     const sessions = allFiles(join(home, ".feishu-agent", "sessions")).filter((path) => path.endsWith(".jsonl"));
     assert(sessions.some((path) => readFileSync(path, "utf8").includes("CORE-CONTINUED")));
     assert.doesNotMatch(result.stdout + result.stderr, new RegExp(secret));
     for (const path of [...allFiles(join(home, ".feishu-agent")), ...allFiles(project)]) assert.doesNotMatch(readFileSync(path).toString(), new RegExp(secret), path);
-  } finally { modelServer.close(); memoryServer.close(); }
+  } finally { modelServer.close(); }
 });
 
 test("release guide documents the observable matrix and boundaries", () => {

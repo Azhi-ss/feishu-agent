@@ -75,10 +75,10 @@ npx skills add Azhi-ss/feishu-agent --skill feishu-control --global --agent pi -
 ## 初始化
 
 ```bash
-MEM0_API_KEY=... feishu init --identity stable-name --model provider/model --thinking medium
+feishu init --model provider/model --thinking medium
 ```
 
-初始化会在 `~/.feishu-agent/` 下创建私有状态和 4 个内置 Feishu Skills；首次初始化需要显式选择一个已认证的飞书模型；保存一个仅 Feishu 使用的思考等级偏好；验证 Mem0 连通性但不打印密钥；安装钉版本的未修改 Mem0 npm 包和 Feishu Remote npm 包；同步官方 `lark-cli` Skills；并在所选 profile 下运行 `lark-cli doctor`。重复运行只补齐缺失状态，不会覆盖身份、模型、自定义 `SYSTEM.md`、已经编辑过的 Skill，或现有的本地/npm Remote Package 来源。需要显式替换时使用 `--reset-identity`、`--reset-model`、`--reset-system`。
+初始化会在 `~/.feishu-agent/` 下创建私有状态和 4 个内置 Feishu Skills；首次初始化需要显式选择一个已认证的飞书模型；保存一个仅 Feishu 使用的思考等级偏好；在所选 profile 下运行 `lark-cli doctor`；安装钉版本的 Feishu Remote npm 包；并同步官方 `lark-cli` Skills。它不安装记忆包，也不询问记忆身份。重复运行只补齐缺失状态，不会覆盖模型、自定义 `SYSTEM.md`、已经编辑过的 Skill，或现有的本地/npm Remote Package 来源。需要显式替换时使用 `--reset-model`、`--reset-system`。
 
 ## 运行
 
@@ -117,17 +117,17 @@ CLI 改用 `node /绝对路径/包/dist/cli.js <命令>`（npm bin 可用时为
 `feishu-automation <命令>`）。移除包前先执行 `stop` 并检查 `status`；
 旧每日简报定时器与此独立，迁移前应停用，脚本和历史记录保留。
 完整安装、迁移和卸载说明见[包 README](packages/feishu-automation/README.md)。
-Remote/Mem0 默认安装策略本轮不变。
+`feishu init` 不再自动安装 Mem0 包；Remote 仍自动安装。
 
 ## 包与 Skills
 
 ### 默认（开箱即得）
 
-`feishu init` 搭建的是最小运行时，并默认写入 4 个私有 Feishu Skill。除此之外预装内容只有：
+`feishu init` 搭建的是最小运行时，并默认写入 10 个私有 Feishu Skill。除此之外预装内容只有：
 
 | 能力 | 来源 | 说明 |
 |---|---|---|
-| 长期记忆 | `@mem0/pi-agent-plugin`（钉版本，由 `feishu init` 自动安装） | 按 Project 语义化捕获用户/助手文本；`MEM0_API_KEY` 只走环境变量 |
+| 长期记忆 | 可选的 `pi-hermes-memory`（`feishu init` 不安装） | 文件在 `~/.feishu-agent/`。扩展已加载时 TUI 显示 `● mem`，否则 `○ mem off`。遗留的 `@mem0/pi-agent-plugin` 不加载 |
 | 远程桥 | `@azhi-ss/feishu-remote`（钉版本 npm 包，由 `feishu init` 自动安装） | 手机遥控当前会话；只做传输，不含 Skills / Mem0 / 高风险批准。普通 Pi 可运行 `pi install npm:@azhi-ss/feishu-remote` |
 | 核心策略守卫 | 内置（隐藏的 `feishu-core-policy` 扩展） | 高危 `lark-cli --yes` 审批守卫；拦截 `/share` `/import` `/login` `/logout` |
 | Skill 编写引导 | 内置 `feishu-skill-maker` skill | 创建新 Feishu Skill 的规范指引 |

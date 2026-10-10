@@ -19,11 +19,11 @@ function paint(ui: StatusUI, color: ThemeColor, text: string): string {
   return ui.theme?.fg?.(color, text) ?? text;
 }
 
-export function setMemoryStatus(ctx: ExtensionContext, degraded: boolean): void {
+export function setMemoryStatus(ctx: ExtensionContext, on: boolean): void {
   const ui = uiFor(ctx);
   if (!ui?.setStatus) return;
-  const text = degraded ? "○ mem off" : "● mem";
-  ui.setStatus(MEMORY_STATUS_KEY, paint(ui, degraded ? "warning" : "success", text));
+  const text = on ? "● mem" : "○ mem off";
+  ui.setStatus(MEMORY_STATUS_KEY, paint(ui, on ? "success" : "warning", text));
 }
 
 export function setSkillsStatus(ctx: ExtensionContext, status: SkillsStatus): void {

@@ -13,7 +13,6 @@ import { FeishuResourceLoader } from "./resources.js";
 import { cwdMismatchNotice, sessionManagerFor } from "./sessions.js";
 import { CORE_TOOLS } from "./policy.js";
 import { settingsManagerFor, ensureDefaultTheme } from "./settings.js";
-import { memoryRuntime } from "./memory.js";
 
 const ANSI_ESCAPE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
 const PI_RESUME_NOTICE = /^To resume this session:\s+pi(?:\s+--session-dir\s+(?:'[^']*'|"[^"]*"|\S+))?\s+--session\s+(\S+)$/;
@@ -43,7 +42,7 @@ function installResumeNoticeRewrite(): () => void {
  * pinned pi-coding-agent version belongs to feishu's own package.json, and
  * `pi update --extensions` operates on ~/.pi/agent, a different package set).
  * Set only at Runtime entry, never for feishu init/install/update management
- * commands so npm installs still work. Does not block real model/Mem0/lark
+ * commands so npm installs still work. Does not block real model or lark
  * traffic.
  */
 export function disablePiStartupNetworkChecks(env: NodeJS.ProcessEnv = process.env): void {
@@ -60,15 +59,7 @@ async function createRuntimeForMode(cwd: string, projectRoot: string, projectKey
   const piHome = join(process.env.HOME!, ".pi", "agent");
   const modelRuntime = await ModelRuntime.create({ authPath: join(piHome, "auth.json"), modelsPath: join(piHome, "models.json"), allowModelNetwork: false });
   const settingsManager = settingsManagerFor(agentHome, projectRoot);
-  // FEISHU_UNATTENDED=1 runs are memory-less by design (SPEC §16.1): Mem0 never
-  // enters the extension list — no key, ping, recall, capture, or warning, so
-  // "no memory" is the expected state rather than a degraded session.
-  const memory = process.env.FEISHU_UNATTENDED === "1"
-    ? { diagnostic: () => undefined }
-    : await memoryRuntime(agentHome);
-  if (memory.warning) process.stderr.write(`${memory.warning}\n`);
-  const resourceLoader = new FeishuResourceLoader(agentHome, projectRoot, projectKey, currentRequest, memory.extension);
-  resourceLoader.setMemoryDiagnostic(memory.diagnostic);
+  const resourceLoader = new FeishuResourceLoader(agentHome, projectRoot, projectKey, currentRequest);
   let runtime: AgentSessionRuntime | undefined;
   if (interactive) resourceLoader.setSessionSwitcher(async (path) => {
     const originalCwd = (await import("@earendil-works/pi-coding-agent")).SessionManager.open(path).getCwd();

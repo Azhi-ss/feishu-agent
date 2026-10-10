@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,30 +62,30 @@ test("public init requires explicit model selection and preserves shared bytes a
   const env = hermeticEnv({ HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: "mem0-secret", MEM0_API_HOST: host, PI_OFFLINE: "1" });
   try {
     const single = publicFixture(["one"]); fakeLark(single.bin);
-    const singleResult = await run(single.project, { ...env, HOME: single.home, PATH: `${single.bin}${delimiter}${process.env.PATH}` }, ["init", "--identity", "alice"]);
+    const singleResult = await run(single.project, { ...env, HOME: single.home, PATH: `${single.bin}${delimiter}${process.env.PATH}` }, ["init"]);
     assert.notEqual(singleResult.code, 0); assert.match(singleResult.stderr, /Select an authenticated model explicitly/);
 
-    const ambiguous = await run(f.project, env, ["init", "--identity", "alice"]);
+    const ambiguous = await run(f.project, env, ["init"]);
     assert.notEqual(ambiguous.code, 0); assert.match(ambiguous.stderr, /Select an authenticated model explicitly/);
 
-    const first = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/two", "--thinking", "medium", "--lark-profile", "finance"]);
+    const first = await run(f.project, env, ["init", "--model", "fake/two", "--thinking", "medium", "--lark-profile", "finance"]);
     assert.equal(first.code, 0, first.stderr); assert.match(first.stdout, /Model: fake\/two/);
     let settings = JSON.parse(readFileSync(join(f.agent, "settings.json"), "utf8"));
     assert.deepEqual({ provider: settings.defaultProvider, model: settings.defaultModel, thinking: settings.defaultThinkingLevel }, { provider: "fake", model: "two", thinking: "medium" });
 
-    const preserved = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/one", "--thinking", "high", "--lark-profile", "finance"]);
+    const preserved = await run(f.project, env, ["init", "--model", "fake/one", "--thinking", "high", "--lark-profile", "finance"]);
     assert.equal(preserved.code, 0, preserved.stderr); assert.match(preserved.stdout, /Model: fake\/two/);
     settings = JSON.parse(readFileSync(join(f.agent, "settings.json"), "utf8"));
     assert.deepEqual({ model: settings.defaultModel, thinking: settings.defaultThinkingLevel }, { model: "two", thinking: "medium" });
 
     delete settings.defaultThinkingLevel;
     writeFileSync(join(f.agent, "settings.json"), JSON.stringify(settings) + "\n");
-    const filledThinking = await run(f.project, env, ["init", "--identity", "alice", "--thinking", "high", "--lark-profile", "finance"]);
+    const filledThinking = await run(f.project, env, ["init", "--thinking", "high", "--lark-profile", "finance"]);
     assert.equal(filledThinking.code, 0, filledThinking.stderr); assert.match(filledThinking.stdout, /Model: fake\/two/);
     settings = JSON.parse(readFileSync(join(f.agent, "settings.json"), "utf8"));
     assert.deepEqual({ model: settings.defaultModel, thinking: settings.defaultThinkingLevel }, { model: "two", thinking: "high" });
 
-    const reset = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/one", "--thinking", "xhigh", "--reset-model", "--lark-profile", "finance"]);
+    const reset = await run(f.project, env, ["init", "--model", "fake/one", "--thinking", "xhigh", "--reset-model", "--lark-profile", "finance"]);
     assert.equal(reset.code, 0, reset.stderr); assert.match(reset.stdout, /Model: fake\/one/);
     settings = JSON.parse(readFileSync(join(f.agent, "settings.json"), "utf8"));
     assert.deepEqual({ model: settings.defaultModel, thinking: settings.defaultThinkingLevel }, { model: "one", thinking: "xhigh" });
@@ -97,32 +97,18 @@ test("public init requires explicit model selection and preserves shared bytes a
 test("public init reports no models, missing and rejected Mem0, and doctor failure distinctly while keeping non-secret initialized state", async () => {
   const noModels = publicFixture([]); fakeLark(noModels.bin);
   const baseEnv = hermeticEnv({ HOME: noModels.home, PATH: `${noModels.bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" });
-  const noModel = await run(noModels.project, { ...baseEnv, MEM0_API_KEY: "unused" }, ["init", "--identity", "alice", "--model", "fake/one"]);
+  const noModel = await run(noModels.project, baseEnv, ["init", "--model", "fake/one"]);
   assert.notEqual(noModel.code, 0); assert.match(noModel.stderr, /No authenticated model is available; manage credentials through ordinary Pi/);
-  assert.match(readFileSync(join(noModels.agent, "mem0-config.json"), "utf8"), /feishu:alice/);
+  assert.equal(existsSync(join(noModels.agent, "mem0-config.json")), false);
 
   const f = publicFixture(["one"]); fakeLark(f.bin);
   const env: NodeJS.ProcessEnv = hermeticEnv({ HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, PI_OFFLINE: "1" });
   delete env.MEM0_API_KEY;
   delete env.MEM0_API_HOST;
-  const missing = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/one"]);
-  assert.notEqual(missing.code, 0); assert.match(missing.stderr, /MEM0_API_KEY is missing/);
-  assert.match(readFileSync(join(f.agent, "mem0-config.json"), "utf8"), /feishu:alice/);
-
-  const rejectedServer = createServer((_request, response) => { response.writeHead(200, { "content-type": "application/json" }); response.end('{"status":"error","message":"rejected TEST-REJECTED-KEY"}'); });
-  const rejectedHost = await listen(rejectedServer);
-  try {
-    const rejected = await run(f.project, { ...env, MEM0_API_KEY: "TEST-REJECTED-KEY", MEM0_API_HOST: rejectedHost }, ["init", "--identity", "alice", "--model", "fake/one"]);
-    assert.notEqual(rejected.code, 0); assert.match(rejected.stderr, /Mem0 validation failed/); assert.doesNotMatch(rejected.stdout + rejected.stderr, /TEST-REJECTED-KEY/);
-  } finally { rejectedServer.close(); }
-
   fakeLark(f.bin, 'case "$*" in "doctor") echo "profile finance expired" >&2; exit 7;; *) exit 2;; esac');
-  const healthyServer = createServer((_request, response) => { response.writeHead(200, { "content-type": "application/json" }); response.end('{"status":"ok"}'); });
-  const healthyHost = await listen(healthyServer);
-  try {
-    const doctor = await run(f.project, { ...env, MEM0_API_KEY: "healthy-key", MEM0_API_HOST: healthyHost, LARK_PROFILE: "finance" }, ["init", "--identity", "alice", "--model", "fake/one"]);
-    assert.notEqual(doctor.code, 0); assert.match(doctor.stderr, /Lark doctor failed \(exit 7\): profile finance expired/); assert.doesNotMatch(doctor.stderr, /Mem0 validation failed|No authenticated model/);
-  } finally { healthyServer.close(); }
+  const doctor = await run(f.project, { ...env, LARK_PROFILE: "finance" }, ["init", "--model", "fake/one"]);
+  assert.notEqual(doctor.code, 0); assert.match(doctor.stderr, /Lark doctor failed \(exit 7\): profile finance expired/); assert.doesNotMatch(doctor.stderr, /MEM0_API_KEY is missing|No authenticated model/);
+  assert.equal(existsSync(join(f.agent, "mem0-config.json")), false);
 });
 
 test("public init rejects a stale existing Feishu default until explicit reset", async () => {
@@ -132,11 +118,11 @@ test("public init rejects a stale existing Feishu default until explicit reset",
   const host = await listen(server);
   const env = hermeticEnv({ HOME: f.home, PATH: `${f.bin}${delimiter}${process.env.PATH}`, MEM0_API_KEY: "healthy-key", MEM0_API_HOST: host, PI_OFFLINE: "1" });
   try {
-    const stale = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/one"]);
+    const stale = await run(f.project, env, ["init", "--model", "fake/one"]);
     assert.notEqual(stale.code, 0); assert.match(stale.stderr, /Existing Feishu default is unavailable: fake\/gone.*--reset-model/);
     assert.equal(JSON.parse(readFileSync(join(f.agent, "settings.json"), "utf8")).defaultModel, "gone");
 
-    const reset = await run(f.project, env, ["init", "--identity", "alice", "--model", "fake/one", "--reset-model"]);
+    const reset = await run(f.project, env, ["init", "--model", "fake/one", "--reset-model"]);
     assert.equal(reset.code, 0, reset.stderr); assert.match(reset.stdout, /Model: fake\/one/);
   } finally { server.close(); }
 });
@@ -157,7 +143,7 @@ test("readiness selects authenticated Feishu model, thinking preference, and run
   const before = invariantPaths.map((path) => readFileSync(path));
   const oldPath = process.env.PATH; const oldProfile = process.env.LARK_PROFILE; process.env.PATH = `${bin}${delimiter}${oldPath}`; process.env.LARK_PROFILE = "finance"; process.env.MEM0_API_KEY = "not-logged";
   try {
-    const result = await checkReadiness(home, agent, "fake/one", { createMemoryClient: () => ({ ping: async () => {} }), thinkingLevel: "medium" });
+    const result = await checkReadiness(home, agent, "fake/one", { thinkingLevel: "medium" });
     assert.equal(result.model, "fake/one");
     assert.equal(result.thinking, "medium");
   } finally { process.env.PATH = oldPath; if (oldProfile === undefined) delete process.env.LARK_PROFILE; else process.env.LARK_PROFILE = oldProfile; }
@@ -174,6 +160,6 @@ test("doctor failure is distinct and includes fake doctor diagnostics", async ()
   writeFileSync(join(agent, "settings.json"), '{}');
   writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\necho "profile token expired" >&2\nexit 7\n', { mode: 0o755 });
   const oldPath = process.env.PATH; process.env.PATH = `${bin}${delimiter}${oldPath}`; process.env.MEM0_API_KEY = "secret";
-  try { await assert.rejects(checkReadiness(home, agent, "fake/one", { createMemoryClient: () => ({ ping: async () => {} }) }), /Lark doctor failed \(exit 7\): profile token expired/); }
+  try { await assert.rejects(checkReadiness(home, agent, "fake/one"), /Lark doctor failed \(exit 7\): profile token expired/); }
   finally { process.env.PATH = oldPath; }
 });

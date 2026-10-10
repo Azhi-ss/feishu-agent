@@ -109,7 +109,7 @@ test("Interactive, Print and explicit init perform no implicit service work", { 
     writeFileSync(join(f.root, "bin", name), `#!/bin/sh\nprintf called >> '${marker}'\nexit 99\n`, { mode: 0o755 });
   }
   const env = hermeticEnv(f.env);
-  const initialized = await initRun(f.project, env, ["init", "--identity", "service-test", "--model", "fake/fake-model"]);
+  const initialized = await initRun(f.project, env, ["init", "--model", "fake/fake-model"]);
   assert.equal(initialized.code, 0, initialized.stderr);
   const printed = await initRun(f.project, env, ["-p", "No service activity."]);
   assert.equal(printed.code, 0, printed.stderr);

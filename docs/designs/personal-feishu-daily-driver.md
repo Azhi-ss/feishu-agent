@@ -10,7 +10,7 @@ Mode: Builder
 
 `feishu-agent` is primarily a personal tool: a dedicated Feishu runtime that makes the author's daily work easier without mixing Feishu resources, sessions, memory, or safety policy into ordinary Pi. It may be useful to other people later, but open-source distribution is a consequence of a useful personal workflow, not the initial product constraint.
 
-The current repository already provides the runtime foundation: Pi's public SDK and TUI, official `lark-cli` Skills, project-scoped Mem0 memory, isolated Feishu settings and sessions, explicit Lark identity rules, and a minimal destructive-command guard. The immediate problem is not missing API coverage. A second Feishu-heavy user needs to understand why this exists instead of using ordinary Pi or `lark-cli`, install it from the repository, and complete one useful task without author assistance.
+The current repository already provides the runtime foundation: Pi's public SDK and TUI, official `lark-cli` Skills, optional `pi-hermes-memory` under the Feishu Agent Home, isolated Feishu settings and sessions, explicit Lark identity rules, and a minimal destructive-command guard. The immediate problem is not missing API coverage. A second Feishu-heavy user needs to understand why this exists instead of using ordinary Pi or `lark-cli`, install it from the repository, and complete one useful task without author assistance.
 
 ## What Makes This Cool
 
@@ -26,7 +26,7 @@ The user should feel that the assistant remembers how they work and removes wind
 - Keep the implementation a thin shell over Pi and `lark-cli`; do not fork Pi or implement a new Feishu API client.
 - Preserve `~/.feishu-agent/` resource, session, settings, and memory isolation.
 - Preserve project-scoped memory, explicit Lark identity, and the destructive-action guard.
-- Treat normal `feishu` and `feishu -p` launches as non-updating runtime paths: they may use local commands and cached Skills, but must not perform automatic package/CLI update checks or uncached official Skill synchronization. Treat `feishu init` as an explicit management setup operation that currently performs Mem0 validation, `lark-cli doctor`, package installation, and official Skill synchronization; document its prerequisites and failure behavior instead of promising offline setup. Before implementation changes, reconcile this wording with the stricter `AGENTS.md` statement that currently includes `init` in the zero-network boundary.
+- Treat normal `feishu` and `feishu -p` launches as non-updating runtime paths: they may use local commands and cached Skills, but must not perform automatic package/CLI update checks or uncached official Skill synchronization. Treat `feishu init` as an explicit management setup operation that currently performs `lark-cli doctor`, package installation, and official Skill synchronization; document its prerequisites and failure behavior instead of promising offline setup. Before implementation changes, reconcile this wording with the stricter `AGENTS.md` statement that currently includes `init` in the zero-network boundary.
 - Do not add new CLI flags, dashboards, background daemons, multi-agent orchestration, or npm publication for this milestone.
 - Keep examples free of credentials and real sensitive Feishu content.
 - Follow the repository's existing behavior-oriented test and secret-scanning conventions for any future code change.
@@ -45,7 +45,7 @@ An independent Codex cold read reinforced the direction:
 
 - The strongest future version is a closed-loop Feishu work layer, not a larger command catalog.
 - The user's phrase, “这个主要是个人使用的也可开源给其他人使用,” places personal compounding ahead of distribution. Open source is the sharing mechanism, not the product thesis.
-- Pi already supplies the generic runtime, TUI, sessions, model handling, compression, and core tools. The Feishu-specific half is the isolated Agent Home, Lark Skills and identity rules, Mem0 recall/capture, destructive-action policy, Feishu prompt conventions, and opinionated daily workflows.
+- Pi already supplies the generic runtime, TUI, sessions, model handling, compression, and core tools. The Feishu-specific half is the isolated Agent Home, Lark Skills and identity rules, optional `pi-hermes-memory` stored under that home, destructive-action policy, Feishu prompt conventions, and opinionated daily workflows.
 - A weekend prototype would be a “daily brief to approved update” flow. It would skip new flags, API wrappers, dashboards, daemons, npm publishing, and multi-agent orchestration.
 
 ## Approaches Considered
@@ -70,9 +70,8 @@ Ship the documentation-first golden path:
 2. Make one setup path normative and explicit:
    - install Node >=22.19, Pi, and the official `lark-cli`, with model and Lark authentication already available;
    - clone the repository, run `npm ci`, `npm run build`, and `npm link` (direct `node dist/src/cli.js` is the fallback);
-   - provide `MEM0_API_KEY` through the environment only;
-   - run `feishu init --identity <stable-id> --model <provider/model>`.
-   The README must say that `feishu init` is an explicit network-capable setup operation: current code validates Mem0, runs `lark-cli doctor`, installs the Mem0 package, and synchronizes official Skills. It must document failures and must not promise offline initialization.
+   - run `feishu init --model <provider/model>`.
+   The README must say that `feishu init` is an explicit network-capable setup operation: current code runs `lark-cli doctor`, installs the pinned Feishu Remote Package, and synchronizes official Skills. It does not install a memory package or contact a memory service. It must document failures and must not promise offline initialization.
 3. Add `examples/daily-brief.md` with one canonical, non-destructive flow:
    - `feishu -p "Check today's Feishu schedule and relevant project context. Rank my top three priorities and draft a standup update. Do not send or modify anything."`;
    - expected sections: today's schedule, relevant project context, three ranked priorities, draft update, and `Status: not sent`;
@@ -85,10 +84,10 @@ This approach matches the personal-first goal, uses the current Runtime rather t
 
 ## Initialization Boundary for This Design
 
-- `feishu init` is an explicit management setup command, not a passive runtime launch. In the current implementation it may contact Mem0, run `lark-cli doctor`, install the pinned Mem0 package, and synchronize official Skills.
-- Normal `feishu` and `feishu -p` launches must not perform automatic Pi or `lark-cli` update checks or uncached official Skill synchronization. They use the local version/cache path and degrade when runtime memory is unavailable.
+- `feishu init` is an explicit management setup command, not a passive runtime launch. In the current implementation it runs `lark-cli doctor`, installs the pinned Feishu Remote Package, and synchronizes official Skills. It does not install a memory package or contact a memory service.
+- Normal `feishu` and `feishu -p` launches must not perform automatic Pi or `lark-cli` update checks or uncached official Skill synchronization. They use the local version/cache path. Missing `pi-hermes-memory` leaves the TUI memory indicator off and does not block the session.
 - The quickstart must state that setup can require network access and can fail. It must not call a failed or partially completed setup “ready.”
-- Failure expectations for the documented path are: no authenticated model fails before a usable runtime; missing `MEM0_API_KEY` or failed Mem0 validation returns a nonzero diagnostic; failed `lark-cli doctor` returns its diagnostic; official Skill sync uses a valid previous cache when available and otherwise fails clearly; package installation failure returns a nonzero result and can be retried idempotently. The initial Home scaffold may remain after a failed setup.
+- Failure expectations for the documented path are: no authenticated model fails before a usable runtime; failed `lark-cli doctor` returns its diagnostic; official Skill sync uses a valid previous cache when available and otherwise fails clearly; package installation failure returns a nonzero result and can be retried idempotently. The initial Home scaffold may remain after a failed setup. Missing `MEM0_API_KEY` is not a failure.
 - The current `AGENTS.md` wording includes `init` in the zero-network boundary while `SPEC.md` and the implementation require these explicit setup operations. This design records the chosen contract but does not silently edit that policy. Before changing initialization or treating this quickstart as final, reconcile the two documents and decide whether the existing doctor/npm steps need explicit timeouts.
 
 ## Trial Protocol
@@ -115,7 +114,7 @@ A trial passes when the colleague can complete the canonical daily brief, identi
 ## Success Criteria
 
 - The first screen of each README states, in concrete terms, why a personal Feishu user would use this instead of ordinary Pi or raw `lark-cli`.
-- The canonical path is copyable and unambiguous: `npm ci`, `npm run build`, `npm link`, `feishu init --identity <stable-id> --model <provider/model>`, then the documented Print request. Direct invocation is clearly marked as fallback.
+- The canonical path is copyable and unambiguous: `npm ci`, `npm run build`, `npm link`, `feishu init --model <provider/model>`, then the documented Print request. Direct invocation is clearly marked as fallback.
 - The example defines the expected result with headings for today's schedule, relevant project context, three ranked priorities, a draft update, and `Status: not sent`.
 - A Feishu-heavy colleague reaches that first non-destructive result without a live architecture explanation; target time-to-first-success is 10 minutes, pending trial validation.
 - The README accurately distinguishes explicit network-capable `feishu init` from normal non-updating `feishu` and `feishu -p` launches, including the documented failure behavior.
@@ -129,17 +128,16 @@ Initial distribution is the public GitHub repository at `https://github.com/Azhi
 1. install Node >=22.19, ordinary Pi with an authenticated model, and the official `lark-cli` with a usable profile;
 2. clone the repository;
 3. run `npm ci`, `npm run build`, and `npm link`;
-4. provide `MEM0_API_KEY` through the environment only;
-5. run `feishu init --identity <stable-id> --model <provider/model>` and then the example flow.
+4. run `feishu init --model <provider/model>` and then the example flow.
 
 Direct `node dist/src/cli.js` invocation is a documented fallback when `npm link` is unavailable; it is not a second recommended installation path. The existing GitHub Actions CI remains the validation pipeline for build and behavior tests. This milestone does not add npm publication, a standalone binary, or an automatic release pipeline. Revisit a release artifact only after a second user completes the golden path independently.
 
-The README must state that explicit initialization can use the network for Mem0 validation, `lark-cli doctor`, package installation, and official Skill synchronization. Normal runtime launch does not perform automatic update checks or uncached Skill synchronization. No credential is placed in the repository or example files.
+The README must state that explicit initialization can use the network for `lark-cli doctor`, package installation, and official Skill synchronization. Normal runtime launch does not perform automatic update checks or uncached Skill synchronization. No credential is placed in the repository or example files.
 
 ## Next Steps
 
 1. Draft the README opening around the personal daily-driver promise and the Pi/`lark-cli` distinction.
-2. Write the normative quickstart with Node/Pi/`lark-cli` prerequisites, environment-only `MEM0_API_KEY`, explicit `feishu init`, and the first Print-mode example.
+2. Write the normative quickstart with Node/Pi/`lark-cli` prerequisites, explicit `feishu init`, and the first Print-mode example.
 3. Add `examples/daily-brief.md` with the exact prompt, expected headings, `Status: not sent`, explicit follow-up, and resume hint.
 4. Add or reserve `docs/designs/personal-feishu-daily-driver-trial.md` as the non-sensitive trial-results template.
 5. Run the existing build/test and secret checks, then have one Feishu-heavy colleague follow the README without an accompanying explanation.

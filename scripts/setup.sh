@@ -265,28 +265,9 @@ say "Authenticated models:"
 while IFS= read -r line; do say "$line"; done <<< "$models"
 note "Use one of those provider/model values in the next step. This script does not copy the key."
 
-stage "Mem0 API key" 3
-say "feishu init needs MEM0_API_KEY. This script does not write it to disk."
-open_url "https://app.mem0.ai/login"
-step "Sign in, or create a Mem0 Platform account."
-step "Open Settings, then API Keys."
-step "Generate a new key and copy it. It is shown once."
-MEM0_API_KEY=""
-while [[ -z "$MEM0_API_KEY" ]]; do
-  ask_secret MEM0_API_KEY "Paste the Mem0 API key:"
-  [[ -n "$MEM0_API_KEY" ]] || warn "The key was empty."
-done
-note "Held in this process only. Re-running the script asks again."
-
-stage "Initialize" 5
-say "Choose the identity, model, and thinking level stored under ~/.feishu-agent."
-note "An existing identity and model are kept. This script does not pass --reset-*."
-IDENTITY=""
-while true; do
-  ask IDENTITY "Stable memory identity:"
-  if [[ -n "$IDENTITY" && "$IDENTITY" != -* && ! "$IDENTITY" =~ [[:space:]] ]]; then break; fi
-  warn "Identity must be non-empty, contain no spaces, and not start with -."
-done
+stage "Initialize" 3
+say "Choose the model and thinking level stored under ~/.feishu-agent."
+note "An existing model is kept. This script does not pass --reset-*."
 MODEL=""
 while true; do
   ask MODEL "Authenticated model (provider/model):"
@@ -302,18 +283,17 @@ while true; do
     *) warn "Thinking level must be one of: off, minimal, low, medium, high, xhigh." ;;
   esac
 done
-if ! confirm "Run feishu init now? It writes ~/.feishu-agent and checks Mem0."; then
-  warn "Stopped before init. The Mem0 key was not saved."
+if ! confirm "Run feishu init now? It writes ~/.feishu-agent."; then
+  warn "Stopped before init."
   exit 1
 fi
 INIT_LOG=$(mktemp)
-MEM0_API_KEY="$MEM0_API_KEY" node "$ROOT/dist/src/cli.js" init \
-  --identity "$IDENTITY" --model "$MODEL" --thinking "$THINKING" | tee "$INIT_LOG"
+node "$ROOT/dist/src/cli.js" init \
+  --model "$MODEL" --thinking "$THINKING" | tee "$INIT_LOG"
 
-stage "Keep the Mem0 key in your shell" 1
-say "Init is done. The Mem0 key was not written to disk."
-say "In every new terminal, export MEM0_API_KEY before you run feishu."
-note "Do not commit the key or put it in SOUL.md or USER.md."
+stage "Init finished" 1
+say "Init is done."
+note "Long-term memory is optional: feishu install npm:pi-hermes-memory@0.9.10"
 if [[ -s "$INIT_LOG" ]]; then
   say "Init summary:"
   while IFS= read -r line; do say "$line"; done < "$INIT_LOG"
@@ -321,8 +301,7 @@ fi
 pause
 
 finish
-say "In every new terminal, export MEM0_API_KEY before you run feishu."
-note "Do not commit the key or put it in SOUL.md or USER.md."
+note "Long-term memory is optional: feishu install npm:pi-hermes-memory@0.9.10"
 if [[ -s "${INIT_LOG:-}" ]]; then
   while IFS= read -r line; do say "$line"; done < "$INIT_LOG"
 fi

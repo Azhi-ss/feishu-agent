@@ -18,7 +18,7 @@ function fixture() {
 
 test("readiness requires explicit choice with multiple models and resets only explicitly", async () => {
   const f = fixture(); const oldPath = process.env.PATH; process.env.PATH = `${f.bin}${delimiter}${oldPath}`; process.env.MEM0_API_KEY = "secret";
-  const options = { createMemoryClient: () => ({ ping: async () => {} }) };
+  const options = {};
   try {
     await assert.rejects(checkReadiness(f.home, f.agent, undefined, options), /Select an authenticated model explicitly/);
     assert.equal((await checkReadiness(f.home, f.agent, "fake/two", options)).model, "fake/two");

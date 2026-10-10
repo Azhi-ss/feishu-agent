@@ -5,34 +5,24 @@ import { join } from "node:path";
 import test from "node:test";
 import { initializeHome } from "../src/init.js";
 
-test("fresh init requires identity but bare rerun reuses existing identity", () => {
-  const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-existing-")), ".feishu-agent");
-  initializeHome(agent, "alice");
-  assert.equal(initializeHome(agent, "ignored").identity, "feishu:alice");
-});
-
 test("init creates an idempotent private Home without overwriting choices", () => {
   const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-")), ".feishu-agent");
-  const first = initializeHome(agent, "alice");
-  assert.equal(first.identity, "feishu:alice");
+  initializeHome(agent);
+  assert.equal(existsSync(join(agent, "mem0-config.json")), false);
   assert.match(readFileSync(join(agent, "SYSTEM.md"), "utf8"), /lark-cli skills read <name>/);
   const custom = "You are Feishu Agent. CUSTOM SYSTEM\n"; writeFileSync(join(agent, "SYSTEM.md"), custom);
   const settings = '{"defaultProvider":"fake","defaultModel":"one"}\n'; writeFileSync(join(agent, "settings.json"), settings);
-  const second = initializeHome(agent, "bob");
-  assert.equal(second.identity, "feishu:alice");
+  initializeHome(agent);
   assert.equal(readFileSync(join(agent, "SYSTEM.md"), "utf8"), custom);
   assert.equal(readFileSync(join(agent, "settings.json"), "utf8"), settings);
-  const reset = initializeHome(agent, "bob", { identity: true, system: true });
-  assert.equal(reset.identity, "feishu:bob");
+  initializeHome(agent, { system: true });
   assert.notEqual(readFileSync(join(agent, "SYSTEM.md"), "utf8"), custom);
   assert.match(readFileSync(join(agent, "SYSTEM.md"), "utf8"), /lark-cli skills read <name>/);
-  assert.doesNotMatch(readFileSync(join(agent, "mem0-config.json"), "utf8"), /apiKey/);
-  assert.throws(() => initializeHome(join(agent, "bad"), ""), /explicit stable/);
 });
 
 test("init installs default Feishu Skills without overwriting user edits", () => {
   const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-skill-")), ".feishu-agent");
-  const first = initializeHome(agent, "alice");
+  const first = initializeHome(agent);
   const skillPath = join(agent, "skills", "feishu-skill-maker", "SKILL.md");
   assert(first.created.includes(skillPath));
   const body = readFileSync(skillPath, "utf8");
@@ -47,6 +37,7 @@ test("init installs default Feishu Skills without overwriting user edits", () =>
     "deslop-zh",
     "feishu-pro-diagram",
     "feishu-package-curator",
+    "feishu-hermes-memory",
     "feishu-tech-note-writer",
     "volc-devinstance",
   ]) {
@@ -63,11 +54,15 @@ test("init installs default Feishu Skills without overwriting user edits", () =>
   const devctlBody = readFileSync(devctlPath, "utf8");
   assert.doesNotMatch(devctlBody, /\/home\/dministrator/);
   assert.match(devctlBody, /find_mlp_bin/);
+  const hermesPaths = readFileSync(join(agent, "skills", "feishu-hermes-memory", "SKILL.md"), "utf8");
+  assert.match(hermesPaths, /~\/\.feishu-agent\/pi-hermes-memory/);
+  assert.match(hermesPaths, /PI_CODING_AGENT_DIR/);
+  assert.match(hermesPaths, /不要按文档去 `~\/\.pi\/agent`/);
   const processTemplate = readFileSync(join(agent, "skills", "process-optimization-biweekly", "SKILL.md"), "utf8");
   assert.match(processTemplate, /<CHAT_ID>|<DOC_TOKEN>|<SPREADSHEET_TOKEN>/);
   assert.doesNotMatch(processTemplate, /(?:ou|oc)_[A-Za-z0-9]{12,}/);
   const edited = "---\nname: feishu-skill-maker\ndescription: 我的自定义规范\n---\n\n# Custom\n";
   writeFileSync(skillPath, edited);
-  initializeHome(agent, "alice");
+  initializeHome(agent);
   assert.equal(readFileSync(skillPath, "utf8"), edited);
 });

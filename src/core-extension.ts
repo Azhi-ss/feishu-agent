@@ -46,24 +46,20 @@ export function installOuterEditorGuard(ctx: ExtensionContext): void {
   });
 }
 
-function installStatusLine(pi: ExtensionAPI, memoryDiagnostic?: () => string | undefined, skillsStatus?: () => SkillsStatus): void {
+function installStatusLine(pi: ExtensionAPI, skillsStatus?: () => SkillsStatus, memoryOn?: () => boolean): void {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
-    setMemoryStatus(ctx, Boolean(memoryDiagnostic?.()));
+    setMemoryStatus(ctx, memoryOn?.() ?? false);
     setSkillsStatus(ctx, skillsStatus?.() ?? "unavailable");
   });
 }
 
-export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, memoryDiagnostic?: () => string | undefined, resourceLoader?: { getSystemPrompt(): string | undefined; getSkillsStatus?: () => SkillsStatus; setDestructiveApproval?: (approved: boolean) => void }): ExtensionFactory {
+export function corePolicyExtension(currentRequest?: string, switchSelectedSession?: (path: string) => Promise<void>, resourceLoader?: { getSystemPrompt(): string | undefined; getSkillsStatus?: () => SkillsStatus; getMemoryStatus?: () => "on" | "off"; setDestructiveApproval?: (approved: boolean) => void }): ExtensionFactory {
   let approved = userApprovesDestructive(currentRequest);
   return (pi: ExtensionAPI) => {
-    installStatusLine(pi, memoryDiagnostic, resourceLoader?.getSkillsStatus?.bind(resourceLoader));
+    installStatusLine(pi, resourceLoader?.getSkillsStatus?.bind(resourceLoader), () => resourceLoader?.getMemoryStatus?.() === "on");
     pi.on("session_start", (_event, ctx) => {
       installOuterEditorGuard(ctx);
-      if (ctx.mode === "tui") {
-        const warning = memoryDiagnostic?.();
-        if (warning) ctx.ui.notify(warning, "warning");
-      }
     });
     if (switchSelectedSession) pi.registerCommand("feishu-resume", {
       description: "Open the current Feishu Project session selector",

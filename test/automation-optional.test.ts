@@ -16,7 +16,7 @@ test("core help and init do not expose or install optional Automation", async t 
   const rejected = await run(f.project, f.env, ["automation", "list"]);
   assert.notEqual(rejected.code, 0);
   assert.match(rejected.stderr, /Unknown command/);
-  const initialized = await run(f.project, f.env, ["init", "--identity", "optional-test", "--model", "fake/fake-model"]);
+  const initialized = await run(f.project, f.env, ["init", "--model", "fake/fake-model"]);
   assert.equal(initialized.code, 0, initialized.stderr);
   assert.equal(existsSync(join(f.agentHome, "skills", "feishu-automation")), false);
   assert.equal(existsSync(join(f.home, "feishu-jobs")), false);

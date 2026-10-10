@@ -13,11 +13,11 @@ The composition of Pi `AgentSessionRuntime` with Pi's interactive TUI or one-sho
 _Avoid_: Forked Pi runtime, modified Pi core, patched third-party package, JSON mode, RPC mode, session sharing, external session import, credential mutation, extension-owned core policy
 
 **Long-term Memory**:
-Durable learned context that remains available across Feishu Agent sessions and devices. Automatic learning includes user messages and assistant text replies—but not raw tool results—and is always person-scoped: every Feishu Project and machine captures into and recalls from one fixed Mem0 bucket (`app_id="feishu"`) under the explicitly chosen stable `feishu:<identity>` Mem0 user ID, so memory survives machine moves and directory changes (issue #35). The project path still partitions sessions and project packages, but not memory. Cross-project preferences or raw source material enter memory only through an explicit memory action. Memory is optional at runtime: an unavailable Mem0 service is surfaced clearly but does not block the Feishu Agent's other work.
-_Avoid_: Session history, transcript, chat log, device-local memory, inferred user identity, startup dependency, path-hash-scoped automatic capture, raw tool-output capture
+Optional memory from an explicitly installed `pi-hermes-memory` package. Its files live in the Feishu Agent Home, not under ordinary Pi's agent directory. Feishu does not ship Mem0 and does not send conversation text to Mem0. A Feishu Session remains the turn-by-turn record.
+_Avoid_: Mem0, memory identity, `~/.pi/agent` memory files
 
 **Feishu Agent Home**:
-The private configuration root `~/.feishu-agent/` that owns this agent's packages, skills, system prompt, Mem0 state, and centrally stored session files partitioned by Feishu Project. `feishu init` creates this root, installs and configures the default Mem0 package and the Feishu Remote Package, synchronizes official `lark-cli` skills, and validates Lark plus model readiness.
+The private configuration root `~/.feishu-agent/` that owns this agent's packages, skills, system prompt, and centrally stored session files partitioned by Feishu Project. `feishu init` creates this root, installs the Feishu Remote Package, synchronizes official `lark-cli` skills, and validates Lark plus model readiness. It does not install a memory package or record a memory identity.
 _Avoid_: `~/.pi/agent/`, shared agent home, global agent config, repository-stored transcripts, partially initialized home
 
 **Model Authentication**:
