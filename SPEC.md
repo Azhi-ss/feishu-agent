@@ -83,7 +83,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 74. 作为用户，我希望首版不包含 JSON 和 RPC 模式，从而实现范围保持最小。
 85. 作为通过 Host Agent 委派飞书任务的用户，我希望 `feishu --session <id> -p <prompt>` 在当前 Project 分区内续接同一个会话，且每次 Print 运行都在 stderr 报告会话 ID，从而同一件事可以多轮迭代（改稿、确认后再执行）而不丢上下文。
 86. 作为通过 Host Agent 委派飞书任务的用户，我希望 Print 模式下飞书 Agent 缺少必要信息、或高危操作需要我确认时以退出码 3 结束并给出问题，从而 Host 能区分“做完了”和“在等我回答”，拿到我的答复后用同一会话续接。
-87. 作为用户，我希望 TUI 横幅在 `feishuStartup.sections` 包含 `tasks` 时列出分配给我且未完成的飞书任务名字，从而打开助手就能看到待办；名单只由我显式刷新，启动不被任务请求拖住。
+87. 作为用户，我希望 TUI 横幅在 `feishuStartup.sections` 包含 `tasks` 时列出分配给我且未完成的飞书任务名字，从而打开助手就能看到待办；启动只在启用 `tasks` 段时后台拉取一次且不阻塞 TUI，之后仍由我显式刷新。
 75. 作为用户，我希望 `/share` 被提交前拦截，从而不能误把飞书会话上传为 GitHub Gist。
 76. 作为用户，我希望 `/import` 被提交前拦截，从而外部会话不能污染 Feishu 会话和自动记忆。
 77. 作为用户，我接受禁用命令仍可能出现在 Pi 原生自动补全中，从而无需为此 Fork 或重写整套 TUI。
@@ -562,7 +562,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 15. **Unfinished task list**
     - `feishu tasks refresh` 以用户身份拉取未完成任务并只写入名字与截止日期；失败不覆盖已有 `tasks.json`，stderr 可操作。
     - 横幅仅在 `feishuStartup.sections` 含 `tasks` 且名单非空时显示；排序为过期、今天、未来、无日期；超过 5 条时为 4 个名字加 `+N`，整段 5 行；全天日期按 UTC 日历日。
-    - 启动与 ResourceLoader reload 不调用 `lark-cli task`。
+    - ResourceLoader reload 不调用 `lark-cli task`；启动仅在 `feishuStartup.sections` 含 `tasks` 时拉取一次（§15.1）。
 
 16. **Automation**
     - 复用真实 CLI 主测试缝，按 §16.5 与完整 PRD 验证任务管理/确认、受控时间、并发/恢复、无人 Print、Skill 接线、服务替身、秘密扫描及 macOS/Linux × Node 22/24 行为矩阵。

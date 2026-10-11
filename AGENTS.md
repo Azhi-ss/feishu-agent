@@ -26,7 +26,7 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 
 ## 硬边界（动这些之前先停下来和用户讨论）
 
-1. **启动路径零网络、零阻塞**。Interactive/Print/init 启动只允许本地命令（如 `lark-cli --version`）和缓存命中。任何网络请求、自动更新、长超时同步调用都要先征得用户同意——2026-09 曾因启动时自动更新 lark-cli（同步网络 + `npx skills` 状态检查）导致 TUI 卡死，被整体移除（commit 08f769b）。官方 Skills 靠版本惰性同步：启动只读与当前 `lark-cli` 版本匹配的缓存（不自动重建）；用户显式 `feishu skills sync` 重建，或 `feishu skills sync --update` 一条命令先 `lark-cli update` 再按新版本重建（唯一会联网升级 CLI 的入口，仍需手动）。
+1. **启动路径零网络、零阻塞**。Interactive/Print/init 启动只允许本地命令（如 `lark-cli --version`）和缓存命中。任何网络请求、自动更新、长超时同步调用都要先征得用户同意——2026-09 曾因启动时自动更新 lark-cli（同步网络 + `npx skills` 状态检查）导致 TUI 卡死，被整体移除（commit 08f769b）。**唯一例外**：`feishuStartup.sections` 含 `tasks` 时，Interactive 启动在加载模型的同时异步拉取未完成任务（30s 超时、失败静默保留上一份名单、不阻塞 TUI）；Print/init 与 `/new`、`/reload` 都不拉取，见 SPEC §15.1。官方 Skills 靠版本惰性同步：启动只读与当前 `lark-cli` 版本匹配的缓存（不自动重建）；用户显式 `feishu skills sync` 重建，或 `feishu skills sync --update` 一条命令先 `lark-cli update` 再按新版本重建（唯一会联网升级 CLI 的入口，仍需手动）。
 2. **不 Fork Pi、不 patch 已安装第三方包**。`@earendil-works/pi-coding-agent` 原样使用，版本在 package.json 里钉死。用户授权的 pi-subagents 适配在独立仓库 `Azhi-ss/pi-subagents-feishu` 维护，通过 Package 安装；边界见 `docs/subagents.md`。
 3. **资源隔离**。绝不加载 `.pi/`、`.agents/`、Codex、Claude 的资源；Feishu 的设置、包、Skills、会话，以及已安装的 `pi-hermes-memory` 文件，全部在 `~/.feishu-agent/`。普通 Pi 的 `auth.json`/`models.json` 只读复用。仓库根目录的 `skills/feishu-control/` 是给宿主 Agent 安装的分发资源，不是 Feishu Runtime Skill；不得加入 `DEFAULT_SKILLS`，也不得由 `feishu init` 安装到宿主 Agent 目录或 `~/.feishu-agent/skills/`。
 4. **凭证**。不复制、不打印、不落盘任何 token/API key。环境里若仍有 `MEM0_API_KEY`，不得出现在错误信息、Session 文件或测试输出里。

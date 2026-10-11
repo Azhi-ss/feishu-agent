@@ -111,7 +111,7 @@ function parseTaskList(stdout: string): TaskRecord[] {
   return tasks;
 }
 
-// Explicit /tasks or `feishu tasks refresh` only. Startup, /new, and /reload must not call this.
+// Explicit /tasks, `feishu tasks refresh`, or the single startup pull; /new and /reload must not call this.
 // ponytail: --page-all stops at lark-cli's 40-page cap.
 export async function refreshTaskList(agentHome: string): Promise<number> {
   if (!existsSync(agentHome)) throw new Error("Feishu Agent Home is missing. Run `feishu init`, then `feishu tasks refresh`. The previous list was kept.");
