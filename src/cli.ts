@@ -222,12 +222,12 @@ else {
   }
   else if (args[0] === "tasks") {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
+    const { refreshTaskList, taskRefreshMessage } = await import("./tasks.js");
     try {
-      const { refreshTaskList } = await import("./tasks.js");
       const count = await refreshTaskList(agentHome);
       process.stdout.write(`Refreshed ${count} unfinished Feishu task${count === 1 ? "" : "s"}.\n`);
     } catch (error) {
-      fail(error instanceof Error ? error.message : "Could not refresh Feishu tasks. The previous list was kept.");
+      fail(taskRefreshMessage(error, "Then run `feishu tasks refresh`."));
     }
   }
   else if (args[0] === "skills" && args[1] === "sync") {

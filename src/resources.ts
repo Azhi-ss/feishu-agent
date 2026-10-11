@@ -116,7 +116,7 @@ export class FeishuResourceLoader implements ResourceLoader {
         additionalExtensionPaths: extensionPaths,
         extensionFactories: [
           { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this) },
-          { name: "feishu-startup-banner", hidden: true, factory: startupBannerExtension(() => this.startupInventory()) },
+          { name: "feishu-startup-banner", hidden: true, factory: startupBannerExtension(this.agentHome, () => this.startupInventory()) },
           { name: "feishu-tasks", hidden: true, factory: tasksExtension(this.agentHome) },
           { name: "feishu-find-skill", hidden: true, factory: findSkillExtension(this.agentHome) },
           { name: "feishu-ask-user", hidden: true, factory: askUserExtension() },

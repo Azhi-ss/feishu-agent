@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 import test, { describe } from "node:test";
 import { FeishuResourceLoader } from "../src/resources.js";
 import { startupBannerExtension } from "../src/startup-banner.js";
-import { beginStartupTaskPull, onTasksChanged, tasksExtension } from "../src/tasks.js";
+import { beginStartupTaskPull, onTasksChanged, taskBannerRows, tasksExtension } from "../src/tasks.js";
+import { fakeExtensionApi, startTuiSession } from "./helpers/extension-fixture.js";
 import { waitFor } from "./helpers/automation-cli-fixture.js";
 import { runPty } from "./helpers/pty-harness.js";
 
@@ -31,28 +32,24 @@ function shortDate(offsetDays: number): string {
 }
 
 function frame(dir: string): string {
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = dir;
-  const handlers: Record<string, Array<(event: unknown, ctx: unknown) => void>> = {};
-  let header: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
-  try {
-    startupBannerExtension(() => ({ context: ["AGENTS.md"], skills: ["skill-a"], prompts: [], extensions: [], themes: [] }))({
-      on: (event: string, handler: (event: unknown, ctx: unknown) => void) => { (handlers[event] ??= []).push(handler); },
-    } as never);
-    for (const reason of ["startup", "reload", "new"]) {
-      for (const handler of handlers.session_start ?? []) {
-        handler({ reason }, { mode: "tui", model: { id: "m" }, ui: { setHeader: (next: typeof header) => { header = next; } } });
-      }
-    }
-    assert.ok(header);
-    return header({ requestRender: () => {} }, { fg: (_color: string, text: string) => text }).render(100).join("\n");
-  } finally {
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
-  }
+  const { api, handlers } = fakeExtensionApi();
+  startupBannerExtension(dir, () => ({ context: ["AGENTS.md"], skills: ["skill-a"], prompts: [], extensions: [], themes: [] }))(api);
+  return startTuiSession(handlers, { model: "m", reasons: ["startup", "reload", "new"] }).render(100);
 }
 
 describe("unfinished Feishu tasks", { concurrency: false }, () => {
+test("banner rows rank by a pinned day instead of the wall clock", () => {
+  // New year's day 2026: the previous year's tasks are overdue, the short date keeps its year.
+  const now = new Date(2026, 0, 1, 9, 0, 0).getTime();
+  const rows = taskBannerRows([
+    { name: "Future", due: new Date(2026, 0, 3, 12).getTime() },
+    { name: "Overdue", due: new Date(2025, 11, 30, 12).getTime() },
+    { name: "Today", due: new Date(2026, 0, 1, 23).getTime() },
+    { name: "Undated" },
+  ], now);
+  assert.deepEqual(rows, ["Overdue 2025/12/30", "Today 1/1", "Future 1/3", "Undated"]);
+});
+
 test("banner lists unfinished task names with short dates, overdue first, and +N past five", () => {
   const dir = mkdtempSync(join(tmpdir(), "feishu-tasks-banner-"));
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ feishuStartup: { sections: ["tasks"] } }));
@@ -193,6 +190,8 @@ test("a failed tasks refresh keeps the previous list and says what to do", () =>
   assert.notEqual(failed.status, 0);
   assert.match(failed.stderr, /previous list was kept/);
   assert.match(failed.stderr, /lark-cli auth login/);
+  // The shell entry names the shell's next step.
+  assert.match(failed.stderr, /Then run `feishu tasks refresh`\./);
   assert.equal(readFileSync(file, "utf8"), previous);
 
   delete fixture.env.FEISHU_TASK_FAIL;
@@ -249,38 +248,25 @@ test("/tasks pulls unfinished tasks once and the next banner paint shows them", 
   const previousPath = process.env.PATH;
   const previousLog = process.env.FEISHU_LARK_LOG;
   const previousJson = process.env.FEISHU_TASK_JSON;
-  const previousDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PATH = fixture.env.PATH;
   process.env.FEISHU_LARK_LOG = fixture.log;
   process.env.FEISHU_TASK_JSON = fixture.env.FEISHU_TASK_JSON;
-  process.env.PI_CODING_AGENT_DIR = fixture.agent;
-  const bannerHandlers: Record<string, Array<(event: unknown, ctx: unknown) => void>> = {};
-  let command: ((args: string, ctx: { hasUI: boolean; ui: { notify: (message: string, level: string) => void } }) => Promise<void>) | undefined;
-  let header: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+  const banner = fakeExtensionApi();
+  const tasks = fakeExtensionApi();
   const notices: string[] = [];
-  let paints = 0;
   try {
-    startupBannerExtension()({
-      on: (event: string, handler: (event: unknown, ctx: unknown) => void) => { (bannerHandlers[event] ??= []).push(handler); },
-    } as never);
-    for (const handler of bannerHandlers.session_start ?? []) {
-      handler({}, { mode: "tui", ui: { setHeader: (next: typeof header) => { header = next; } } });
-    }
-    tasksExtension(fixture.agent)({
-      registerCommand: (name: string, spec: { handler: typeof command }) => { if (name === "tasks") command = spec.handler; },
-    } as never);
-    const theme = { fg: (_color: string, text: string) => text };
-    const ui = { requestRender: () => { paints += 1; } };
-    const before = header!(ui, theme).render(80).join("\n");
-    assert.doesNotMatch(before, /Live task/);
+    startupBannerExtension(fixture.agent)(banner.api);
+    const session = startTuiSession(banner.handlers);
+    tasksExtension(fixture.agent)(tasks.api);
+    assert.doesNotMatch(session.render(80), /Live task/);
     assert.equal(existsSync(fixture.log), false);
+    const command = tasks.commands.get("tasks");
     assert.ok(command);
-    await command("", { hasUI: true, ui: { notify: (message) => notices.push(message) } });
-    const after = header!(ui, theme).render(80).join("\n");
-    assert.match(after, /Live task/);
+    await command.handler("", { hasUI: true, ui: { notify: (message: string) => notices.push(message) } } as never);
+    assert.match(session.render(80), /Live task/);
     assert.match(notices.join("\n"), /Pulled 1 unfinished Feishu task\./);
     assert.match(readFileSync(fixture.log, "utf8"), /task \+get-my-tasks --complete=false --as user/);
-    assert.equal(paints, 1);
+    assert.equal(session.paints(), 1);
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
@@ -288,8 +274,6 @@ test("/tasks pulls unfinished tasks once and the next banner paint shows them", 
     else process.env.FEISHU_LARK_LOG = previousLog;
     if (previousJson === undefined) delete process.env.FEISHU_TASK_JSON;
     else process.env.FEISHU_TASK_JSON = previousJson;
-    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousDir;
   }
 });
 
@@ -321,32 +305,22 @@ test("the banner repaints when an interactive startup pull lands", async () => {
   const previousPath = process.env.PATH;
   const previousLog = process.env.FEISHU_LARK_LOG;
   const previousJson = process.env.FEISHU_TASK_JSON;
-  const previousDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PATH = fixture.env.PATH;
   process.env.FEISHU_LARK_LOG = fixture.log;
   process.env.FEISHU_TASK_JSON = fixture.env.FEISHU_TASK_JSON;
-  process.env.PI_CODING_AGENT_DIR = fixture.agent;
-  const handlers: Record<string, Array<(event: unknown, ctx: unknown) => void>> = {};
-  let header: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
-  let paints = 0;
+  const { api, handlers } = fakeExtensionApi();
   try {
-    startupBannerExtension()({
-      on: (event: string, handler: (event: unknown, ctx: unknown) => void) => { (handlers[event] ??= []).push(handler); },
-    } as never);
-    for (const handler of handlers.session_start ?? []) {
-      handler({}, { mode: "tui", ui: { setHeader: (next: typeof header) => { header = next; } } });
-    }
-    const theme = { fg: (_color: string, text: string) => text };
-    const ui = { requestRender: () => { paints += 1; } };
-    assert.match(header!(ui, theme).render(80).join("\n"), /Stale task/);
-    assert.equal(paints, 0);
+    startupBannerExtension(fixture.agent)(api);
+    const session = startTuiSession(handlers);
+    assert.match(session.render(80), /Stale task/);
+    assert.equal(session.paints(), 0);
 
     const landed = new Promise<void>((resolve) => { onTasksChanged(() => { resolve(); }); });
     beginStartupTaskPull(fixture.agent);
     await landed;
 
-    assert.equal(paints, 1, "the startup pull must repaint the banner exactly once");
-    assert.match(header!(ui, theme).render(80).join("\n"), /Live task/);
+    assert.equal(session.paints(), 1, "the startup pull must repaint the banner exactly once");
+    assert.match(session.render(80), /Live task/);
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
@@ -354,8 +328,6 @@ test("the banner repaints when an interactive startup pull lands", async () => {
     else process.env.FEISHU_LARK_LOG = previousLog;
     if (previousJson === undefined) delete process.env.FEISHU_TASK_JSON;
     else process.env.FEISHU_TASK_JSON = previousJson;
-    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousDir;
   }
 });
 
@@ -401,16 +373,19 @@ test("/tasks reports a failed pull and keeps the previous list", async () => {
   process.env.PATH = fixture.env.PATH;
   process.env.FEISHU_LARK_LOG = fixture.log;
   process.env.FEISHU_TASK_FAIL = "1";
-  let command: ((args: string, ctx: { hasUI: boolean; ui: { notify: (message: string, level: string) => void } }) => Promise<void>) | undefined;
+  const tasks = fakeExtensionApi();
   const notices: Array<[string, string]> = [];
   try {
-    tasksExtension(fixture.agent)({
-      registerCommand: (name: string, spec: { handler: typeof command }) => { if (name === "tasks") command = spec.handler; },
-    } as never);
+    tasksExtension(fixture.agent)(tasks.api);
+    const command = tasks.commands.get("tasks");
     assert.ok(command);
-    await command("", { hasUI: true, ui: { notify: (message, level) => { notices.push([message, level]); } } });
+    await command.handler("", { hasUI: true, ui: { notify: (message: string, level: string) => { notices.push([message, level]); } } } as never);
+    const text = notices.map(([message]) => message).join("\n");
     assert.deepEqual(notices.map(([, level]) => level), ["error"]);
-    assert.match(notices.map(([message]) => message).join("\n"), /previous list was kept/);
+    assert.match(text, /previous list was kept/);
+    // The TUI is told the TUI's next step, not the shell's.
+    assert.match(text, /Try \/tasks again\./);
+    assert.doesNotMatch(text, /feishu tasks refresh/);
     assert.equal(readFileSync(file, "utf8"), previous);
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
@@ -422,8 +397,9 @@ test("/tasks reports a failed pull and keeps the previous list", async () => {
   }
 });
 
-test("interactive startup replaces the saved task list before the banner is used", async () => {
-  const fixture = commandHome();
+// Fake model plus credentials for the interactive PTY runs below. Two callers, so
+// the setup lives here once; each run still owns its own PTY script.
+async function interactiveFixture(fixture: ReturnType<typeof commandHome>): Promise<{ project: string; stop: () => void }> {
   const project = join(fixture.home, "project");
   mkdirSync(join(fixture.home, ".pi", "agent"), { recursive: true });
   mkdirSync(project);
@@ -432,8 +408,6 @@ test("interactive startup replaces the saved task list before the banner is used
     feishuStartup: { sections: ["tasks"] },
   }));
   writeFileSync(join(fixture.agent, "SYSTEM.md"), "You are Feishu Agent.\n");
-  writeFileSync(join(fixture.agent, "tasks.json"), JSON.stringify({ tasks: [{ name: "Stale task" }] }));
-  fixture.env.FEISHU_TASK_JSON = JSON.stringify({ ok: true, identity: "user", data: { items: [{ summary: "Live task", completed_at: "0" }] } });
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.end('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
@@ -449,15 +423,43 @@ test("interactive startup replaces the saved task list before the banner is used
   fixture.env.TERM = "xterm-256color";
   fixture.env.COLUMNS = "113";
   fixture.env.LINES = "32";
+  return { project, stop: () => { server.close(); } };
+}
+
+test("interactive startup replaces the saved task list before the banner is used", async () => {
+  const fixture = commandHome();
+  const interactive = await interactiveFixture(fixture);
+  writeFileSync(join(fixture.agent, "tasks.json"), JSON.stringify({ tasks: [{ name: "Stale task" }] }));
+  fixture.env.FEISHU_TASK_JSON = JSON.stringify({ ok: true, identity: "user", data: { items: [{ summary: "Live task", completed_at: "0" }] } });
   try {
-    const result = await runPty(project, [], fixture.env, [
+    const result = await runPty(interactive.project, [], fixture.env, [
       { wait: "Live task", send: "/quit\r" },
     ], { cliPath: cli, timeoutSec: 40 });
     assert.equal(result.code, 0, result.output);
     assert.match(result.output, /Live task/);
+    assert.doesNotMatch(result.output, /Stale task/);
     assert.match(readFileSync(fixture.log, "utf8"), /task \+get-my-tasks --complete=false --as user/);
   } finally {
-    server.close();
+    interactive.stop();
+  }
+});
+
+test("a failed startup pull still opens the TUI with the previous list", async () => {
+  const fixture = commandHome();
+  const interactive = await interactiveFixture(fixture);
+  const file = join(fixture.agent, "tasks.json");
+  writeFileSync(file, JSON.stringify({ tasks: [{ name: "Stale task" }] }));
+  fixture.env.FEISHU_TASK_FAIL = "1";
+  try {
+    const result = await runPty(interactive.project, [], fixture.env, [
+      { wait: "Stale task", send: "/quit\r" },
+    ], { cliPath: cli, timeoutSec: 40 });
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Stale task/);
+    assert.match(readFileSync(fixture.log, "utf8"), /task \+get-my-tasks --complete=false --as user/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { tasks: [{ name: "Stale task" }] });
+  } finally {
+    interactive.stop();
   }
 });
 });

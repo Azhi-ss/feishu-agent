@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,12 +48,8 @@ const BIRD_LINES: BirdPart[][] = [
   [["dim", "    "]],
 ];
 
-function agentHomeDir(): string {
-  return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".feishu-agent");
-}
-
-function startupSettingsPath(): string {
-  return join(agentHomeDir(), "settings.json");
+function startupSettingsPath(agentHome: string): string {
+  return join(agentHome, "settings.json");
 }
 
 function sectionLine(label: string, items: string[], skillsMode: FeishuStartup["skills"], section: StartupSection): string | undefined {
@@ -64,7 +59,9 @@ function sectionLine(label: string, items: string[], skillsMode: FeishuStartup["
   return `  ${label.padEnd(12)} ${body}`;
 }
 
-export function startupBannerExtension(inventory: () => StartupInventory = () => ({ context: [], skills: [], prompts: [], extensions: [], themes: [] })): ExtensionFactory {
+// The Agent Home is injected: its owner (the Resource Loader) already knows it,
+// and tests redirect it without touching the process environment.
+export function startupBannerExtension(agentHome: string, inventory: () => StartupInventory = () => ({ context: [], skills: [], prompts: [], extensions: [], themes: [] })): ExtensionFactory {
   const version = feishuVersion();
   return (pi: ExtensionAPI) => {
     let requestRender: (() => void) | undefined;
@@ -84,7 +81,7 @@ export function startupBannerExtension(inventory: () => StartupInventory = () =>
             const muted = (t: string) => paint("muted", t);
             const dim = (t: string) => paint("dim", t);
             const model = (ctx as { model?: { id?: string } }).model?.id ?? "";
-            const display = readFeishuStartup(startupSettingsPath());
+            const display = readFeishuStartup(startupSettingsPath(agentHome));
             const lines: string[] = [""];
             if (!display || display.banner) {
               const bird = BIRD_LINES.map((parts) => parts.map(([color, text]) => paint(color, text)).join(""));
@@ -110,7 +107,7 @@ export function startupBannerExtension(inventory: () => StartupInventory = () =>
                 if (line) lines.push(dim(line));
               }
               if (display.sections.includes(TASKS_SECTION)) {
-                taskBannerRows(readTaskRecords(agentHomeDir())).forEach((row, index) => {
+                taskBannerRows(readTaskRecords(agentHome)).forEach((row, index) => {
                   lines.push(dim(`  ${(index === 0 ? "Tasks" : "").padEnd(12)} ${row}`));
                 });
               }

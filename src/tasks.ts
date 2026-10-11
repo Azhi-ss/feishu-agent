@@ -8,7 +8,7 @@ import { tasksSectionEnabled } from "./startup-settings.js";
 const execFileAsync = promisify(execFile);
 
 const REFRESH_ARGS = ["task", "+get-my-tasks", "--complete=false", "--as", "user", "--page-all"] as const;
-const AUTH_FAILED = "Could not refresh Feishu tasks. Run `lark-cli auth login`, then `feishu tasks refresh`. The previous list was kept.";
+const AUTH_FAILED = "Could not refresh Feishu tasks. Run `lark-cli auth login`.";
 
 export interface TaskRecord {
   name: string;
@@ -57,8 +57,8 @@ function shortDate(day: string, today: string): string {
 // Overdue, due today, future, then undated. Future sits between today and undated
 // so every unfinished name still appears. ponytail: local calendar day, no per-zone clock.
 // More than five tasks stays five lines: four names, then +N for the rest.
-export function taskBannerRows(records: TaskRecord[]): string[] {
-  const today = calendarDay(Date.now(), false);
+export function taskBannerRows(records: TaskRecord[], now = Date.now()): string[] {
+  const today = calendarDay(now, false);
   const ranked = records.map((record, index) => {
     if (record.due === undefined) return { record, rank: 3, day: "", index };
     const day = calendarDay(record.due, record.allDay === true);
@@ -114,7 +114,7 @@ function parseTaskList(stdout: string): TaskRecord[] {
 // Explicit /tasks, `feishu tasks refresh`, or the single startup pull; /new and /reload must not call this.
 // ponytail: --page-all stops at lark-cli's 40-page cap.
 export async function refreshTaskList(agentHome: string): Promise<number> {
-  if (!existsSync(agentHome)) throw new Error("Feishu Agent Home is missing. Run `feishu init`, then `feishu tasks refresh`. The previous list was kept.");
+  if (!existsSync(agentHome)) throw new Error("Feishu Agent Home is missing. Run `feishu init`.");
   let stdout: string;
   try {
     const result = await execFileAsync("lark-cli", [...REFRESH_ARGS], {
@@ -126,7 +126,7 @@ export async function refreshTaskList(agentHome: string): Promise<number> {
     stdout = result.stdout;
   } catch (error) {
     const missing = typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT";
-    if (missing) throw new Error("lark-cli was not found. Install @larksuite/cli, then run `feishu tasks refresh`. The previous list was kept.");
+    if (missing) throw new Error("lark-cli was not found. Install @larksuite/cli.");
     throw new Error(AUTH_FAILED);
   }
   const tasks = parseTaskList(stdout);
@@ -138,13 +138,20 @@ export async function refreshTaskList(agentHome: string): Promise<number> {
   } catch {
     try { rmSync(temporary, { force: true }); }
     catch { /* unpublished temp list; the previous tasks.json stays in place */ }
-    throw new Error("Could not refresh Feishu tasks. Run `feishu tasks refresh`. The previous list was kept.");
+    throw new Error("Could not refresh Feishu tasks.");
   }
   for (const listener of [...listeners]) {
     try { listener(); }
     catch { /* the list is already on disk; a broken repaint must not fail the pull */ }
   }
   return tasks.length;
+}
+
+// The cause and its fix live in the error; the next step depends on where the pull was
+// started, so each entry writes its own retry line instead of quoting the shell's.
+export function taskRefreshMessage(error: unknown, retry: string): string {
+  const cause = error instanceof Error && error.message ? error.message : "Could not refresh Feishu tasks.";
+  return `${cause} ${retry} The previous list was kept.`;
 }
 
 const listeners = new Set<() => void>();
@@ -177,7 +184,7 @@ export function tasksExtension(agentHome: string): ExtensionFactory {
           if (ctx.hasUI) ctx.ui.notify(message, "info");
           else process.stdout.write(`${message}\n`);
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Could not pull Feishu tasks. The previous list was kept.";
+          const message = taskRefreshMessage(error, "Try /tasks again.");
           if (ctx.hasUI) ctx.ui.notify(message, "error");
           else process.stderr.write(`${message}\n`);
         }

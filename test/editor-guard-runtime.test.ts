@@ -9,6 +9,7 @@ import { corePolicyExtension, guardEditorSubmit } from "../src/core-extension.js
 import { startupBannerExtension } from "../src/startup-banner.js";
 import { packageManager } from "../src/packages.js";
 import { FeishuResourceLoader } from "../src/resources.js";
+import { fakeExtensionApi, startTuiSession } from "./helpers/extension-fixture.js";
 
 class FakeEditor {
   onSubmit?: (text: string) => void;
@@ -146,18 +147,12 @@ test("only the Feishu Remote Package may register /remote", async () => {
 test("startup banner header renders brand, version, model, and cwd only in TUI", () => {
   const previousNoColor = process.env.NO_COLOR;
   delete process.env.NO_COLOR;
-  const handlers = new Map<string, Function>();
-  startupBannerExtension()({ on: (n: string, h: Function) => handlers.set(n, h), registerCommand: () => {} } as never);
-  let factory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+  const { api, handlers } = fakeExtensionApi();
+  startupBannerExtension(mkdtempSync(join(tmpdir(), "feishu-banner-tui-")))(api);
   const usedColors = new Set<string>();
   const theme = { fg: (color: string, text: string) => { usedColors.add(color); return text; } };
-  handlers.get("session_start")!({}, {
-    mode: "tui",
-    model: { id: "gpt-test" },
-    ui: { setHeader: (f: typeof factory) => { factory = f; } },
-  });
-  assert.ok(factory);
-  const output = factory!({ requestRender: () => {} }, theme).render(120).join("\n");
+  const session = startTuiSession(handlers, { model: "gpt-test", theme });
+  const output = session.render(120);
   assert.match(output, /Feishu Agent/);
   assert.match(output, /v0\.1\.0/);
   assert.match(output, /gpt-test/);
@@ -165,7 +160,7 @@ test("startup banner header renders brand, version, model, and cwd only in TUI",
   assert.deepEqual([...usedColors].sort(), ["accent", "dim", "mdLink", "muted"]);
 
   let printSet = false;
-  handlers.get("session_start")!({}, { mode: "print", ui: { setHeader: () => { printSet = true; } } });
+  handlers.session_start[0]({}, { mode: "print", ui: { setHeader: () => { printSet = true; } } });
   assert.equal(printSet, false);
   if (previousNoColor === undefined) delete process.env.NO_COLOR;
   else process.env.NO_COLOR = previousNoColor;
@@ -194,20 +189,16 @@ test("skills status reflects dynamic resource loader status across reload", asyn
 });
 
 test("startup banner respects NO_COLOR", () => {
-  const handlers = new Map<string, Function>();
-  startupBannerExtension()({ on: (n: string, h: Function) => handlers.set(n, h), registerCommand: () => {} } as never);
-  let factory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
-  const theme = { fg: (color: string, text: string) => `\x1b[31m${text}\x1b[0m` };
-  handlers.get("session_start")!({}, {
-    mode: "tui",
-    model: { id: "gpt-test" },
-    ui: { setHeader: (f: typeof factory) => { factory = f; } },
+  const { api, handlers } = fakeExtensionApi();
+  startupBannerExtension(mkdtempSync(join(tmpdir(), "feishu-banner-nocolor-")))(api);
+  const session = startTuiSession(handlers, {
+    model: "gpt-test",
+    theme: { fg: (color: string, text: string) => `\x1b[31m${text}\x1b[0m` },
   });
-  assert.ok(factory);
   const oldNoColor = process.env.NO_COLOR;
   try {
     process.env.NO_COLOR = "1";
-    const plain = factory!({ requestRender: () => {} }, theme).render(120).join("\n");
+    const plain = session.render(120);
     assert.doesNotMatch(plain, /\x1b\[/);
     assert.match(plain, /Feishu Agent/);
   } finally {
