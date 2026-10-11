@@ -13,6 +13,7 @@ import { FeishuResourceLoader } from "./resources.js";
 import { cwdMismatchNotice, sessionManagerFor } from "./sessions.js";
 import { CORE_TOOLS } from "./policy.js";
 import { settingsManagerFor, ensureDefaultTheme } from "./settings.js";
+import { beginStartupTaskPull } from "./tasks.js";
 
 const ANSI_ESCAPE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
 const PI_RESUME_NOTICE = /^To resume this session:\s+pi(?:\s+--session-dir\s+(?:'[^']*'|"[^"]*"|\S+))?\s+--session\s+(\S+)$/;
@@ -160,6 +161,7 @@ export async function runPrint(prompt: string, cwd: string, projectRoot: string,
 }
 
 export async function runInteractive(cwd: string, projectRoot: string, projectKey: string, agentHome: string, resume = false, selectSession = false, sessionId?: string): Promise<void> {
+  beginStartupTaskPull(agentHome);
   const restoreResumeNotice = installResumeNoticeRewrite();
   let runtime: Awaited<ReturnType<typeof createRuntimeForMode>>;
   try {

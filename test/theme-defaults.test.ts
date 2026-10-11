@@ -6,7 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 const { visibleWidth } = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"))("@earendil-works/pi-tui") as { visibleWidth: (text: string) => number };
-import { readFeishuStartup, startupBannerExtension } from "../src/startup-banner.js";
+import { startupBannerExtension } from "../src/startup-banner.js";
+import { readFeishuStartup } from "../src/startup-settings.js";
 import { DEFAULT_THEME_NAME, ensureDefaultTheme } from "../src/settings.js";
 
 test("ensureDefaultTheme backfills the shipped theme once and never overwrites an explicit choice", () => {
@@ -63,7 +64,7 @@ test("the startup banner bird follows theme colors and ships no hardcoded brand 
 
   const painted: string[] = [];
   const theme = { fg: (color: string, text: string) => { painted.push(color); return `<${color}:${text}>`; } };
-  const lines = header!(undefined, theme).render(100);
+  const lines = header!({ requestRender: () => {} }, theme).render(100);
   const frame = lines.join("\n");
 
   assert.match(frame, /Feishu Agent/);
@@ -96,7 +97,7 @@ test("feishuStartup chooses which startup lines appear", () => {
     on: (event: string, handler: (event: unknown, ctx: unknown) => void) => { (handlers[event] ??= []).push(handler); },
   } as never);
   for (const handler of handlers.session_start ?? []) handler({}, { mode: "tui", model: { id: "m" }, ui: { setHeader: (next: typeof header) => { header = next; } } });
-  const frame = header!(undefined, { fg: (_c: string, text: string) => text }).render(80).join("\n");
+  const frame = header!({ requestRender: () => {} }, { fg: (_c: string, text: string) => text }).render(80).join("\n");
   if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
   assert.doesNotMatch(frame, /Feishu Agent/);
   assert.match(frame, /Skills\s+2/);
@@ -127,7 +128,7 @@ test("startup banner lines stay within the terminal width", () => {
       on: (event: string, handler: (event: unknown, ctx: unknown) => void) => { (handlers[event] ??= []).push(handler); },
     } as never);
     for (const handler of handlers.session_start ?? []) handler({}, { mode: "tui", model: { id: "DeepSeek-V4.1-Flash" }, ui: { setHeader: (next: typeof header) => { header = next; } } });
-    const lines = header!(undefined, { fg: (_color: string, text: string) => `\x1b[38;5;66m${text}\x1b[39m` }).render(113);
+    const lines = header!({ requestRender: () => {} }, { fg: (_color: string, text: string) => `\x1b[38;5;66m${text}\x1b[39m` }).render(113);
     for (const [index, line] of lines.entries()) {
       const width = visibleWidth(line);
       assert.ok(width <= 113, `line ${index} visible width ${width} exceeds 113: ${line}`);

@@ -1,6 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { tasksSectionEnabled } from "./startup-settings.js";
+
+const execFileAsync = promisify(execFile);
 
 const REFRESH_ARGS = ["task", "+get-my-tasks", "--complete=false", "--as", "user", "--page-all"] as const;
 const AUTH_FAILED = "Could not refresh Feishu tasks. Run `lark-cli auth login`, then `feishu tasks refresh`. The previous list was kept.";
@@ -106,19 +111,19 @@ function parseTaskList(stdout: string): TaskRecord[] {
   return tasks;
 }
 
-// Explicit user command only. Startup, /new, and /reload must not call this.
+// Explicit /tasks or `feishu tasks refresh` only. Startup, /new, and /reload must not call this.
 // ponytail: --page-all stops at lark-cli's 40-page cap.
-export function refreshTaskList(agentHome: string): number {
+export async function refreshTaskList(agentHome: string): Promise<number> {
   if (!existsSync(agentHome)) throw new Error("Feishu Agent Home is missing. Run `feishu init`, then `feishu tasks refresh`. The previous list was kept.");
   let stdout: string;
   try {
-    stdout = execFileSync("lark-cli", [...REFRESH_ARGS], {
+    const result = await execFileAsync("lark-cli", [...REFRESH_ARGS], {
       encoding: "utf8",
       env: process.env,
       timeout: 30_000,
       maxBuffer: 8 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
     });
+    stdout = result.stdout;
   } catch (error) {
     const missing = typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT";
     if (missing) throw new Error("lark-cli was not found. Install @larksuite/cli, then run `feishu tasks refresh`. The previous list was kept.");
@@ -127,12 +132,56 @@ export function refreshTaskList(agentHome: string): number {
   const tasks = parseTaskList(stdout);
   const file = join(agentHome, "tasks.json");
   const temporary = join(agentHome, `.tasks.${process.pid}.tmp`);
-  writeFileSync(temporary, `${JSON.stringify({ tasks }, null, 2)}\n`);
-  try { renameSync(temporary, file); }
-  catch {
+  try {
+    writeFileSync(temporary, `${JSON.stringify({ tasks }, null, 2)}\n`);
+    renameSync(temporary, file);
+  } catch {
     try { rmSync(temporary, { force: true }); }
     catch { /* unpublished temp list; the previous tasks.json stays in place */ }
     throw new Error("Could not refresh Feishu tasks. Run `feishu tasks refresh`. The previous list was kept.");
   }
+  for (const listener of [...listeners]) {
+    try { listener(); }
+    catch { /* the list is already on disk; a broken repaint must not fail the pull */ }
+  }
   return tasks.length;
+}
+
+const listeners = new Set<() => void>();
+
+// Fired after a list lands on disk. The banner repaints on it; the pull itself
+// knows nothing about renderers, so /tasks and startup reach it the same way.
+export function onTasksChanged(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+const startupPulls = new Map<string, Promise<void>>();
+
+// One pull per Agent Home per process, started before model load so it overlaps startup.
+export function beginStartupTaskPull(agentHome: string): void {
+  if (startupPulls.has(agentHome) || !tasksSectionEnabled(agentHome)) return;
+  startupPulls.set(agentHome, refreshTaskList(agentHome).then(() => undefined, () => undefined)); // a failed pull keeps the previous list and still lets the TUI open
+}
+
+// The /tasks slash command belongs to the tasks domain: refresh and report. It does
+// not repaint anything; the banner reacts to onTasksChanged like every other consumer.
+export function tasksExtension(agentHome: string): ExtensionFactory {
+  return (pi: ExtensionAPI) => {
+    pi.registerCommand("tasks", {
+      description: "Pull your unfinished Feishu tasks into the banner",
+      handler: async (_args, ctx) => {
+        try {
+          const count = await refreshTaskList(agentHome);
+          const message = `Pulled ${count} unfinished Feishu task${count === 1 ? "" : "s"}.`;
+          if (ctx.hasUI) ctx.ui.notify(message, "info");
+          else process.stdout.write(`${message}\n`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Could not pull Feishu tasks. The previous list was kept.";
+          if (ctx.hasUI) ctx.ui.notify(message, "error");
+          else process.stderr.write(`${message}\n`);
+        }
+      },
+    });
+  };
 }

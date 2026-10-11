@@ -291,7 +291,7 @@ Startup listing is Pi's. Set `"quietStartup": true` in `~/.feishu-agent/settings
 "feishuStartup": { "banner": true, "skills": "count", "sections": ["context", "skills", "prompts", "extensions", "themes"] }
 ```
 
-`skills` is `names`, `count`, or `hide`. `banner: false` drops the bird header. Add `"tasks"` to `sections` to list unfinished Feishu task names from `~/.feishu-agent/tasks.json` (a short date follows the name only when that task has a due date; at most five lines, with further names collapsed into `+N`). Refresh that file with `feishu tasks refresh`. Startup, `/new`, and `/reload` only read it. Omit `feishuStartup` to keep the default banner only.
+`skills` is `names`, `count`, or `hide`. `banner: false` drops the bird header. Add `"tasks"` to `sections` to list unfinished Feishu task names from `~/.feishu-agent/tasks.json` (a short date follows the name only when that task has a due date; at most five lines, with further names collapsed into `+N`). Interactive startup pulls a fresh list while the rest of the TUI loads. `/new` and `/reload` do not. Pull again with `/tasks`, or `feishu tasks refresh`. Omit `feishuStartup` to keep the default banner only.
 
 ### Recommended optional packages
 

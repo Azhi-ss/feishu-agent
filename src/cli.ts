@@ -72,6 +72,7 @@ Print mode reports "Feishu Session: <id>" on stderr and exits 3 when Feishu Agen
 
 Interactive command:
   /find-skill <query>             Search and install a private Feishu Skill
+  /tasks                          Pull unfinished Feishu tasks into the banner
   /remote [start|stop|status]     Feishu Remote Bridge (installed package)
 
 Resource Isolation is not an OS sandbox. Installed Feishu Package extensions run with current-user permissions.
@@ -223,7 +224,7 @@ else {
     const agentHome = join(realpathSync(homedir()), ".feishu-agent");
     try {
       const { refreshTaskList } = await import("./tasks.js");
-      const count = refreshTaskList(agentHome);
+      const count = await refreshTaskList(agentHome);
       process.stdout.write(`Refreshed ${count} unfinished Feishu task${count === 1 ? "" : "s"}.\n`);
     } catch (error) {
       fail(error instanceof Error ? error.message : "Could not refresh Feishu tasks. The previous list was kept.");

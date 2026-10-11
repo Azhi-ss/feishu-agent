@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -7,6 +8,9 @@ import { fileURLToPath } from "node:url";
 import test, { describe } from "node:test";
 import { FeishuResourceLoader } from "../src/resources.js";
 import { startupBannerExtension } from "../src/startup-banner.js";
+import { beginStartupTaskPull, onTasksChanged, tasksExtension } from "../src/tasks.js";
+import { waitFor } from "./helpers/automation-cli-fixture.js";
+import { runPty } from "./helpers/pty-harness.js";
 
 const cli = join(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), "dist/src/cli.js");
 
@@ -41,7 +45,7 @@ function frame(dir: string): string {
       }
     }
     assert.ok(header);
-    return header(undefined, { fg: (_color: string, text: string) => text }).render(100).join("\n");
+    return header({ requestRender: () => {} }, { fg: (_color: string, text: string) => text }).render(100).join("\n");
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
@@ -213,7 +217,7 @@ test("tasks refresh reports a missing lark-cli without creating a list", () => {
   assert.equal(existsSync(join(agent, "tasks.json")), false);
 });
 
-test("startup, /new, and /reload read the local task list without calling lark-cli task", async () => {
+test("reloading resources does not pull Feishu tasks", async () => {
   const fixture = commandHome();
   writeFileSync(join(fixture.agent, "settings.json"), JSON.stringify({ feishuStartup: { sections: ["tasks"] } }));
   writeFileSync(join(fixture.agent, "tasks.json"), JSON.stringify({ tasks: [{ name: "Keep me" }] }));
@@ -235,6 +239,225 @@ test("startup, /new, and /reload read the local task list without calling lark-c
     else process.env.PATH = previousPath;
     if (previousLog === undefined) delete process.env.FEISHU_LARK_LOG;
     else process.env.FEISHU_LARK_LOG = previousLog;
+  }
+});
+
+test("/tasks pulls unfinished tasks once and the next banner paint shows them", async () => {
+  const fixture = commandHome();
+  writeFileSync(join(fixture.agent, "settings.json"), JSON.stringify({ feishuStartup: { sections: ["tasks"] } }));
+  fixture.env.FEISHU_TASK_JSON = JSON.stringify({ ok: true, identity: "user", data: { items: [{ summary: "Live task", completed_at: "0" }] } });
+  const previousPath = process.env.PATH;
+  const previousLog = process.env.FEISHU_LARK_LOG;
+  const previousJson = process.env.FEISHU_TASK_JSON;
+  const previousDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PATH = fixture.env.PATH;
+  process.env.FEISHU_LARK_LOG = fixture.log;
+  process.env.FEISHU_TASK_JSON = fixture.env.FEISHU_TASK_JSON;
+  process.env.PI_CODING_AGENT_DIR = fixture.agent;
+  const bannerHandlers: Record<string, Array<(event: unknown, ctx: unknown) => void>> = {};
+  let command: ((args: string, ctx: { hasUI: boolean; ui: { notify: (message: string, level: string) => void } }) => Promise<void>) | undefined;
+  let header: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+  const notices: string[] = [];
+  let paints = 0;
+  try {
+    startupBannerExtension()({
+      on: (event: string, handler: (event: unknown, ctx: unknown) => void) => { (bannerHandlers[event] ??= []).push(handler); },
+    } as never);
+    for (const handler of bannerHandlers.session_start ?? []) {
+      handler({}, { mode: "tui", ui: { setHeader: (next: typeof header) => { header = next; } } });
+    }
+    tasksExtension(fixture.agent)({
+      registerCommand: (name: string, spec: { handler: typeof command }) => { if (name === "tasks") command = spec.handler; },
+    } as never);
+    const theme = { fg: (_color: string, text: string) => text };
+    const ui = { requestRender: () => { paints += 1; } };
+    const before = header!(ui, theme).render(80).join("\n");
+    assert.doesNotMatch(before, /Live task/);
+    assert.equal(existsSync(fixture.log), false);
+    assert.ok(command);
+    await command("", { hasUI: true, ui: { notify: (message) => notices.push(message) } });
+    const after = header!(ui, theme).render(80).join("\n");
+    assert.match(after, /Live task/);
+    assert.match(notices.join("\n"), /Pulled 1 unfinished Feishu task\./);
+    assert.match(readFileSync(fixture.log, "utf8"), /task \+get-my-tasks --complete=false --as user/);
+    assert.equal(paints, 1);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousLog === undefined) delete process.env.FEISHU_LARK_LOG;
+    else process.env.FEISHU_LARK_LOG = previousLog;
+    if (previousJson === undefined) delete process.env.FEISHU_TASK_JSON;
+    else process.env.FEISHU_TASK_JSON = previousJson;
+    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousDir;
+  }
+});
+
+test("startup does not pull tasks unless the banner section is enabled", () => {
+  const fixture = commandHome();
+  writeFileSync(join(fixture.agent, "settings.json"), JSON.stringify({ feishuStartup: { sections: ["skills"] } }));
+  writeFileSync(join(fixture.agent, "tasks.json"), '{"tasks":[{"name":"Keep me"}]}\n');
+  const previousPath = process.env.PATH;
+  const previousLog = process.env.FEISHU_LARK_LOG;
+  process.env.PATH = fixture.env.PATH;
+  process.env.FEISHU_LARK_LOG = fixture.log;
+  try {
+    beginStartupTaskPull(fixture.agent);
+    assert.equal(existsSync(fixture.log), false);
+    assert.equal(readFileSync(join(fixture.agent, "tasks.json"), "utf8"), '{"tasks":[{"name":"Keep me"}]}\n');
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousLog === undefined) delete process.env.FEISHU_LARK_LOG;
+    else process.env.FEISHU_LARK_LOG = previousLog;
+  }
+});
+
+test("the banner repaints when an interactive startup pull lands", async () => {
+  const fixture = commandHome();
+  writeFileSync(join(fixture.agent, "settings.json"), JSON.stringify({ feishuStartup: { sections: ["tasks"] } }));
+  writeFileSync(join(fixture.agent, "tasks.json"), JSON.stringify({ tasks: [{ name: "Stale task" }] }));
+  fixture.env.FEISHU_TASK_JSON = JSON.stringify({ ok: true, identity: "user", data: { items: [{ summary: "Live task", completed_at: "0" }] } });
+  const previousPath = process.env.PATH;
+  const previousLog = process.env.FEISHU_LARK_LOG;
+  const previousJson = process.env.FEISHU_TASK_JSON;
+  const previousDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PATH = fixture.env.PATH;
+  process.env.FEISHU_LARK_LOG = fixture.log;
+  process.env.FEISHU_TASK_JSON = fixture.env.FEISHU_TASK_JSON;
+  process.env.PI_CODING_AGENT_DIR = fixture.agent;
+  const handlers: Record<string, Array<(event: unknown, ctx: unknown) => void>> = {};
+  let header: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+  let paints = 0;
+  try {
+    startupBannerExtension()({
+      on: (event: string, handler: (event: unknown, ctx: unknown) => void) => { (handlers[event] ??= []).push(handler); },
+    } as never);
+    for (const handler of handlers.session_start ?? []) {
+      handler({}, { mode: "tui", ui: { setHeader: (next: typeof header) => { header = next; } } });
+    }
+    const theme = { fg: (_color: string, text: string) => text };
+    const ui = { requestRender: () => { paints += 1; } };
+    assert.match(header!(ui, theme).render(80).join("\n"), /Stale task/);
+    assert.equal(paints, 0);
+
+    const landed = new Promise<void>((resolve) => { onTasksChanged(() => { resolve(); }); });
+    beginStartupTaskPull(fixture.agent);
+    await landed;
+
+    assert.equal(paints, 1, "the startup pull must repaint the banner exactly once");
+    assert.match(header!(ui, theme).render(80).join("\n"), /Live task/);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousLog === undefined) delete process.env.FEISHU_LARK_LOG;
+    else process.env.FEISHU_LARK_LOG = previousLog;
+    if (previousJson === undefined) delete process.env.FEISHU_TASK_JSON;
+    else process.env.FEISHU_TASK_JSON = previousJson;
+    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousDir;
+  }
+});
+
+test("a startup pull is once per Agent Home, not once per process", async () => {
+  const fixture = commandHome();
+  const other = join(fixture.home, "second-agent");
+  mkdirSync(other);
+  for (const home of [fixture.agent, other]) {
+    writeFileSync(join(home, "settings.json"), JSON.stringify({ feishuStartup: { sections: ["tasks"] } }));
+  }
+  fixture.env.FEISHU_TASK_JSON = JSON.stringify({ ok: true, identity: "user", data: { items: [{ summary: "Live task", completed_at: "0" }] } });
+  const previousPath = process.env.PATH;
+  const previousLog = process.env.FEISHU_LARK_LOG;
+  const previousJson = process.env.FEISHU_TASK_JSON;
+  process.env.PATH = fixture.env.PATH;
+  process.env.FEISHU_LARK_LOG = fixture.log;
+  process.env.FEISHU_TASK_JSON = fixture.env.FEISHU_TASK_JSON;
+  const pulled = () => existsSync(fixture.log) && readFileSync(fixture.log, "utf8").split("\n").filter((line) => line.includes("+get-my-tasks")).length;
+  try {
+    beginStartupTaskPull(fixture.agent);
+    beginStartupTaskPull(other);
+    beginStartupTaskPull(other);
+    await waitFor(() => existsSync(join(fixture.agent, "tasks.json")) && existsSync(join(other, "tasks.json")));
+    assert.equal(pulled(), 2, "one pull per Agent Home, and the repeat call adds nothing");
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousLog === undefined) delete process.env.FEISHU_LARK_LOG;
+    else process.env.FEISHU_LARK_LOG = previousLog;
+    if (previousJson === undefined) delete process.env.FEISHU_TASK_JSON;
+    else process.env.FEISHU_TASK_JSON = previousJson;
+  }
+});
+
+test("/tasks reports a failed pull and keeps the previous list", async () => {
+  const fixture = commandHome();
+  const file = join(fixture.agent, "tasks.json");
+  const previous = '{"tasks":[{"name":"Keep me"}]}\n';
+  writeFileSync(file, previous);
+  const previousPath = process.env.PATH;
+  const previousLog = process.env.FEISHU_LARK_LOG;
+  const previousFail = process.env.FEISHU_TASK_FAIL;
+  process.env.PATH = fixture.env.PATH;
+  process.env.FEISHU_LARK_LOG = fixture.log;
+  process.env.FEISHU_TASK_FAIL = "1";
+  let command: ((args: string, ctx: { hasUI: boolean; ui: { notify: (message: string, level: string) => void } }) => Promise<void>) | undefined;
+  const notices: Array<[string, string]> = [];
+  try {
+    tasksExtension(fixture.agent)({
+      registerCommand: (name: string, spec: { handler: typeof command }) => { if (name === "tasks") command = spec.handler; },
+    } as never);
+    assert.ok(command);
+    await command("", { hasUI: true, ui: { notify: (message, level) => { notices.push([message, level]); } } });
+    assert.deepEqual(notices.map(([, level]) => level), ["error"]);
+    assert.match(notices.map(([message]) => message).join("\n"), /previous list was kept/);
+    assert.equal(readFileSync(file, "utf8"), previous);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousLog === undefined) delete process.env.FEISHU_LARK_LOG;
+    else process.env.FEISHU_LARK_LOG = previousLog;
+    if (previousFail === undefined) delete process.env.FEISHU_TASK_FAIL;
+    else process.env.FEISHU_TASK_FAIL = previousFail;
+  }
+});
+
+test("interactive startup replaces the saved task list before the banner is used", async () => {
+  const fixture = commandHome();
+  const project = join(fixture.home, "project");
+  mkdirSync(join(fixture.home, ".pi", "agent"), { recursive: true });
+  mkdirSync(project);
+  writeFileSync(join(fixture.agent, "settings.json"), JSON.stringify({
+    defaultProvider: "fake", defaultModel: "fake-model", quietStartup: true, collapseChangelog: true,
+    feishuStartup: { sections: ["tasks"] },
+  }));
+  writeFileSync(join(fixture.agent, "SYSTEM.md"), "You are Feishu Agent.\n");
+  writeFileSync(join(fixture.agent, "tasks.json"), JSON.stringify({ tasks: [{ name: "Stale task" }] }));
+  fixture.env.FEISHU_TASK_JSON = JSON.stringify({ ok: true, identity: "user", data: { items: [{ summary: "Live task", completed_at: "0" }] } });
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address();
+  const port = address && typeof address === "object" ? address.port : 0;
+  writeFileSync(join(fixture.home, ".pi", "agent", "auth.json"), JSON.stringify({ fake: { type: "api_key", key: "fake-key" } }));
+  writeFileSync(join(fixture.home, ".pi", "agent", "models.json"), JSON.stringify({ providers: { fake: { baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", models: [{ id: "fake-model", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 256 }] } } }));
+  delete fixture.env.PI_CODING_AGENT_DIR;
+  delete fixture.env.FEISHU_REMOTE;
+  fixture.env.PI_OFFLINE = "1";
+  fixture.env.TERM = "xterm-256color";
+  fixture.env.COLUMNS = "113";
+  fixture.env.LINES = "32";
+  try {
+    const result = await runPty(project, [], fixture.env, [
+      { wait: "Live task", send: "/quit\r" },
+    ], { cliPath: cli, timeoutSec: 40 });
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Live task/);
+    assert.match(readFileSync(fixture.log, "utf8"), /task \+get-my-tasks --complete=false --as user/);
+  } finally {
+    server.close();
   }
 });
 });

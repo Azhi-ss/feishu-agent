@@ -306,7 +306,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - `feishu --session <id>`
 - `feishu --session <id> -p <prompt>`（续接精确会话的单次 Print 回合，§13.1）
 - `feishu --lark-profile <profile>`
-- 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`、`/remote [start|stop|status|switch]`（`/remote` 由已安装的 Feishu Remote Package 提供，不是内联核心命令）
+- 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`、`/tasks`、`/remote [start|stop|status|switch]`（`/remote` 由已安装的 Feishu Remote Package 提供，不是内联核心命令）
 
 CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/find-skill` 属于 Runtime 内的交互命令，不新增顶层 `feishu` 参数。
 
@@ -316,7 +316,7 @@ CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/fin
 - 失败（Agent Home 不存在、找不到 `lark-cli`、命令非零、输出不是用户身份的任务列表）不覆盖已有文件，stderr 说明下一步，进程非零退出。
 - `feishuStartup.sections` 含 `tasks` 且名单非空时，横幅增加 Tasks 段。每行只有名字；有截止日期时后接短日期（当年 `M/D`，跨年 `YYYY/M/D`）。全天截止按 UTC 日历日，其余按本地日历日。排序：过期、今天到期、未来日期、无日期。不超过 5 条时逐条显示。超过 5 条时整段仍是 5 行：前 4 个名字，最后一行 `+N`（N 为未显示的条数）。
 - 未设置 `feishuStartup`，或 `sections` 省略时，默认段不含 `tasks`。名单缺失、为空或损坏时不显示 Tasks 段，TUI 仍可使用。
-- 启动、`/new`、`/reload` 只读这份名单，不调用 `lark-cli task`，也不为任务访问网络。
+- Interactive 启动在加载模型的同时拉取未完成任务，横幅画出时用这次结果；失败保留上一份名单，不因拉取失败拒绝打开。`/new` 和 `/reload` 不再拉取。`/tasks` 可再拉一次并重画横幅。Print 与 init 不拉取。
 
 ### 16. Unattended Automation
 

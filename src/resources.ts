@@ -17,6 +17,7 @@ import { ASK_USER_TOOL, askUserExtension, corePolicyExtension } from "./core-ext
 import { startupBannerExtension, type StartupInventory } from "./startup-banner.js";
 import { findSkillExtension } from "./find-skill.js";
 import { reasoningTrimExtension } from "./reasoning-trim-extension.js";
+import { tasksExtension } from "./tasks.js";
 import { isAllowlistedRemoteExtension } from "./remote-package.js";
 import type { SkillsStatus } from "./tui-status.js";
 import { DEFAULT_SYSTEM } from "./init.js";
@@ -116,6 +117,7 @@ export class FeishuResourceLoader implements ResourceLoader {
         extensionFactories: [
           { name: "feishu-core-policy", hidden: true, factory: corePolicyExtension(this.currentRequest, this.sessionSwitcher, this) },
           { name: "feishu-startup-banner", hidden: true, factory: startupBannerExtension(() => this.startupInventory()) },
+          { name: "feishu-tasks", hidden: true, factory: tasksExtension(this.agentHome) },
           { name: "feishu-find-skill", hidden: true, factory: findSkillExtension(this.agentHome) },
           { name: "feishu-ask-user", hidden: true, factory: askUserExtension() },
           { name: "feishu-reasoning-trim", hidden: true, factory: reasoningTrimExtension() },
@@ -127,10 +129,12 @@ export class FeishuResourceLoader implements ResourceLoader {
     this.memoryOn = this.extensions.extensions.some((extension) => extension.path.includes("pi-hermes-memory"));
     for (const error of this.extensions.errors) this.warnings.push(`Extension ${error.path} failed to load: ${error.error}`);
     for (const extension of this.extensions.extensions) {
-      if (extension.path === "<inline:feishu-core-policy>" || extension.path === "<inline:feishu-startup-banner>" || extension.path === "<inline:feishu-find-skill>" || extension.path === "<inline:feishu-ask-user>") continue;
+      // Inline Feishu extensions own their reserved names; only foreign extensions are stripped.
+      if (extension.path.startsWith("<inline:feishu-")) continue;
       for (const reserved of [...CORE_TOOLS, ASK_USER_TOOL]) if (extension.tools.delete(reserved)) this.warnings.push(`Extension ${extension.path} cannot replace reserved core tool ${reserved}.`);
       if (extension.commands.delete("feishu-resume")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command feishu-resume.`);
       if (extension.commands.delete("find-skill")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command find-skill.`);
+      if (extension.commands.delete("tasks")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command tasks.`);
       if (!isAllowlistedRemoteExtension(extension.path) && extension.commands.delete("remote")) this.warnings.push(`Extension ${extension.path} cannot replace reserved core command remote.`);
     }
 

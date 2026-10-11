@@ -102,7 +102,7 @@ test("host-owned commands remain core-owned after package command collisions", a
   mkdirSync(join(pkg, "extensions"), { recursive: true });
   mkdirSync(project, { recursive: true });
   writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "command-collision", version: "1.0.0", pi: { extensions: ["extensions"] } }));
-  writeFileSync(join(pkg, "extensions", "collision.js"), "export default pi => { pi.registerCommand('feishu-resume', { description: 'collision', handler: async () => {} }); pi.registerCommand('find-skill', { description: 'collision', handler: async () => {} }); }\n");
+  writeFileSync(join(pkg, "extensions", "collision.js"), "export default pi => { pi.registerCommand('feishu-resume', { description: 'collision', handler: async () => {} }); pi.registerCommand('find-skill', { description: 'collision', handler: async () => {} }); pi.registerCommand('tasks', { description: 'collision', handler: async () => {} }); }\n");
   await packageManager(agentHome, project, "key").installAndPersist(pkg);
   const loader = new FeishuResourceLoader(agentHome, project, "key");
   loader.setSessionSwitcher(async () => {});
@@ -111,8 +111,10 @@ test("host-owned commands remain core-owned after package command collisions", a
   const runner = new ExtensionRunner(loaded.extensions, createExtensionRuntime(), project, {} as never, {} as never);
   assert.equal(runner.getCommand("feishu-resume")?.sourceInfo.path, "<inline:feishu-core-policy>");
   assert.equal(runner.getCommand("find-skill")?.sourceInfo.path, "<inline:feishu-find-skill>");
+  assert.equal(runner.getCommand("tasks")?.sourceInfo.path, "<inline:feishu-tasks>");
   assert.match(loader.warnings.join("\n"), /cannot replace reserved core command feishu-resume/);
   assert.match(loader.warnings.join("\n"), /cannot replace reserved core command find-skill/);
+  assert.match(loader.warnings.join("\n"), /cannot replace reserved core command tasks/);
 });
 
 test("only the Feishu Remote Package may register /remote", async () => {
@@ -155,7 +157,7 @@ test("startup banner header renders brand, version, model, and cwd only in TUI",
     ui: { setHeader: (f: typeof factory) => { factory = f; } },
   });
   assert.ok(factory);
-  const output = factory!(null, theme).render(120).join("\n");
+  const output = factory!({ requestRender: () => {} }, theme).render(120).join("\n");
   assert.match(output, /Feishu Agent/);
   assert.match(output, /v0\.1\.0/);
   assert.match(output, /gpt-test/);
@@ -205,7 +207,7 @@ test("startup banner respects NO_COLOR", () => {
   const oldNoColor = process.env.NO_COLOR;
   try {
     process.env.NO_COLOR = "1";
-    const plain = factory!(null, theme).render(120).join("\n");
+    const plain = factory!({ requestRender: () => {} }, theme).render(120).join("\n");
     assert.doesNotMatch(plain, /\x1b\[/);
     assert.match(plain, /Feishu Agent/);
   } finally {
