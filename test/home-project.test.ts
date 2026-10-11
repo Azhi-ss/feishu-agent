@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,7 +40,11 @@ test("print from HOME (project root aliases Agent Home) never invokes npm or cre
   writeFileSync(join(pi, "auth.json"), JSON.stringify({ fake: { type: "api_key", key: "fake-key" } }));
   writeFileSync(join(pi, "models.json"), JSON.stringify({ providers: { fake: { baseUrl: `${modelHost}/v1`, api: "openai-completions", models: [{ id: "one", reasoning: false, input: ["text"], contextWindow: 4096, maxTokens: 256 }] } } }));
   writeFileSync(join(agent, "settings.json"), JSON.stringify({ defaultProvider: "fake", defaultModel: "one", quietStartup: true, collapseChangelog: true, packages: ["npm:@mem0/pi-agent-plugin@0.1.5"] }));
-  symlinkSync(join(repoRoot, "node_modules", "@mem0", "pi-agent-plugin"), join(agent, "npm", "node_modules", "@mem0", "pi-agent-plugin"));
+  // The fixture owns the installed package: linking into the repo's node_modules made this test
+  // depend on a directory the lockfile no longer installs, and a dangling link falls back to `npm`.
+  const installed = join(agent, "npm", "node_modules", "@mem0", "pi-agent-plugin");
+  mkdirSync(installed, { recursive: true });
+  writeFileSync(join(installed, "package.json"), JSON.stringify({ name: "@mem0/pi-agent-plugin", version: "0.1.5" }));
   writeFileSync(join(bin, "lark-cli"), '#!/bin/sh\ncase "$*" in "--version") echo "lark-cli test";; "skills list --json") echo "[]";; "doctor") exit 0;; *) exit 2;; esac\n', { mode: 0o755 });
   writeFileSync(join(bin, "npm"), `#!/bin/sh\necho "npm-called: $*" >> "${npmMarker}"\nexit 1\n`, { mode: 0o755 });
 
