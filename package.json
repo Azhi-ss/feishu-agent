@@ -19,10 +19,10 @@
     "@earendil-works/pi-coding-agent": "0.87.1"
   },
   "devDependencies": {
-    "@types/node": "22.19.19",
+    "@types/node": "24.13.6",
     "typescript": "5.9.3"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.0.0"
   }
 }

@@ -25,6 +25,6 @@ const [command, prompt] = process.argv.slice(2);
 if (!command || !prompt) fail("Automation worker requires a Feishu executable and task.");
 // POSIX exec preserves the admitted PID and process group: no intermediary
 // can die while leaving an untracked Print child executing business writes.
-if (!process.execve) fail("Automation requires Node >=22.19 on macOS or Linux.");
+if (!process.execve) fail("Automation requires Node >=24 on macOS or Linux.");
 try { process.execve(command, [command, "-p", prompt], process.env); }
 catch { fail("Cannot start Feishu; check the installed executable and PATH."); }

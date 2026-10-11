@@ -16,13 +16,13 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 
 ## 代码规范
 
-- TypeScript strict，ESM，Node >= 22.19。产物在 `dist/`，不提交。
+- TypeScript strict，ESM，Node >= 24（唯一支持版本，本地与 CI 一致；Pi SDK 自身只要 >=22.19，我们比它窄）。产物在 `dist/`，不提交。
 - 不引新依赖：优先复用 `@earendil-works/pi-coding-agent` 已导出的能力。
 - 测试只断言外部可观察行为——真实 CLI 子进程 + 临时 HOME + PATH 注入的 fake `lark-cli`/`npm` + 回环 fake 模型/Mem0 服务；不断言私有字段或 Pi 内部实现。每个非平凡行为至少一个会失败的测试。
 - CLI 用户可见文案用英文（与现有输出一致）；SPEC.md / CONTEXT.md 保持中文，README / CONTEXT 保持英文。
 - **Vendored 第三方资源**（当前为 `themes/`）必须在同目录登记来源 URL、版本/日期与同步步骤（见 `themes/CREDITS.md`）；从上游同步后重跑 `npm test`。Vendored 内容不通过 npm 依赖引入。
 - **空 `catch`** 必须注释吞掉了什么错误、为什么 best-effort，且 `try` 只包一条语句。
-- **Pi SDK 钉版本且属 pre-stable**：当前钉在 0.87.1；升级前先读上游 CHANGELOG 的 extension/editor/theme 行为变更，升完在 Node 22 与 24 下跑全量测试，破坏点写进 commit/issue。0.85.x 曾出现 Remote Bridge 电话回合的 blocked-tool 结算回归；每次升级必须通过工具拦截与停止后队列续跑回归，不盲目追新。
+- **Pi SDK 钉版本且属 pre-stable**：当前钉在 0.87.1；升级前先读上游 CHANGELOG 的 extension/editor/theme 行为变更，升完跑全量测试（本地与 CI 同为 Node 24），破坏点写进 commit/issue。0.85.x 曾出现 Remote Bridge 电话回合的 blocked-tool 结算回归；每次升级必须通过工具拦截与停止后队列续跑回归，不盲目追新。
 
 ## 硬边界（动这些之前先停下来和用户讨论）
 
@@ -39,7 +39,7 @@ node --test dist/test/<name>.test.js   # 跑单个测试文件（先 build）
 - 新行为 → 新测试；修 bug → 先写会失败的回归测试。
 - 测试矩阵原则：临时 HOME/项目、回环 fake 服务，绝不碰真实网络端点、真实飞书账号或用户凭证。
 - 秘密扫描：测试断言产物与诊断输出不含 Mem0 key、lark token。
-- 改 `package.json`/`package-lock.json` 后，用 Node 22 跑一次干净 `npm ci` 验证：npm 11（Node 24）生成的 lock 会漏写 npm 10 要求的 optional peer 条目（CI 矩阵为 22+24，2026-09 曾因此挂过 master）。
+- 改 `package.json`/`package-lock.json` 后跑一次干净 `npm ci` 验证 lock 可用；`.npmrc` 的 `engine-strict` 会在更旧的 Node 上直接拒绝安装，只有一个 Node/npm（24/11），不再有跨 npm 版本的 lock 兼容问题。
 - 迭代跑聚焦测试文件即可，推送 gate 是全量 `npm test`；只报告实际执行过的命令，CI 拥有全量与平台矩阵。
 - 重写历史一律 `git push --force-with-lease`，绝不用裸 `--force`。
 

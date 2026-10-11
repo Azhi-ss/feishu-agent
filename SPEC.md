@@ -448,7 +448,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 - fake 子进程关卡覆盖定时/手动竞争、同任务互斥、两任务容量、等候窗口、超时/取消与崩溃后不重跑，包含模拟副作用后失败的回归。
 - 复用 CLI surface、Print、unattended、init/resource、release/isolation 的既有测试模式，验证确认门、Skill 安装/发现/正文加载/脚本结果、资源/身份上下文、无 Mem0、秘密不复制、高危 guard 不退化。
 - 增补手动执行未到期/暂停/完成/过期 one-shot 不改计划、removed 不可运行、手动进程独立监管，以及保存的 Lark profile 不随调用方或服务默认变化的回归；改 profile 仍需确认。
-- fake 模型只证明接线和政策进入上下文，不证明任意真实模型永不越权。两个平台运行相同行为测试（macOS/Linux × Node 22/24）；服务用替身，不触碰真实任务/crontab/服务。真实 service smoke 另需授权并单独报告；全量 gate、干净安装、diff-check 沿用仓库要求。
+- fake 模型只证明接线和政策进入上下文，不证明任意真实模型永不越权。两个平台运行相同行为测试（macOS/Linux，Node 24）；服务用替身，不触碰真实任务/crontab/服务。真实 service smoke 另需授权并单独报告；全量 gate、干净安装、diff-check 沿用仓库要求。
 
 ## Testing Decisions
 
@@ -565,7 +565,7 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
     - ResourceLoader reload 不调用 `lark-cli task`；启动仅在 `feishuStartup.sections` 含 `tasks` 时拉取一次（§15.1）。
 
 16. **Automation**
-    - 复用真实 CLI 主测试缝，按 §16.5 与完整 PRD 验证任务管理/确认、受控时间、并发/恢复、无人 Print、Skill 接线、服务替身、秘密扫描及 macOS/Linux × Node 22/24 行为矩阵。
+    - 复用真实 CLI 主测试缝，按 §16.5 与完整 PRD 验证任务管理/确认、受控时间、并发/恢复、无人 Print、Skill 接线、服务替身、秘密扫描及 macOS/Linux × Node 24 行为矩阵。
     - 只验证提示词注入和既有 guard，不把模型遵守业务规则当作硬权限测试；不触碰真实任务或账户。
 
 ### Prior art

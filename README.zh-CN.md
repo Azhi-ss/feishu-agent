@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/Azhi-ss/feishu-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Azhi-ss/feishu-agent/actions/workflows/ci.yml)
-[![Node ≥ 22.19](https://img.shields.io/badge/node-%E2%89%A5%2022.19-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![Node ≥ 24](https://img.shields.io/badge/node-%E2%89%A5%2024-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 
 [English](README.md) | **简体中文**
 
@@ -32,7 +32,7 @@ Feishu Agent 以源码方式运行 CLI，**未发布到 npm**。
 
 ### 前置依赖
 
-- **Node.js ≥ 22.19**
+- **Node.js ≥ 24**
 - **[`lark-cli`](https://github.com/larksuite/cli)**——飞书/Lark 官方 CLI，npm 包名 **`@larksuite/cli`**。用 `npm i -g @larksuite/cli` 安装，再执行 `lark-cli auth` 登录，确保 `lark-cli doctor` 通过。
   > 安装的是 `@larksuite/cli`，**不是** npm 上那个字面同名、无关的占位包 `lark-cli`。
 - **[Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 编码助手**——`npm i -g @earendil-works/pi-coding-agent`。Feishu 复用 `~/.pi/agent/` 下 Pi 的模型凭证，且禁用了自身的 `/login`，因此需先用普通 `pi` 完成模型认证（`pi auth` 可检查就绪状态）。

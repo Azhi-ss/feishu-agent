@@ -12,5 +12,5 @@
     "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
     "prepack": "npm run build"
   },
-  "engines": { "node": ">=22.19.0" }
+  "engines": { "node": ">=24.0.0" }
 }

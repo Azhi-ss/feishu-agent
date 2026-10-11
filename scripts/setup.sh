@@ -204,13 +204,13 @@ trap 'rm -f "${INIT_LOG:-}"' EXIT
 banner "Feishu Agent setup"
 
 stage "Node.js" 1
-say "Feishu Agent needs Node.js 22.19 or newer."
+say "Feishu Agent needs Node.js 24 or newer."
 if ! command -v node >/dev/null 2>&1; then
-  warn "Node.js is not installed. Install 22.19 or newer, then re-run this script."
+  warn "Node.js is not installed. Install 24 or newer, then re-run this script."
   exit 1
 fi
-if ! node -e 'const p=process.versions.node.split(".").map(Number); if (p[0]<22 || (p[0]===22 && p[1]<19)) process.exit(1)'; then
-  warn "Node.js $(node -v) is too old. Install 22.19 or newer, then re-run this script."
+if ! node -e 'const p=process.versions.node.split(".").map(Number); if (p[0]<24) process.exit(1)'; then
+  warn "Node.js $(node -v) is too old. Install 24 or newer, then re-run this script."
   exit 1
 fi
 say "Node.js $(node -v) is new enough."

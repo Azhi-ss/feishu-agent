@@ -4,7 +4,7 @@ A thin CLI agent and TUI shell over Pi's SDK and `lark-cli` for Feishu (飞书) 
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/Azhi-ss/feishu-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Azhi-ss/feishu-agent/actions/workflows/ci.yml)
-[![Node ≥ 22.19](https://img.shields.io/badge/node-%E2%89%A5%2022.19-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![Node ≥ 24](https://img.shields.io/badge/node-%E2%89%A5%2024-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 
 **English** | [简体中文](README.zh-CN.md)
 
@@ -32,7 +32,7 @@ Feishu Agent runs as a CLI from source — it is **not published to npm**.
 
 ### Prerequisites
 
-- **Node.js ≥ 22.19**
+- **Node.js ≥ 24**
 - **[`lark-cli`](https://github.com/larksuite/cli)** — the official Feishu/Lark CLI, npm package **`@larksuite/cli`**. Install with `npm i -g @larksuite/cli`, then run `lark-cli auth` to log in so `lark-cli doctor` passes.
   > Install `@larksuite/cli`, **not** the unrelated placeholder package literally named `lark-cli` on npm.
 - **[Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)** coding agent — `npm i -g @earendil-works/pi-coding-agent`. Feishu reuses Pi's model credentials from `~/.pi/agent/` and disables its own `/login`, so authenticate a model with ordinary `pi` first (`pi auth` checks readiness).
@@ -60,13 +60,12 @@ npm link          # exposes the `feishu` binary (or run `node dist/src/cli.js` d
 
 ### Development tests
 
-Use Node 24 for focused iteration and Node 22 for the pre-commit full suite;
-CI covers both versions. SDK upgrades still require full local runs on both.
+Node 24 is the only supported runtime, locally and in CI; there is no second
+version to keep compatible.
 
 ```bash
 npm run build
 node --test dist/test/package-cli.test.js  # select the file relevant to the change
-# With Node 22 active:
 npm test
 git diff --check
 ```

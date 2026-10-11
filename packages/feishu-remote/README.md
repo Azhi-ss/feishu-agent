@@ -10,7 +10,7 @@ include Feishu Agent Skills, Mem0, or high-risk action policy.
 
 ## Requirements
 
-- Node.js 22.19 or later
+- Node.js 24 or later
 - A self-built Feishu/Lark bot app with WebSocket event delivery enabled
 - The bot's App Secret in `FEISHU_REMOTE_APP_SECRET`
 - The App ID and owner `open_id`, resolved in one of these ways:

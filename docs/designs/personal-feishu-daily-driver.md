@@ -68,7 +68,7 @@ Ship the documentation-first golden path:
 
 1. Reframe the top of `README.md` and `README.zh-CN.md` around “why this instead of ordinary Pi,” with `lark-cli` described as the underlying Feishu capability layer.
 2. Make one setup path normative and explicit:
-   - install Node >=22.19, Pi, and the official `lark-cli`, with model and Lark authentication already available;
+   - install Node >=24, Pi, and the official `lark-cli`, with model and Lark authentication already available;
    - clone the repository, run `npm ci`, `npm run build`, and `npm link` (direct `node dist/src/cli.js` is the fallback);
    - run `feishu init --model <provider/model>`.
    The README must say that `feishu init` is an explicit network-capable setup operation: current code runs `lark-cli doctor`, installs the pinned Feishu Remote Package, and synchronizes official Skills. It does not install a memory package or contact a memory service. It must document failures and must not promise offline initialization.
@@ -125,7 +125,7 @@ A trial passes when the colleague can complete the canonical daily brief, identi
 
 Initial distribution is the public GitHub repository at `https://github.com/Azhi-ss/feishu-agent` with source installation. The normative path is:
 
-1. install Node >=22.19, ordinary Pi with an authenticated model, and the official `lark-cli` with a usable profile;
+1. install Node >=24, ordinary Pi with an authenticated model, and the official `lark-cli` with a usable profile;
 2. clone the repository;
 3. run `npm ci`, `npm run build`, and `npm link`;
 4. run `feishu init --model <provider/model>` and then the example flow.

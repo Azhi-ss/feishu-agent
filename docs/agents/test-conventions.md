@@ -124,7 +124,7 @@ the property is broken:
 
 A few timing tests can exceed a deliberately short budget when the full suite runs
 in parallel on a busy machine. Each passes in isolation, none indicates a product
-defect, and **CI has never shown any of them** (the six-job matrix has been green
+defect, and **CI has never shown any of them** (the three-job matrix has been green
 on every run so far). Local full-suite runs are a reference, not the gate: if one
 of these goes red locally, re-run it (or the suite) rather than re-diagnosing.
 

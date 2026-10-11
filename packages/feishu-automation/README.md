@@ -5,7 +5,7 @@ existing schedule, confirmation, storage or run semantics. This package contains
 an independent CLI, Trigger, worker and Pi-compatible Skill. It has no runtime
 npm dependencies, no Extension hooks and no imports from Feishu internals.
 
-Requires Node >=22.19 on Linux/WSL or macOS, an initialized `feishu` executable
+Requires Node >=24 on Linux/WSL or macOS, an initialized `feishu` executable
 and `lark-cli` on PATH. Execution always uses `FEISHU_UNATTENDED=1 feishu -p`:
 Feishu resource isolation and guards remain active, Mem0 and Remote secrets are
 not inherited. The worker uses POSIX exec after admission to preserve the tracked

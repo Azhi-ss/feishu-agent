@@ -9,9 +9,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - name: Check out the tested Feishu subagents fork
@@ -23,7 +20,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Install the subagents fork dependencies
@@ -34,19 +31,16 @@ jobs:
           FEISHU_SUBAGENTS_PACKAGE: ${{ github.workspace }}/reference/pi-subagents-feishu
 
       - name: Check subagents types and upstream unit tests
-        if: matrix.node-version == 22
         working-directory: reference/pi-subagents-feishu
         run: |
           npm run typecheck
           npm test
 
       - name: Build the compiled subagents package
-        if: matrix.node-version == 24
         working-directory: reference/pi-subagents-feishu
         run: npm run build:pkg
 
       - name: Verify compiled subagents installation and execution
-        if: matrix.node-version == 24
         env:
           FEISHU_SUBAGENTS_PACKAGE: ${{ github.workspace }}/reference/pi-subagents-feishu/dist-pkg
         run: node --test dist/test/subagents-runtime.test.js
@@ -60,18 +54,17 @@ jobs:
           rm -rf "$TEST_DIR"
 
   automation:
-    name: Offline automation (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    name: Offline automation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build
