@@ -8,3 +8,7 @@ skills-lock.json
 
 # reference repositories for dev-time design research
 reference/
+
+# local Command Code tool state and session exports
+.commandcode/
+command-code-session-*.html
