@@ -20,6 +20,7 @@ import {
   type RemoteInboundEvent,
 } from "./remote-gateway.js";
 import { acquireRemoteLock, clearHandoffRequest, describeHolder, hasHandoffRequest, readRemoteLock, releaseRemoteLock, requestRemoteHandover, waitForRemoteLockRelease } from "./remote-lock.js";
+import { fallbackReaction, parseReactionChoice, REACTION_PROMPT_FOR_MODEL, type ReactionChoice } from "./reaction-selector.js";
 import { shardText, StreamCardSession, THINKING_STATUS, WORKING_STATUS, visibleAssistantText } from "./stream-card.js";
 
 type RemoteStatus = "off" | "standby" | "connecting" | "connected" | "error";
@@ -30,6 +31,7 @@ const MISSING_SECRET = `Remote bridge needs an app secret: set ${REMOTE_SECRET_E
 interface QueuedMessage {
   chatId: string;
   text: string;
+  opening?: string;
 }
 
 interface ActiveCard {
@@ -38,6 +40,27 @@ interface ActiveCard {
 
 function toolStatusLine(): string {
   return WORKING_STATUS;
+}
+
+function classifierText(message: unknown): string {
+  const content = (message as { content?: unknown })?.content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((part): part is { type?: string; text?: string } => Boolean(part && typeof part === "object" && (part as { type?: string }).type === "text"))
+    .map((part) => part.text ?? "").join("").trim();
+}
+
+async function chooseReaction(ctx: ExtensionContext | undefined, text: string): Promise<ReactionChoice> {
+  if (!ctx?.model) return fallbackReaction;
+  try {
+    const context = {
+      systemPrompt: REACTION_PROMPT_FOR_MODEL,
+      messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }],
+    } as Parameters<typeof ctx.modelRegistry.complete>[1];
+    const response = await ctx.modelRegistry.complete(ctx.model, context, { reasoning: "off", maxTokens: 96, signal: AbortSignal.timeout(5000) });
+    return parseReactionChoice(classifierText(response));
+  } catch {
+    return fallbackReaction;
+  }
 }
 
 /** Latest tool-call name in an assistant message content (the tool signal that reaches extensions during a streamed turn), if any. */
@@ -154,11 +177,11 @@ export function remoteBridgeExtension(): ExtensionFactory {
       return activeTurn !== undefined || !(latestCtx?.isIdle() ?? true);
     }
 
-    function beginCard(chatId: string): ActiveCard | undefined {
+    function beginCard(chatId: string, initialText?: string): ActiveCard | undefined {
       const gw = gateway;
       if (!gw) return undefined;
       const card: ActiveCard = { open: Promise.resolve(undefined) };
-      card.open = gw.openStreamCard(chatId).then(
+      card.open = gw.openStreamCard(chatId, initialText).then(
         (cardId) => {
           const session = new StreamCardSession(
             cardId,
@@ -198,7 +221,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
         notify(latestCtx, lastError!, "error");
         return;
       }
-      activeCard = beginCard(next.chatId);
+      activeCard = beginCard(next.chatId, next.opening);
     }
 
     function acknowledge(chatId: string, text: string): void {
@@ -229,14 +252,16 @@ export function remoteBridgeExtension(): ExtensionFactory {
       return `Remote bridge: unsupported ${messageType || "message type"} messages in v1. Send text instead.`;
     }
 
-    function onInbound(event: RemoteInboundEvent): void {
+    async function onInbound(event: RemoteInboundEvent): Promise<void> {
       if (!credentials || !authorizeInbound(event, credentials.ownerOpenId)) return;
       if (!dedup.claim(event.messageId)) return;
       if (event.messageType !== "text") {
         acknowledge(event.chatId, unsupportedMessageType(event.messageType));
         return;
       }
-      deliver({ chatId: event.chatId, text: event.text });
+      const choice = event.chatType === "group" ? await chooseReaction(latestCtx, event.text) : undefined;
+      if (choice && gateway) await gateway.addReaction(event.messageId, choice.emojiType).catch(() => {});
+      deliver({ chatId: event.chatId, text: event.text, opening: choice?.opening });
     }
 
     async function start(ctx: ExtensionContext, options: { quietIfHeld?: boolean } = {}): Promise<void> {

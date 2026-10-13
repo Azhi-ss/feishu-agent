@@ -136,7 +136,7 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
         return { code: 0, data: { message_id: "om_card-message" } };
       },
       get: async () => { throw new Error("unexpected parent fetch"); },
-    } } },
+      }, messageReaction: { create: async (payload: unknown) => { calls.push({ operation: "reaction", payload }); return { code: 0 }; } } } },
     cardkit: {
       v1: {
         card: {
@@ -195,6 +195,8 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
   });
   assert.deepEqual(received[1], { ownerOpenId: "ou_group_member", chatId: "oc_group", chatType: "group", mentionedBot: true, messageId: "om_group", messageType: "text", text: "@feishu-agent 请回复" });
 
+  await gateway.addReaction("om_1", "PARTY");
+  assert.deepEqual(calls[1]?.payload, { path: { message_id: "om_1" }, data: { reaction_type: { emoji_type: "PARTY" } } });
   await gateway.sendMessage("oc_1", "plain reply");
   const cardId = await gateway.openStreamCard("oc_1");
   const cardCreate = calls.find((call) => call.operation === "card-create")?.payload as { data?: { data?: string } } | undefined;
@@ -205,7 +207,7 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
   await gateway.appendStreamText(cardId, "partial reply", 1, "uuid-1");
   await gateway.closeStreamCard(cardId, "complete reply");
   assert.equal(receivedSecret, "secret-must-stay-in-memory");
-  assert.deepEqual(calls.map(({ operation }) => operation), ["client", "send", "card-create", "send", "card-content", "card-content", "card-content", "card-settings"]);
+  assert.deepEqual(calls.map(({ operation }) => operation), ["client", "reaction", "send", "card-create", "send", "card-content", "card-content", "card-content", "card-settings"]);
   wsOptions?.onReconnecting();
   wsOptions?.onReconnected();
   assert.equal(errors.length, 1);
@@ -242,7 +244,7 @@ test("FeishuGateway quotes the message a text reply points at", async () => {
           fetched.push(payload.path.message_id);
           return parents[payload.path.message_id]!();
         },
-      } } },
+        }, messageReaction: { create: async () => ({ code: 0 }) } } },
       cardkit: { v1: { card: { create: async () => ({ code: 0 }), settings: async () => ({ code: 0 }) }, cardElement: { content: async () => ({ code: 0 }) } } },
     }),
     createDispatcher: () => ({ register: (registered) => { handlers = registered; } }),

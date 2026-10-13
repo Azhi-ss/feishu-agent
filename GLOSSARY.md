@@ -15,3 +15,7 @@ _Avoid_: Phase status, reply text
 **Reply body**:
 The visible answer text streamed into the card and retained in the finalized reply.
 _Avoid_: Thinking, tool output
+
+**Reaction selector**:
+An isolated classifier that chooses one valid Feishu reaction and a short opening line from the current message only; its result is not part of the agent session context.
+_Avoid_: Main-agent turn, raw thinking, arbitrary Unicode emoji

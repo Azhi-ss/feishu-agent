@@ -13,6 +13,10 @@ Streaming cards use two compact phase labels, `💭 思考中…` and `⚙️ wo
 raw model thinking is not shown. The phase label is replaced when visible
 answer text starts.
 
+For group @mentions, the bridge may run a separate current-message-only reaction
+selector. It validates the selected Feishu reaction, adds it to the source
+message, and does not add the selector request or result to the main session.
+
 ## Requirements
 
 - Node.js 24 or later

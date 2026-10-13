@@ -26,8 +26,9 @@ export interface RemoteInboundEvent {
 export interface RemoteGateway {
   start(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void, onPollRecovered?: () => void): Promise<void>;
   sendMessage(chatId: string, text: string): Promise<void>;
+  addReaction(messageId: string, emojiType: string): Promise<void>;
   /** Open a streaming card in the chat; resolves with the card id. */
-  openStreamCard(chatId: string): Promise<string>;
+  openStreamCard(chatId: string, initialText?: string): Promise<string>;
   /** Update the card's current phase content; text is empty to clear it. */
   setStatusLine(cardId: string, text: string): Promise<void>;
   /** Append a complete-content snapshot. sequence is monotonic per card; uuid unique per write. */
@@ -53,7 +54,7 @@ interface FeishuClient {
   im: { v1: { message: {
     create(payload: unknown): Promise<FeishuResponse<{ message_id?: string }>>;
     get(payload: { path: { message_id: string } }): Promise<FeishuResponse<{ items?: Array<{ msg_type?: string; body?: { content?: string } }> }>>;
-  } } };
+  }; messageReaction: { create(payload: { path: { message_id: string }; data: { reaction_type: { emoji_type: string } } }): Promise<FeishuResponse> } } };
   cardkit: {
     v1: {
       card: {
@@ -192,11 +193,21 @@ export class FeishuGateway implements RemoteGateway {
     }
   }
 
-  async openStreamCard(chatId: string): Promise<string> {
+  async addReaction(messageId: string, emojiType: string): Promise<void> {
+    const appSecret = this.requireSecret();
+    try {
+      const response = await this.client().im.v1.messageReaction.create({ path: { message_id: messageId }, data: { reaction_type: { emoji_type: emojiType } } });
+      ensureSuccess(response, "Feishu reaction add");
+    } catch (error) {
+      throw safeGatewayError(error, appSecret);
+    }
+  }
+
+  async openStreamCard(chatId: string, initialText = THINKING_STATUS): Promise<string> {
     const appSecret = this.requireSecret();
     try {
       const client = this.client();
-      const response = await client.cardkit.v1.card.create({ data: { type: "card_json", data: JSON.stringify(streamingCard()) } });
+      const response = await client.cardkit.v1.card.create({ data: { type: "card_json", data: JSON.stringify(streamingCard(initialText)) } });
       ensureSuccess(response, "Feishu Card Kit card creation");
       const cardId = response.data?.card_id;
       if (!cardId) throw new Error("Feishu Card Kit did not return a card id");
@@ -391,11 +402,11 @@ function safeGatewayError(error: unknown, appSecret?: string): Error {
   return new Error(appSecret ? message.split(appSecret).join("[credential]") : message);
 }
 
-function streamingCard(): object {
+function streamingCard(initialText = THINKING_STATUS): object {
   return {
     schema: "2.0",
-    config: { streaming_mode: true, summary: { content: THINKING_STATUS }, streaming_config: { print_strategy: "fast" } },
-    body: { elements: [{ tag: "markdown", element_id: "stream_md", content: THINKING_STATUS }] },
+    config: { streaming_mode: true, summary: { content: initialText }, streaming_config: { print_strategy: "fast" } },
+    body: { elements: [{ tag: "markdown", element_id: "stream_md", content: initialText }] },
   };
 }
 
@@ -512,8 +523,12 @@ export class LoopbackGateway implements RemoteGateway {
     await this.post("send-message", { chatId, text }, "loopback send failed");
   }
 
-  async openStreamCard(chatId: string): Promise<string> {
-    const response = await this.post("open-stream-card", { chatId }, "loopback card open failed");
+  async addReaction(messageId: string, emojiType: string): Promise<void> {
+    await this.post("add-reaction", { messageId, emojiType }, "loopback reaction failed");
+  }
+
+  async openStreamCard(chatId: string, initialText = THINKING_STATUS): Promise<string> {
+    const response = await this.post("open-stream-card", { chatId, initialText }, "loopback card open failed");
     const data = (await response.json()) as { cardId?: string };
     if (!data.cardId) throw new Error("loopback card open failed: no card id");
     return data.cardId;

@@ -55,6 +55,7 @@ export interface FeishuStats {
   pollSeqs: number[];
   closeSeqs: number[];
   sends: Array<{ chatId: string; text: string; at: number }>;
+  reactions: Array<{ messageId: string; emojiType: string; at: number }>;
   closes: number[];
   cards: {
     opened: Array<{ chatId: string; cardId: string; at: number }>;
@@ -72,6 +73,7 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     pending: [] as InboundEvent[],
     waiters: [] as Array<(events: InboundEvent[]) => void>,
     sends: [] as Array<{ chatId: string; text: string; at: number }>,
+    reactions: [] as Array<{ messageId: string; emojiType: string; at: number }>,
     closes: [] as number[],
     opened: [] as Array<{ chatId: string; cardId: string; at: number }>,
     statuses: [] as Array<{ cardId: string; text: string; at: number }>,
@@ -139,6 +141,7 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     request.on("data", (chunk) => body += chunk);
     request.on("end", () => {
       if (request.url === "/send-message") { state.sends.push({ ...(JSON.parse(body) as { chatId: string; text: string }), at: Date.now() }); response.writeHead(200).end(); }
+      else if (request.url === "/add-reaction") { state.reactions.push({ ...(JSON.parse(body) as { messageId: string; emojiType: string }), at: Date.now() }); response.writeHead(200).end(); }
       else if (request.url === "/open-stream-card") {
         const { chatId } = JSON.parse(body) as { chatId: string };
         const cardId = `card-${state.opened.length + 1}`;
@@ -166,7 +169,7 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
         response.writeHead(200).end();
       }
       else if (request.url === "/disconnect") { const now = Date.now(); const seq = ++state.seq; state.closes.push(now); state.closeSeqs.push(seq); response.writeHead(200).end(); }
-      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, sends: state.sends, closes: state.closes, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
+      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, sends: state.sends, reactions: state.reactions, closes: state.closes, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
       else response.writeHead(404).end();
     });
   });

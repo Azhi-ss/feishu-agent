@@ -106,6 +106,8 @@ test("a mentioned group message drives the session and replies in that group", a
     ]);
     assert.equal(result.code, 0, result.output);
     const stats = await f.feishu.stats();
+    assert.equal(stats.reactions.length, 1);
+    assert.deepEqual({ messageId: stats.reactions[0]?.messageId, emojiType: stats.reactions[0]?.emojiType }, { messageId: "group-msg-1", emojiType: "GLANCE" });
     assert.equal(stats.cards.opened[0]?.chatId, "oc_group");
     assert.equal(stats.cards.closes[0]?.text, "PTY-PONG:请回复群里的问题");
   } finally {

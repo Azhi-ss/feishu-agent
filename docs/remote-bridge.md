@@ -73,6 +73,9 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
   `💭 思考中…` or `⚙️ working中…`. The model's raw thinking is not shown. Once
   answer text starts, the phase label is replaced by the answer and the card
   continues streaming that text.
+- Group @mentions can receive a persistent Feishu reaction selected from the
+  current message by an isolated selector request; the selector has no access
+  to the main session context.
 - DM the bot from the phone to drive the session; `stop` (or `/stop`, `abort`,
   `/abort`) interrupts the running turn like Ctrl+C.
 - A hard connection failure surfaces a TUI warning while the session keeps
