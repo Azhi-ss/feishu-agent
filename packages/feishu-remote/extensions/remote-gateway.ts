@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as lark from "@larksuiteoapi/node-sdk";
+import { THINKING_STATUS } from "./stream-card.js";
 
 export const REMOTE_SECRET_ENV = "FEISHU_REMOTE_APP_SECRET";
 export const REMOTE_AUTOSTART_ENV = "FEISHU_REMOTE";
@@ -27,7 +28,7 @@ export interface RemoteGateway {
   sendMessage(chatId: string, text: string): Promise<void>;
   /** Open a streaming card in the chat; resolves with the card id. */
   openStreamCard(chatId: string): Promise<string>;
-  /** Update the card's transient status area; text is empty to clear it. */
+  /** Update the card's current phase content; text is empty to clear it. */
   setStatusLine(cardId: string, text: string): Promise<void>;
   /** Append a complete-content snapshot. sequence is monotonic per card; uuid unique per write. */
   appendStreamText(cardId: string, text: string, sequence: number, uuid: string): Promise<void>;
@@ -215,7 +216,7 @@ export class FeishuGateway implements RemoteGateway {
     try {
       const sequence = this.nextSequence(cardId);
       const response = await this.client().cardkit.v1.cardElement.content({
-        path: { card_id: cardId, element_id: "stream_status" },
+        path: { card_id: cardId, element_id: "stream_md" },
         data: { content: text, sequence, uuid: `status_${cardId}_${sequence}` },
       });
       ensureSuccess(response, "Feishu Card Kit status update");
@@ -393,11 +394,8 @@ function safeGatewayError(error: unknown, appSecret?: string): Error {
 function streamingCard(): object {
   return {
     schema: "2.0",
-    config: { streaming_mode: true, summary: { content: "[Generating…]" }, streaming_config: { print_strategy: "fast" } },
-    body: { elements: [
-      { tag: "markdown", element_id: "stream_status", content: "" },
-      { tag: "markdown", element_id: "stream_md", content: "" },
-    ] },
+    config: { streaming_mode: true, summary: { content: THINKING_STATUS }, streaming_config: { print_strategy: "fast" } },
+    body: { elements: [{ tag: "markdown", element_id: "stream_md", content: THINKING_STATUS }] },
   };
 }
 

@@ -16,6 +16,7 @@ import {
   REMOTE_APP_ID_ENV,
   REMOTE_OWNER_OPEN_ID_ENV,
 } from "../packages/feishu-remote/extensions/remote-gateway.js";
+import { THINKING_STATUS } from "../packages/feishu-remote/extensions/stream-card.js";
 
 function inbound(overrides: Partial<RemoteInboundEvent>): RemoteInboundEvent {
   return { ownerOpenId: "ou_owner", chatId: "oc_chat", chatType: "p2p", messageId: "msg-1", messageType: "text", text: "hi", ...overrides };
@@ -196,6 +197,10 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
 
   await gateway.sendMessage("oc_1", "plain reply");
   const cardId = await gateway.openStreamCard("oc_1");
+  const cardCreate = calls.find((call) => call.operation === "card-create")?.payload as { data?: { data?: string } } | undefined;
+  const initialCard = JSON.parse(cardCreate?.data?.data ?? "{}") as { config?: { summary?: { content?: string } }; body?: { elements?: Array<{ element_id?: string; content?: string }> } };
+  assert.equal(initialCard.config?.summary?.content, THINKING_STATUS);
+  assert.equal(initialCard.body?.elements?.find((element) => element.element_id === "stream_md")?.content, THINKING_STATUS);
   await gateway.setStatusLine(cardId, "🛠️ Running bash");
   await gateway.appendStreamText(cardId, "partial reply", 1, "uuid-1");
   await gateway.closeStreamCard(cardId, "complete reply");

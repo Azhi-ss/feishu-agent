@@ -69,6 +69,10 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
 
 - `/remote start` / `/remote stop` / `/remote status` manage the connection and
   show `remote:off|connecting|connected|error` in the TUI status line.
+- Streaming cards show only a short phase label while no visible answer exists:
+  `💭 思考中…` or `⚙️ working中…`. The model's raw thinking is not shown. Once
+  answer text starts, the phase label is replaced by the answer and the card
+  continues streaming that text.
 - DM the bot from the phone to drive the session; `stop` (or `/stop`, `abort`,
   `/abort`) interrupts the running turn like Ctrl+C.
 - A hard connection failure surfaces a TUI warning while the session keeps
@@ -91,8 +95,8 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
 2. From the phone Feishu app, DM the bot: the message must appear in the TUI
    and drive the session.
 3. The reply must stream into a single Card Kit streaming card (typewriter
-   effect) with the transient tool-status line during tool calls, clean final
-   text, and no raw tool output.
+   effect) with a compact phase label during tool calls, clean final text, and
+   no raw thinking or tool output.
 4. Send a message while the agent is busy: it must be acknowledged as queued.
    Send `stop`: the running turn must be interrupted.
 5. Run `/remote stop` and confirm the phone channel closes.

@@ -9,6 +9,10 @@ It provides `/remote`, the outbound WebSocket transport, inbound message
 filtering, turn queuing, and streaming-card delivery. It does not
 include Feishu Agent Skills, Mem0, or high-risk action policy.
 
+Streaming cards use two compact phase labels, `💭 思考中…` and `⚙️ working中…`;
+raw model thinking is not shown. The phase label is replaced when visible
+answer text starts.
+
 ## Requirements
 
 - Node.js 24 or later

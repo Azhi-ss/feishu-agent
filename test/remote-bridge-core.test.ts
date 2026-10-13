@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import type { ModelResponder } from "./helpers/remote-bridge-fixture.js";
+import { THINKING_STATUS, WORKING_STATUS } from "../packages/feishu-remote/extensions/stream-card.js";
 import {
   fixture,
   feishuLoopback,
@@ -267,7 +268,7 @@ test("tool execution shows a transient friendly status — even when the card is
     const cardId = stats.cards.opened[0]?.cardId;
     const cardStatuses = stats.cards.statuses.filter((status) => status.cardId === cardId);
     const statusTexts = cardStatuses.map((status) => status.text);
-    assert.ok(statusTexts.some((text) => /command|bash/i.test(text) && /[\u{1F300}-\u{1FAFF}]/u.test(text)), `tool status must land on the card even while it was still opening: ${JSON.stringify(statusTexts)}`);
+    assert.ok(statusTexts.includes(WORKING_STATUS), `tool status must land on the card even while it was still opening: ${JSON.stringify(statusTexts)}`);
     // CardKit rejects empty content (HTTP 400 / 99992402 "the min len is 1"); the strip clears with a space.
     assert.ok(statusTexts.includes(" "), "the status line is cleared before the card finalizes");
     assert.ok(!statusTexts.includes(""), "empty content must never be sent to CardKit");
@@ -310,6 +311,7 @@ test("reasoning before the answer keeps the tool status until visible assistant 
     const stats = await f.feishu.stats();
     const firstAppendAt = Math.min(...stats.cards.appends.map((append) => append.at));
     const cleared = stats.cards.statuses.filter((status) => status.text === " ");
+    assert.ok(stats.cards.statuses.some((status) => status.text === THINKING_STATUS), "reasoning and post-tool work return the card to the thinking status");
     assert.ok(cleared.length, "the status line is cleared eventually");
     assert.ok(!stats.cards.statuses.some((status) => status.text === ""), "empty content must never be sent to CardKit");
     for (const clear of cleared) assert.ok(firstAppendAt - clear.at < 200, `status must clear when visible text starts, not at message_start: clear=${clear.at} firstAppend=${firstAppendAt}`);

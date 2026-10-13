@@ -7,6 +7,8 @@
 
 export const STREAM_UPDATE_THROTTLE_MS = 160;
 export const STREAM_SIGNIFICANT_DELTA_CHARS = 18;
+export const THINKING_STATUS = "💭 思考中…";
+export const WORKING_STATUS = "⚙️ working中…";
 /** Feishu card envelope: cards hold ~30KB of text (UTF-8); over-long finals are sharded. */
 export const STREAM_CARD_TEXT_LIMIT_BYTES = 30_000;
 
@@ -113,7 +115,7 @@ export class StreamCardSession {
     void this.flush();
   }
 
-  /** Update the transient status area; an empty string clears it. */
+  /** Update the transient phase content; an empty string clears it. */
   setStatus(text: string): void {
     if (this.closed || text === this.statusText) return;
     this.statusText = text;

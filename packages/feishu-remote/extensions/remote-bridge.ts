@@ -20,7 +20,7 @@ import {
   type RemoteInboundEvent,
 } from "./remote-gateway.js";
 import { acquireRemoteLock, clearHandoffRequest, describeHolder, hasHandoffRequest, readRemoteLock, releaseRemoteLock, requestRemoteHandover, waitForRemoteLockRelease } from "./remote-lock.js";
-import { shardText, StreamCardSession, visibleAssistantText } from "./stream-card.js";
+import { shardText, StreamCardSession, THINKING_STATUS, WORKING_STATUS, visibleAssistantText } from "./stream-card.js";
 
 type RemoteStatus = "off" | "standby" | "connecting" | "connected" | "error";
 const REMOTE_STATUS_KEY = "feishu-3-remote";
@@ -36,8 +36,8 @@ interface ActiveCard {
   open: Promise<StreamCardSession | undefined>;
 }
 
-function toolStatusLine(toolName: string): string {
-  return `\u{1F6E0}\uFE0F Running ${toolName}`;
+function toolStatusLine(): string {
+  return WORKING_STATUS;
 }
 
 /** Latest tool-call name in an assistant message content (the tool signal that reaches extensions during a streamed turn), if any. */
@@ -370,7 +370,8 @@ export function remoteBridgeExtension(): ExtensionFactory {
       void card.open.then((session) => {
         if (!session) return;
         if (text) session.setStatus(""); // the status strip clears when visible assistant text actually starts
-        else if (tool) session.setStatus(toolStatusLine(tool)); // toolCall content part = a tool is running
+        else if (tool) session.setStatus(toolStatusLine()); // toolCall content part = a tool is running
+        else session.setStatus(THINKING_STATUS); // reasoning or a post-tool turn is still in progress
         session.update(text);
       });
     });
