@@ -91,6 +91,28 @@ test("owner P2P message drives the session and gets one streaming card with the 
   }
 });
 
+test("a mentioned group message drives the session and replies in that group", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 400, event: { ownerOpenId: "ou_group_member", chatId: "oc_group", chatType: "group", mentionedBot: true, messageId: "group-msg-1", messageType: "text", text: "请回复群里的问题" } },
+  ]);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "/remote start\r" },
+      { wait: "Remote bridge connected", send: "" },
+      { wait: "请回复群里的问题", send: "" },
+      { wait: "PTY-PONG:请回复群里的问题", send: "/remote stop\r" },
+      { wait: "Remote bridge stopped", send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened[0]?.chatId, "oc_group");
+    assert.equal(stats.cards.closes[0]?.text, "PTY-PONG:请回复群里的问题");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
 test("missing app secret on /remote start gives an actionable message and never connects", async () => {
   const f = await fixture(echoModel, []);
   try {

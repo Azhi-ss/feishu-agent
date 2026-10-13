@@ -41,6 +41,7 @@ export interface InboundEvent {
   ownerOpenId: string;
   chatId: string;
   chatType: string;
+  mentionedBot?: boolean;
   messageId: string;
   messageType: string;
   text: string;

@@ -3,7 +3,8 @@
 The Feishu Remote Bridge is provided by the independently published
 `@azhi-ss/feishu-remote` Pi extension. Its source remains in this repository's
 workspace. It mirrors the active host session (Feishu Agent, or ordinary Pi
-after `pi install`) to the owner's 1-on-1 Feishu chat (see ADR
+after `pi install`) to the owner's 1-on-1 Feishu chat or a group where the bot
+is mentioned (see ADR
 [`0001-remote-bridge-transport.md`](adr/0001-remote-bridge-transport.md)). The
 package is transport only: Skills, Mem0, and high-risk approval stay with the
 host. `feishu init` installs a pinned npm version. Ordinary Pi does not
@@ -45,9 +46,12 @@ or from `FEISHU_REMOTE_APP_ID` and `FEISHU_REMOTE_OWNER_OPEN_ID` if no config
 file is present. A broken config does not fall back to env. Only the app secret
 needs supplying when `lark-cli` is already logged in:
 
-1. Open the Feishu developer console, find the bot app, and **view** (do not
+1. In the Feishu developer console, enable bot capability, subscribe to
+   `im.message.receive_v1`, and grant `im:message.group_at_msg` so group @bot
+   events are delivered. Add the bot to the target group.
+2. Open the Feishu developer console, find the bot app, and **view** (do not
    reset — resetting invalidates `lark-cli`'s stored secret) its App Secret.
-2. Export it for the session only — it is never written to disk:
+3. Export it for the session only — it is never written to disk:
 
    ```bash
    export FEISHU_REMOTE_APP_SECRET=<app-secret>
@@ -74,8 +78,9 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
 
 - Do **not** run `lark-cli event consume` while the bridge is connected: Feishu
   load-balances events across consumers of the same app.
-- Only the owner's 1-on-1 chat can drive the session; group messages and other
-  senders are ignored.
+- The owner's 1-on-1 chat can drive the session. In a group, a message is
+  accepted only when Feishu marks the bot as mentioned; the reply is sent back
+  to that group. Other group messages are ignored.
 - `FEISHU_REMOTE_LOOPBACK_URL` selects the local loopback test adapter; it is
   for tests only and is the sole path exercised by CI.
 

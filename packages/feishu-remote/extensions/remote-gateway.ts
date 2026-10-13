@@ -15,6 +15,8 @@ export interface RemoteInboundEvent {
   ownerOpenId: string;
   chatId: string;
   chatType: string;
+  /** Group events are accepted only when Feishu marked the bot as mentioned. */
+  mentionedBot?: boolean;
   messageId: string;
   messageType: string;
   text: string;
@@ -288,7 +290,7 @@ export class FeishuGateway implements RemoteGateway {
   private async emitInbound(raw: unknown, onEvent: (event: RemoteInboundEvent) => void): Promise<void> {
     const event = raw as {
       sender?: { sender_id?: { open_id?: string } };
-      message?: { message_id?: string; parent_id?: string; chat_id?: string; chat_type?: string; message_type?: string; content?: string };
+      message?: { message_id?: string; parent_id?: string; chat_id?: string; chat_type?: string; message_type?: string; content?: string; mentions?: unknown[] };
     };
     const message = event.message;
     if (!message?.message_id || !message.chat_id || !message.chat_type || !message.message_type) return;
@@ -302,6 +304,7 @@ export class FeishuGateway implements RemoteGateway {
       ownerOpenId: event.sender?.sender_id?.open_id ?? "",
       chatId: message.chat_id,
       chatType: message.chat_type,
+      ...(message.chat_type === "group" ? { mentionedBot: (message.mentions?.length ?? 0) > 0 } : {}),
       messageId: message.message_id,
       messageType: message.message_type,
       text,
@@ -420,9 +423,10 @@ function loadFeishuGatewaySdk(): FeishuGatewaySdk {
   };
 }
 
-/** Owner-only P2P gate: only the owner's 1-on-1 chat may drive the session. */
+/** Allow the owner in P2P, or an explicitly bot-mentioned message in a group. */
 export function authorizeInbound(event: RemoteInboundEvent, ownerOpenId: string): boolean {
-  return event.chatType === "p2p" && event.ownerOpenId === ownerOpenId;
+  if (event.chatType === "p2p") return event.ownerOpenId === ownerOpenId;
+  return event.chatType === "group" && event.mentionedBot === true;
 }
 
 /** In-memory seen-set keyed by message id, swept on insert when the TTL passes. */

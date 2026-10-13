@@ -272,7 +272,7 @@ is diagnosed and retained for inspection, never guessed safe to replay.
 | Capability | Source | Notes |
 |---|---|---|
 | Long-term memory | optional `pi-hermes-memory` (not installed by `feishu init`) | Files under `~/.feishu-agent/`. TUI shows `● mem` when that extension is loaded, otherwise `○ mem off`. Leftover `@mem0/pi-agent-plugin` is not loaded |
-| Remote Bridge | `@azhi-ss/feishu-remote` (pinned npm package, auto-installed by `feishu init`) | Phone control of the active session; transport only — not Feishu Skills, Mem0, or high-risk approval. Ordinary Pi may run `pi install npm:@azhi-ss/feishu-remote`. |
+| Remote Bridge | `@azhi-ss/feishu-remote` (pinned npm package, auto-installed by `feishu init`) | Phone or group @bot control of the active session; transport only — not Feishu Skills, Mem0, or high-risk approval. Ordinary Pi may run `pi install npm:@azhi-ss/feishu-remote`. |
 | Core policy guard | built-in (hidden `feishu-core-policy` extension) | High-risk `lark-cli --yes` approval gate, blocked `/share` `/import` `/login` `/logout` |
 | Skill authoring | built-in `feishu-skill-maker` skill | Guide for creating new Feishu Skills |
 | Skill discovery and private installation | built-in `/find-skill` command and `feishu-find-skill` skill | Reuses the `skills.sh` index and `npx skills` staging; final files go only to `~/.feishu-agent/skills/`, never `~/.agents/skills` or `~/.pi/agent/skills` |

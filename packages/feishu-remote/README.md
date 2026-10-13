@@ -2,16 +2,19 @@
 
 A transport-only [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
 extension that lets the owner drive the active Pi session from a one-to-one
-Feishu/Lark bot chat. Replies stream back through a Card Kit card.
+Feishu/Lark bot chat or a group where the bot is mentioned. Replies stream back
+through a Card Kit card.
 
-It provides `/remote`, the outbound WebSocket transport, owner-only inbound
-message filtering, turn queuing, and streaming-card delivery. It does not
+It provides `/remote`, the outbound WebSocket transport, inbound message
+filtering, turn queuing, and streaming-card delivery. It does not
 include Feishu Agent Skills, Mem0, or high-risk action policy.
 
 ## Requirements
 
 - Node.js 24 or later
 - A self-built Feishu/Lark bot app with WebSocket event delivery enabled
+- The app must subscribe to `im.message.receive_v1` and have the
+  `im:message.group_at_msg` permission to receive group @bot events
 - The bot's App Secret in `FEISHU_REMOTE_APP_SECRET`
 - The App ID and owner `open_id`, resolved in one of these ways:
   - an existing `lark-cli` config under `~/.lark-cli/config.json` or the XDG
@@ -50,8 +53,9 @@ Normal Pi startup stays offline when this variable is unset.
 
 ## Constraints
 
-- Only the configured owner's one-to-one chat can drive the session. Group
-  messages and other senders are ignored.
+- The configured owner can drive the session in one-to-one chat. In a group, a
+  message is accepted only when Feishu marks the bot as mentioned; the reply is
+  sent back to that group. Other group messages are ignored.
 - Do not run `lark-cli event consume` for the same app while the extension is
   connected. Feishu load-balances events across concurrent consumers.
 - Two local sessions cannot share one bot app. The active window holds a

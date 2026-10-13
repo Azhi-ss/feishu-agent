@@ -21,10 +21,11 @@ function inbound(overrides: Partial<RemoteInboundEvent>): RemoteInboundEvent {
   return { ownerOpenId: "ou_owner", chatId: "oc_chat", chatType: "p2p", messageId: "msg-1", messageType: "text", text: "hi", ...overrides };
 }
 
-test("authorizeInbound accepts only owner P2P messages", () => {
+test("authorizeInbound accepts owner P2P and explicitly mentioned group messages", () => {
   assert.equal(authorizeInbound(inbound({}), "ou_owner"), true);
   assert.equal(authorizeInbound(inbound({ ownerOpenId: "ou_intruder" }), "ou_owner"), false);
   assert.equal(authorizeInbound(inbound({ chatType: "group" }), "ou_owner"), false);
+  assert.equal(authorizeInbound(inbound({ chatType: "group", mentionedBot: true }), "ou_owner"), true);
   assert.equal(authorizeInbound(inbound({ chatType: "p2p", ownerOpenId: "ou_owner" }), "ou_other-owner"), false);
 });
 
@@ -187,6 +188,11 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
     message: { message_id: "om_1", chat_id: "oc_1", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text: "hello from phone" }) },
   });
   assert.deepEqual(received, [{ ownerOpenId: "ou_owner", chatId: "oc_1", chatType: "p2p", messageId: "om_1", messageType: "text", text: "hello from phone" }]);
+  await handlers["im.message.receive_v1"]?.({
+    sender: { sender_id: { open_id: "ou_group_member" } },
+    message: { message_id: "om_group", chat_id: "oc_group", chat_type: "group", message_type: "text", content: JSON.stringify({ text: "@feishu-agent 请回复" }), mentions: [{ key: "@_user_1" }] },
+  });
+  assert.deepEqual(received[1], { ownerOpenId: "ou_group_member", chatId: "oc_group", chatType: "group", mentionedBot: true, messageId: "om_group", messageType: "text", text: "@feishu-agent 请回复" });
 
   await gateway.sendMessage("oc_1", "plain reply");
   const cardId = await gateway.openStreamCard("oc_1");
