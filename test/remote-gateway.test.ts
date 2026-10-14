@@ -130,6 +130,7 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
   let handlers: Record<string, (event: unknown) => unknown> = {};
   let wsOptions: { appId: string; appSecret: string; domain: "feishu" | "lark"; onReconnecting: () => void; onReconnected: () => void } | undefined;
   const client = {
+    httpInstance: { request: async <T = unknown>() => ({ bot: { open_id: "ou_bot" } } as T) },
     im: { v1: { message: {
       create: async (payload: unknown) => {
         calls.push({ operation: "send", payload });
@@ -191,9 +192,14 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
   assert.deepEqual(received, [{ ownerOpenId: "ou_owner", chatId: "oc_1", chatType: "p2p", messageId: "om_1", messageType: "text", text: "hello from phone" }]);
   await handlers["im.message.receive_v1"]?.({
     sender: { sender_id: { open_id: "ou_group_member" } },
-    message: { message_id: "om_group", chat_id: "oc_group", chat_type: "group", message_type: "text", content: JSON.stringify({ text: "@feishu-agent 请回复" }), mentions: [{ key: "@_user_1" }] },
+    message: { message_id: "om_group", chat_id: "oc_group", chat_type: "group", message_type: "text", content: JSON.stringify({ text: "@feishu-agent 请回复" }), mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] },
   });
   assert.deepEqual(received[1], { ownerOpenId: "ou_group_member", chatId: "oc_group", chatType: "group", mentionedBot: true, messageId: "om_group", messageType: "text", text: "@feishu-agent 请回复" });
+  await handlers["im.message.receive_v1"]?.({
+    sender: { sender_id: { open_id: "ou_group_member" } },
+    message: { message_id: "om_other_mention", chat_id: "oc_group", chat_type: "group", message_type: "text", content: JSON.stringify({ text: "@someone 请回复" }), mentions: [{ key: "@_user_2", id: { open_id: "ou_other" } }] },
+  });
+  assert.equal(received[2]?.mentionedBot, false);
 
   await gateway.addReaction("om_1", "PARTY");
   assert.deepEqual(calls[1]?.payload, { path: { message_id: "om_1" }, data: { reaction_type: { emoji_type: "PARTY" } } });
@@ -238,6 +244,7 @@ test("FeishuGateway quotes the message a text reply points at", async () => {
   let handlers: Record<string, (event: unknown) => unknown> = {};
   const sdk: FeishuGatewaySdk = {
     createClient: () => ({
+      httpInstance: { request: async <T = unknown>() => ({ bot: { open_id: "ou_bot" } } as T) },
       im: { v1: { message: {
         create: async () => ({ code: 0, data: { message_id: "om_out" } }),
         get: async (payload: { path: { message_id: string } }) => {

@@ -181,7 +181,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
       const gw = gateway;
       if (!gw) return undefined;
       const card: ActiveCard = { open: Promise.resolve(undefined) };
-      card.open = gw.openStreamCard(chatId, initialText).then(
+      card.open = gw.openStreamCard(chatId, initialText || undefined).then(
         (cardId) => {
           const session = new StreamCardSession(
             cardId,

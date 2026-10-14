@@ -14,7 +14,7 @@ OK, THUMBSUP, THANKS, MUSCLE, FINGERHEART, APPLAUSE, FISTBUMP, JIAYI, DONE, SMIL
 
 export const REACTION_PROMPT_FOR_MODEL = REACTION_PROMPT.replaceAll("StatusWorkFromHome", "GeneralWorkFromHome");
 const EMOJI_TYPES = new Set(REACTION_PROMPT_FOR_MODEL.split("ALLOWED_EMOJI_TYPES:\n")[1].split(", "));
-const FALLBACK = { emojiType: "GLANCE", opening: "小欠看到啦～" } as const;
+const FALLBACK = { emojiType: "GLANCE", opening: "" } as const;
 
 export interface ReactionChoice {
   emojiType: string;

@@ -51,6 +51,7 @@ interface FeishuResponse<T = unknown> {
 }
 
 interface FeishuClient {
+  httpInstance?: { request<T = unknown>(opts: { url: string; method: string }): Promise<T> };
   im: { v1: { message: {
     create(payload: unknown): Promise<FeishuResponse<{ message_id?: string }>>;
     get(payload: { path: { message_id: string } }): Promise<FeishuResponse<{ items?: Array<{ msg_type?: string; body?: { content?: string } }> }>>;
@@ -99,6 +100,7 @@ export class FeishuGateway implements RemoteGateway {
   #appSecret: string | undefined;
   private closed = false;
   private abortHandshake: ((error: Error) => void) | undefined;
+  private botOpenIdPromise: Promise<string | undefined> | undefined;
 
   constructor(
     private readonly credentials: RemoteCredentials,
@@ -302,7 +304,7 @@ export class FeishuGateway implements RemoteGateway {
   private async emitInbound(raw: unknown, onEvent: (event: RemoteInboundEvent) => void): Promise<void> {
     const event = raw as {
       sender?: { sender_id?: { open_id?: string } };
-      message?: { message_id?: string; parent_id?: string; chat_id?: string; chat_type?: string; message_type?: string; content?: string; mentions?: unknown[] };
+      message?: { message_id?: string; parent_id?: string; chat_id?: string; chat_type?: string; message_type?: string; content?: string; mentions?: Array<{ id?: { open_id?: string }; key?: string }> };
     };
     const message = event.message;
     if (!message?.message_id || !message.chat_id || !message.chat_type || !message.message_type) return;
@@ -312,11 +314,12 @@ export class FeishuGateway implements RemoteGateway {
       if (quote) text = `[replying to]\n${quote}\n\n${text}`;
     }
     if (this.closed) return;
+    const botOpenId = message.chat_type === "group" ? await this.resolveBotOpenId() : undefined;
     onEvent({
       ownerOpenId: event.sender?.sender_id?.open_id ?? "",
       chatId: message.chat_id,
       chatType: message.chat_type,
-      ...(message.chat_type === "group" ? { mentionedBot: (message.mentions?.length ?? 0) > 0 } : {}),
+      ...(message.chat_type === "group" ? { mentionedBot: Boolean(botOpenId && message.mentions?.some((mention) => mention.id?.open_id === botOpenId)) } : {}),
       messageId: message.message_id,
       messageType: message.message_type,
       text,
@@ -344,6 +347,19 @@ export class FeishuGateway implements RemoteGateway {
     const domain = this.credentials.brand === "lark" ? "lark" : "feishu";
     this.clientCache ??= this.sdk.createClient({ appId: this.credentials.appId, appSecret, domain });
     return this.clientCache;
+  }
+
+  private async resolveBotOpenId(): Promise<string | undefined> {
+    this.botOpenIdPromise ??= (async () => {
+      try {
+        const response = await this.client().httpInstance?.request<{ bot?: { open_id?: string } }>({ url: "/open-apis/bot/v3/info", method: "GET" });
+        return response?.bot?.open_id;
+      } catch {
+        // A missing bot identity fails closed: group messages must not trigger on another user's mention.
+        return undefined;
+      }
+    })();
+    return this.botOpenIdPromise;
   }
 }
 
