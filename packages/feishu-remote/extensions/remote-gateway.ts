@@ -51,7 +51,7 @@ interface FeishuResponse<T = unknown> {
 }
 
 interface FeishuClient {
-  httpInstance?: { request<T = unknown>(opts: { url: string; method: string }): Promise<T> };
+  request<T = unknown>(opts: { url: string; method: string }): Promise<T>;
   im: { v1: { message: {
     create(payload: unknown): Promise<FeishuResponse<{ message_id?: string }>>;
     get(payload: { path: { message_id: string } }): Promise<FeishuResponse<{ items?: Array<{ msg_type?: string; body?: { content?: string } }> }>>;
@@ -352,7 +352,7 @@ export class FeishuGateway implements RemoteGateway {
   private async resolveBotOpenId(): Promise<string | undefined> {
     this.botOpenIdPromise ??= (async () => {
       try {
-        const response = await this.client().httpInstance?.request<{ bot?: { open_id?: string } }>({ url: "/open-apis/bot/v3/info", method: "GET" });
+        const response = await this.client().request<{ bot?: { open_id?: string } }>({ url: "/open-apis/bot/v3/info", method: "GET" });
         return response?.bot?.open_id;
       } catch {
         // A missing bot identity fails closed: group messages must not trigger on another user's mention.

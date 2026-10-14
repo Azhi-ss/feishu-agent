@@ -130,7 +130,7 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
   let handlers: Record<string, (event: unknown) => unknown> = {};
   let wsOptions: { appId: string; appSecret: string; domain: "feishu" | "lark"; onReconnecting: () => void; onReconnected: () => void } | undefined;
   const client = {
-    httpInstance: { request: async <T = unknown>() => ({ bot: { open_id: "ou_bot" } } as T) },
+    request: async <T = unknown>() => ({ bot: { open_id: "ou_bot" } } as T),
     im: { v1: { message: {
       create: async (payload: unknown) => {
         calls.push({ operation: "send", payload });
@@ -244,7 +244,7 @@ test("FeishuGateway quotes the message a text reply points at", async () => {
   let handlers: Record<string, (event: unknown) => unknown> = {};
   const sdk: FeishuGatewaySdk = {
     createClient: () => ({
-      httpInstance: { request: async <T = unknown>() => ({ bot: { open_id: "ou_bot" } } as T) },
+      request: async <T = unknown>() => ({ bot: { open_id: "ou_bot" } } as T),
       im: { v1: { message: {
         create: async () => ({ code: 0, data: { message_id: "om_out" } }),
         get: async (payload: { path: { message_id: string } }) => {
