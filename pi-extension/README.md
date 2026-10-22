@@ -14,11 +14,14 @@ still works.
 2. Session ledger (`appendEntry`) — one durable entry per run, and a reminder in the next result when
    the previous delegation in this directory is still continuable, so the host does not have to remember
    the ID from stderr.
-3. `lark-cli` backstop (`tool_call` hook) — blocks host Bash commands that invoke `lark-cli` directly
-   and points them at the `feishu` tool.
 
 It deliberately adds nothing else: no delegation protocol logic, no retries, no scheduling, no state
 files of its own.
+
+Division of labour is not enforced here. "Feishu delivery belongs to the Feishu Agent" lives in
+`../skills/feishu/SKILL.md` as a routing rule the host model follows; this Extension registers a tool
+and keeps a ledger, and does not block anything the host chooses to run. A host that runs `lark-cli`
+directly to read raw content is within its rights — only the delivery work is routed to the Feishu Agent.
 
 ## Dependencies and type checking
 
@@ -69,20 +72,18 @@ node /tmp/feishu-load-check.mjs
 Resolve `/ABSOLUTE/PATH/TO/pi/dist/index.js` from the running install, for example
 `node -e 'console.log(require.resolve("@earendil-works/pi-coding-agent/dist/index.js"))'` run with
 that install's node, or `readlink -f "$(command -v pi)"` and walk up to its package root. Expected
-output: `errors: []`, `tools: [ 'feishu' ]`, `handlers: [ 'tool_call' ]`.
+output: `errors: []`, `tools: [ 'feishu' ]`, `handlers: []`.
 
 1. Start pi and confirm the `feishu` tool is listed, with the four parameters above.
-2. Ask pi to run `lark-cli profile list` in Bash: the call must be blocked with the "direct lark-cli
-   calls are blocked" reason instead of executing.
-3. Run one harmless real delegation (for example a task that only reads a Feishu resource) and confirm
+2. Run one harmless real delegation (for example a task that only reads a Feishu resource) and confirm
    the result text ends with a `Feishu session: <id> (project …, profile …)` line, and that pi reports
    the run in the transcript with its status and duration.
-4. Fallback: hide the symlink, restart pi, and delegate through the Skill bridge
+3. Fallback: hide the symlink, restart pi, and delegate through the Skill bridge
    (`feishu-send "<task>"`) — that path must still work.
 
 ## Known failure mode
 
 A pi upgrade can change the Extension API. The failure is visible and cheap: the tool disappears and pi
 prints one error line, and the step 0 load check above fails with an `errors` entry instead of
-`errors: []`. Recovery is either adapting the three API calls above or simply removing the symlink and
+`errors: []`. Recovery is either adapting the two API calls above or simply removing the symlink and
 using the Skill bridge, which needs no Extension.

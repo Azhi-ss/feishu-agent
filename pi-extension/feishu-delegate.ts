@@ -3,9 +3,8 @@
  *
  * Thin shell over the `skills/feishu/feishu-send` distribution script. The delegation protocol
  * (modes, exit codes, session/profile/cwd continuation) lives there and in `skills/feishu/SKILL.md`;
- * this file adds only three things: a structured `feishu` tool, a session ledger, and a hard block on
- * direct `lark-cli` calls from the host's Bash. It carries no protocol logic of its own, so a broken
- * or missing extension still leaves the Skill bridge working.
+ * this file adds only two things: a structured `feishu` tool and a session ledger. It carries no
+ * protocol logic of its own, so a broken or missing extension still leaves the Skill bridge working.
  *
  * Host-only distribution resource. Not part of the repository's tsc build, and never installable as a
  * Feishu Package: installing it into `~/.feishu-agent/` would make the Feishu Agent call itself.
@@ -122,10 +121,10 @@ export default function (pi: ExtensionAPI) {
   const feishu = defineTool({
     name: "feishu",
     label: "Feishu Agent",
-    description: "Delegate any Feishu/Lark work to the Feishu Agent: messages, group chats, calendar and meetings, cloud docs, wiki, sheets, Base, approvals, minutes, tasks, contacts. Pass the user's request as `task`. Continue an earlier delegation with `session`; ask for verbatim content with mode \"raw\". Never call `lark-cli` directly: the Feishu Agent owns that.",
+    description: "Delegate any Feishu/Lark work to the Feishu Agent: messages, group chats, calendar and meetings, cloud docs, wiki, sheets, Base, approvals, minutes, tasks, contacts. Pass the user's request as `task`. Continue an earlier delegation with `session`; ask for verbatim content with mode \"raw\". Feishu work belongs to the Feishu Agent; the host routes it here instead of operating Feishu itself.",
     promptSnippet: "feishu — delegate Feishu/Lark work (messages, calendar, docs, sheets, Base, approvals, minutes, tasks) to the Feishu Agent",
     promptGuidelines: [
-      "Any Feishu/Lark request goes to the `feishu` tool; the host has no lark-* skill and must not call `lark-cli` itself.",
+      "Any Feishu/Lark request goes to the `feishu` tool: the Feishu Agent does the Feishu work, the host orchestrates.",
       "Continue a delegation by passing its `session`, and use `mode: \"raw\"` when you need the verbatim content for further work.",
     ],
     parameters: Type.Object({
@@ -161,13 +160,4 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool(feishu);
-
-  // The host has no lark-* skill and no direct lark-cli path; this is the code backstop for that rule.
-  const directLarkCli = /(?:^|[\n;&|(]\s*)(?:(?:[\w.-]+=\S+|sudo|env)\s+)*(?:\S*\/)?lark-cli(?=\s|$)/;
-  pi.on("tool_call", (event) => {
-    if (event.toolName !== "bash") return undefined;
-    const command = typeof event.input.command === "string" ? event.input.command : "";
-    if (!directLarkCli.test(command)) return undefined;
-    return { block: true, reason: "Direct lark-cli calls are blocked: Feishu/Lark work goes through the `feishu` tool, which delegates to the Feishu Agent. Re-issue this as a feishu task." };
-  });
 }

@@ -38,7 +38,7 @@ _Avoid_: Ordinary Pi child, independently discovered skill catalog, shared conve
 
 **Host Agent Bridge Skill**:
 The `skills/feishu/` distribution resource that a host Agent (pi, Claude, Codex) installs to delegate the whole Feishu domain to Feishu Agent: `SKILL.md` carries the routing, role split and return protocol, and the bundled `feishu-send` script is the transport. Every delegation starts in summary mode; `--raw` asks for verbatim content with sources instead. Host pi may additionally load `pi-extension/feishu-delegate.ts`, a thin tool shell that adds no protocol of its own. Neither is a Feishu Runtime Skill, and neither is installed into `~/.feishu-agent/`.
-_Avoid_: Feishu Runtime Skill, lark-cli manual, host direct `lark-cli` access, packaging the host Extension for Feishu Agent
+_Avoid_: Feishu Runtime Skill, lark-cli manual, code-enforced routing, packaging the host Extension for Feishu Agent
 
 **Delegation Session**:
 A Feishu session that a Host Agent drives one Print turn at a time through `feishu-send`. Every run reports `Feishu Session: <id>`; exit code 3 means Feishu Agent is waiting for the user's answer or explicit confirmation, and the Host continues the same session with `--session <id>`, carrying the user's reply verbatim. The session file is the checkpoint: no process stays alive between turns, and the user can take over with `feishu --session <id>`.

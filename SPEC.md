@@ -160,9 +160,9 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 
 ### 5.2. Host Agent delegation bridge（host-side distribution）
 
-- `skills/feishu/` 是面向宿主 Agent（pi/Claude/Codex）分发的飞书委派桥，由 `SKILL.md`（全域飞书路由、宿主=编排者+coder 与飞书 Agent=飞书域全职员工的定位、双模式返回协议、禁止宿主直调 `lark-cli`）与 `feishu-send` 脚本组成。它不属于 Feishu Runtime：ResourceLoader 不发现它，`feishu init` 不安装它，也不得进入 `DEFAULT_SKILLS` 或 `~/.feishu-agent/skills/`。
+- `skills/feishu/` 是面向宿主 Agent（pi/Claude/Codex）分发的飞书委派桥，由 `SKILL.md`（全域飞书路由、宿主=编排者+coder 与飞书 Agent=飞书域全职员工的定位、双模式返回协议、飞书操作交给飞书 Agent 执行的职责划分）与 `feishu-send` 脚本组成。它不属于 Feishu Runtime：ResourceLoader 不发现它，`feishu init` 不安装它，也不得进入 `DEFAULT_SKILLS` 或 `~/.feishu-agent/skills/`。
 - `feishu-send` 的旗标面：`--raw`（原文模式）、`--profile <profile>`、`--session <id>`，其余沿用 `FEISHU_CONTROL_TIMEOUT`、`FEISHU_CONTROL_CWD`。默认摘要模式不附加任何指令头；`--raw` 的模式指令由脚本以固定措辞加在消息头，宿主不自己写措辞。
-- `pi-extension/feishu-delegate.ts` 是宿主 pi 专用分发资源，只做三件事：注册结构化 `feishu` 工具、按 Feishu Project 维护 session 台账、拦截宿主 Bash 直调 `lark-cli`。它不含委派协议逻辑（唯一事实源是 `feishu-send`），不参与本仓库 tsc 构建，也绝不能作为 Feishu Package 被 `feishu install` 装进 `~/.feishu-agent/` 或进入任何 Runtime 加载路径；Extension 失效时退回 Skill 桥。
+- `pi-extension/feishu-delegate.ts` 是宿主 pi 专用分发资源，只做两件事：注册结构化 `feishu` 工具、按 Feishu Project 维护 session 台账。分工不是代码强制的：`SKILL.md` 把飞书**交付**（写、发、排期、整理、多步流程）路由给飞书 Agent 并由模型遵守；宿主直接跑 `lark-cli` 读一段原文不算违规，Extension 也不拦截宿主自愿执行的任何命令。它不含委派协议逻辑（唯一事实源是 `feishu-send`），不参与本仓库 tsc 构建，也绝不能作为 Feishu Package 被 `feishu install` 装进 `~/.feishu-agent/` 或进入任何 Runtime 加载路径；Extension 失效时退回 Skill 桥。
 - 安装形态：桥 Skill 复制到宿主 Agent 的 Skill 目录（`npx skills add … --skill feishu`），Extension 以 symlink 指向本仓库文件，零同步步骤。两端都不需要新建仓库或发布包。
 
 ### 6. Skill synchronization and precedence
