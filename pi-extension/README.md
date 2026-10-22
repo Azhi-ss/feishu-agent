@@ -50,7 +50,26 @@ install a tool that calls itself. The Feishu Runtime does not load this file.
 ## Smoke check after installing
 
 The Extension is not covered by the repository test suite (the host pi version and the SDK version
-pinned in this repository can differ), so verify it on the host once:
+pinned in this repository can differ), so verify it on the host once. After a pi upgrade, rerun step 0
+first: it loads the Extension with the installed pi's own extension loader, makes no model calls, and
+catches the whole class of API drift (missing tool / renamed hook / dropped `typebox` alias).
+
+0. Free load check, from the repository root (`node` prints the registered tool and handler):
+
+```bash
+cat > /tmp/feishu-load-check.mjs <<'JS'
+import { discoverAndLoadExtensions } from "/ABSOLUTE/PATH/TO/pi/dist/index.js";
+const result = await discoverAndLoadExtensions([], process.cwd(), process.env.HOME + "/.pi/agent");
+const ext = result.extensions.find((e) => e.path.includes("feishu-delegate"));
+console.log("errors:", result.errors, "\ntools:", [...(ext?.tools.keys() ?? [])], "handlers:", [...(ext?.handlers.keys() ?? [])]);
+JS
+node /tmp/feishu-load-check.mjs
+```
+
+Resolve `/ABSOLUTE/PATH/TO/pi/dist/index.js` from the running install, for example
+`node -e 'console.log(require.resolve("@earendil-works/pi-coding-agent/dist/index.js"))'` run with
+that install's node, or `readlink -f "$(command -v pi)"` and walk up to its package root. Expected
+output: `errors: []`, `tools: [ 'feishu' ]`, `handlers: [ 'tool_call' ]`.
 
 1. Start pi and confirm the `feishu` tool is listed, with the four parameters above.
 2. Ask pi to run `lark-cli profile list` in Bash: the call must be blocked with the "direct lark-cli
@@ -64,5 +83,6 @@ pinned in this repository can differ), so verify it on the host once:
 ## Known failure mode
 
 A pi upgrade can change the Extension API. The failure is visible and cheap: the tool disappears and pi
-prints one error line. Recovery is either adapting the three API calls above or simply removing the
-symlink and using the Skill bridge, which needs no Extension.
+prints one error line, and the step 0 load check above fails with an `errors` entry instead of
+`errors: []`. Recovery is either adapting the three API calls above or simply removing the symlink and
+using the Skill bridge, which needs no Extension.
