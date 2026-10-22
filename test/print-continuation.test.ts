@@ -6,7 +6,7 @@ import test from "node:test";
 import { baseEnv, coreCli, createCliHarness, files, fixture, repoRoot, textResponse, toolResponse, type CliResult, type Fixture } from "./helpers/automation-cli-fixture.js";
 
 const { modelServers } = createCliHarness();
-const feishuSend = join(repoRoot, "skills", "feishu-control", "feishu-send");
+const feishuSend = join(repoRoot, "skills", "feishu", "feishu-send");
 
 function run(f: Fixture, command: string, args: string[]): Promise<CliResult> {
   return new Promise((done) => {
@@ -54,6 +54,23 @@ test("Print reports its session, and --session <id> -p continues it with the ear
   assert.equal(f.model.requests.length, 2);
   for (const earlier of ["draft the weekly note", "DRAFT-V1", "make it shorter"]) assert.match(f.model.requests[1], new RegExp(earlier));
   assert.equal(sessionFiles(f).length, 1);
+});
+
+test("feishu-send --raw prepends the fixed raw-mode instruction header, and the default run carries none", async () => {
+  const f = await printFixture();
+  f.model.responses.push(textResponse("RAW-BODY"), textResponse("SUMMARY-BODY"));
+
+  const raw = await send(f, ["--raw", "extract the whole meeting note"]);
+  assert.equal(raw.code, 0, raw.stderr);
+  assert.match(raw.stdout, /RAW-BODY/);
+  assert.match(f.model.requests[0], /Feishu delegation mode: raw/);
+  assert.match(f.model.requests[0], /extract the whole meeting note/);
+
+  const plain = await send(f, ["summarize the meeting note"]);
+  assert.equal(plain.code, 0, plain.stderr);
+  assert.match(plain.stdout, /SUMMARY-BODY/);
+  assert.doesNotMatch(f.model.requests[1], /Feishu delegation mode/);
+  assert.match(f.model.requests[1], /summarize the meeting note/);
 });
 
 test("ask_user ends the delegated turn with exit 3, and feishu-send --session delivers the answer", async () => {

@@ -83,15 +83,17 @@ npm run build
 
 ### Optional: install the Host Agent bridge Skill
 
-The repository also contains `skills/feishu-control/`, a host-side bridge that lets another Pi-compatible Agent delegate work to `feishu`. It is **not** a Feishu Runtime Skill: do not put it under `~/.feishu-agent/skills/` and do not expect `feishu init` to install it.
+The repository also contains `skills/feishu/`, a host-side bridge that lets another Pi-compatible Agent delegate Feishu/Lark work to `feishu`. It is **not** a Feishu Runtime Skill: do not put it under `~/.feishu-agent/skills/` and do not expect `feishu init` to install it.
 
 After `feishu` is on `PATH`, install the bridge into a Pi host Agent:
 
 ```bash
-npx skills add Azhi-ss/feishu-agent --skill feishu-control --global --agent pi --copy
+npx skills add Azhi-ss/feishu-agent --skill feishu --global --agent pi --copy
 ```
 
-The installer copies both `SKILL.md` and `feishu-send` into the host Agent's Skill directory. Then use `/skill:feishu-control <task>` or explicitly ask the Host Agent to use Feishu Agent. Review the Skill before accepting the install; it runs `feishu` with the current user's permissions.
+The installer copies both `SKILL.md` and `feishu-send` into the host Agent's Skill directory. The Skill claims the whole Feishu domain, so the Host routes Feishu requests through it without being asked; use `/skill:feishu <task>` to invoke it explicitly. Review the Skill before accepting the install; it runs `feishu` with the current user's permissions.
+
+Delegation is summary-first: the reply carries conclusions, links and a deliverables list. Add `--raw` to `feishu-send` when the Host needs verbatim content (rewriting, translating, extracting data) instead of a summary. Host pi can additionally load the optional `pi-extension/feishu-delegate.ts`, a thin Extension exposing the same protocol as a `feishu` tool; see [pi-extension/README.md](pi-extension/README.md).
 
 A delegation can take several turns. Exit code 3 means Feishu Agent is waiting for the user, either with a question on stdout or with a high-risk confirmation request on stderr. The Host relays it, then continues the same session with the user's reply: `feishu-send --session <id> "<reply>"`, where `<id>` comes from the `Feishu Session:` line on stderr. Reinstall the Skill after updating this repository so the Host gets the new protocol.
 

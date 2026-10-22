@@ -81,8 +81,10 @@ and update across projects?**
   are not a permission boundary. Separate Sweep/Alert enablement gates remain
   in SPEC §16.4 and ADR-0003.
 - **Skill layer**: official `lark-*` Skills, `/find-skill`, and the host
-  `skills/feishu-control/` distribution resource. Skill-bundled scripts are
-  real supply-chain surface even though they are "just Markdown + scripts".
+  `skills/feishu/` delegation bridge (Skill + bundled `feishu-send` script) with
+  the host-only `pi-extension/feishu-delegate.ts` tool shell next to it.
+  Skill-bundled scripts are real supply-chain surface even though they are "just
+  Markdown + scripts".
 - **Package layer**: the allow-listed
   `@azhi-ss/feishu-remote`, and resource filtering in `src/resources.ts`.
   Pinning and allow-listing are provenance controls, not sandboxes — the

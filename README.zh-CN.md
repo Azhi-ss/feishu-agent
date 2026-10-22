@@ -60,15 +60,17 @@ npm link          # 得到 `feishu` 命令（或直接用 node dist/src/cli.js �
 
 ### 可选：给 Host Agent 安装委派 Skill
 
-仓库同时包含 `skills/feishu-control/`，用于让另一个兼容 Pi 的 Host Agent 把任务委派给 `feishu`。它是 **Host Agent 侧的桥接 Skill**，不是 Feishu Runtime 内部 Skill：不要把它放到 `~/.feishu-agent/skills/`，也不要让 `feishu init` 自动安装它。
+仓库同时包含 `skills/feishu/`，用于让另一个兼容 Pi 的 Host Agent 把飞书/Lark 任务委派给 `feishu`。它是 **Host Agent 侧的桥接 Skill**，不是 Feishu Runtime 内部 Skill：不要把它放到 `~/.feishu-agent/skills/`，也不要让 `feishu init` 自动安装它。
 
 确认 `feishu` 已经在 `PATH` 中后，可以把桥接 Skill 安装到 Pi Host Agent：
 
 ```bash
-npx skills add Azhi-ss/feishu-agent --skill feishu-control --global --agent pi --copy
+npx skills add Azhi-ss/feishu-agent --skill feishu --global --agent pi --copy
 ```
 
-安装器会同时复制 `SKILL.md` 和 `feishu-send`。安装后可以使用 `/skill:feishu-control <任务>`，或明确要求 Host Agent 使用 Feishu Agent。安装前请先审阅 Skill；它会以当前用户权限运行 `feishu`。
+安装器会同时复制 `SKILL.md` 和 `feishu-send`。该 Skill 宣称整个飞书域，Host 不需要用户点名就会把飞书请求经它委派；也可以显式使用 `/skill:feishu <任务>`。安装前请先审阅 Skill；它会以当前用户权限运行 `feishu`。
+
+委派默认返回摘要：结论、链接和交付物清单。需要逐字内容（改写、翻译、提取数据）时给 `feishu-send` 加 `--raw`。宿主 pi 还可以加载可选的 `pi-extension/feishu-delegate.ts`——把同一协议暴露为 `feishu` 工具的薄 Extension，见 [pi-extension/README.md](pi-extension/README.md)。
 
 一次委派可以分多轮完成。退出码 3 表示 Feishu Agent 在等用户：stdout 是它的问题，或 stderr 是高危操作的确认请求。Host 原样转告后，用用户的回复续接同一会话：`feishu-send --session <id> "<回复>"`，`<id>` 取自 stderr 中的 `Feishu Session:` 行。更新本仓库后请重新安装该 Skill，Host 才能拿到新协议。
 

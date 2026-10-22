@@ -141,7 +141,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
   6. `<project>/.feishu-agent/AGENTS.md`；
   7. `<project>/AGENTS.md`。
 - 不加载 `.agents/skills`、`.pi/skills`、普通 Pi Prompts/Themes/Extensions、Codex/Claude Skills 或其他 Agent Home。
-- 仓库根目录的 `skills/feishu-control/` 是面向宿主 Agent 分发的桥接资源，不属于 Feishu Runtime；ResourceLoader 不自动发现它，`feishu init` 也不得把它安装到宿主 Agent 目录或 `~/.feishu-agent/skills/`。
+- 仓库根目录的 `skills/feishu/` 是面向宿主 Agent 分发的桥接资源（`SKILL.md` 与 `feishu-send`），不属于 Feishu Runtime；ResourceLoader 不自动发现它，`feishu init` 也不得把它安装到宿主 Agent 目录或 `~/.feishu-agent/skills/`。宿主 pi 专用的 `pi-extension/feishu-delegate.ts` 同样不属于 Runtime（§5.2）。
 - 项目 Feishu 资源和根 `AGENTS.md` 自动加载，不走 Pi 项目信任提示。
 - 全局 `SYSTEM.md` 是基础身份，项目说明和 Extension 只能追加，不能替换。
 - 提示词按 `SYSTEM.md`（缺失时使用内置默认）→ 全局 `SOUL.md`（人格与协作风格）→ 全局 `USER.md`（用户背景）→ 项目 `.feishu-agent/AGENTS.md` → 根 `AGENTS.md` 拼接。`SOUL.md`、`USER.md` 仅从 Feishu Agent Home 读取，缺失或为空时跳过；不改变基础职责、工具权限或安全策略。
@@ -157,6 +157,13 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 适配包在用户授权的独立 fork `Azhi-ss/pi-subagents-feishu` 维护，基于上游 v0.73.1；Pi SDK 和 Mem0 原样使用，不修改已安装第三方文件。`feishu install <绝对路径>` 可引用本地 fork，init 不自动安装。
 - 主会话把已解析的 Skills、系统提示词、项目/私有目录和本轮破坏性授权布尔值发布为私有目录内的不可变快照；不写入模型凭证或用户对话。前台/后台子会话通过宿主提供的资源接口加载它，排队、重试与嵌套委派保持原始快照，后续父回合不会追授权限。快照缺失/无效时失败，不回退普通 Pi 发现。
 - 子会话不自动启动父会话的 Mem0/Remote 扩展。外部 CLI/job runner 和远程机器运行不经过 Feishu 宿主资源/Guard，故在 Feishu 模式明确拒绝；本机原生前台/后台执行保留。配置、安装与跨仓库验证见 `docs/subagents.md`。
+
+### 5.2. Host Agent delegation bridge（host-side distribution）
+
+- `skills/feishu/` 是面向宿主 Agent（pi/Claude/Codex）分发的飞书委派桥，由 `SKILL.md`（全域飞书路由、宿主=编排者+coder 与飞书 Agent=飞书域全职员工的定位、双模式返回协议、禁止宿主直调 `lark-cli`）与 `feishu-send` 脚本组成。它不属于 Feishu Runtime：ResourceLoader 不发现它，`feishu init` 不安装它，也不得进入 `DEFAULT_SKILLS` 或 `~/.feishu-agent/skills/`。
+- `feishu-send` 的旗标面：`--raw`（原文模式）、`--profile <profile>`、`--session <id>`，其余沿用 `FEISHU_CONTROL_TIMEOUT`、`FEISHU_CONTROL_CWD`。默认摘要模式不附加任何指令头；`--raw` 的模式指令由脚本以固定措辞加在消息头，宿主不自己写措辞。
+- `pi-extension/feishu-delegate.ts` 是宿主 pi 专用分发资源，只做三件事：注册结构化 `feishu` 工具、按 Feishu Project 维护 session 台账、拦截宿主 Bash 直调 `lark-cli`。它不含委派协议逻辑（唯一事实源是 `feishu-send`），不参与本仓库 tsc 构建，也绝不能作为 Feishu Package 被 `feishu install` 装进 `~/.feishu-agent/` 或进入任何 Runtime 加载路径；Extension 失效时退回 Skill 桥。
+- 安装形态：桥 Skill 复制到宿主 Agent 的 Skill 目录（`npx skills add … --skill feishu`），Extension 以 symlink 指向本仓库文件，零同步步骤。两端都不需要新建仓库或发布包。
 
 ### 6. Skill synchronization and precedence
 
@@ -272,7 +279,7 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 本轮新增的 Assistant 消息若 `stopReason` 为 `error` 且 `errorMessage` 非空，Print 在返回前向 stderr 追加一行 `Feishu run failed: <message>`（空白折叠，正文最多 240 字）。已有非零退出码保持不变，否则改为 1。`aborted` 的原文不改写。
 - `ask_user` 是 Print 专有的保留工具，参数为必填 `question` 与可选字符串数组 `options`；调用即以 `terminate` 结束本轮，不再请求模型。同一条模型回复里的其他工具不执行。用户的答复作为同一会话的下一条消息到达。Interactive 会话（含 `/reload` 之后）不暴露该工具。
 - `FEISHU_UNATTENDED=1` 运行同样可能以退出码 3 结束；Automation 按非零记为失败，不自动续接。
-- 两次 Print 之间不保留进程，会话文件就是 checkpoint。Host 只能原样转发用户的答复或确认，不得自拟批准（`skills/feishu-control/`）；用户随时可用 `feishu --session <id>` 在 TUI 接管。
+- 两次 Print 之间不保留进程，会话文件就是 checkpoint。Host 只能原样转发用户的答复或确认，不得自拟批准（`skills/feishu/`，§5.2）；用户随时可用 `feishu --session <id>` 在 TUI 接管。
 
 ### 14. Initialization
 
@@ -309,6 +316,8 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 交互式 Slash Command：`/find-skill <query>`、`/find-skill install <owner/repo@skill>`、`/tasks`、`/remote [start|stop|status|switch]`（`/remote` 由已安装的 Feishu Remote Package 提供，不是内联核心命令）
 
 CLI 参数只实现上述需求，不追求 Pi CLI 的完整参数兼容；`/find-skill` 属于 Runtime 内的交互命令，不新增顶层 `feishu` 参数。
+
+本节的最小参数面约束针对 `feishu` CLI 本体。面向宿主 Agent 的委派桥（`skills/feishu/` 与 `pi-extension/feishu-delegate.ts`）不在这个参数面内，其协议、旗标面与安装边界见 §5.2。
 
 ### 15.1 未完成任务名单
 
@@ -568,6 +577,10 @@ Sweep 是 30 分钟量级、以 owner 本人 user 身份轮询「谁在 @ 我」
 16. **Automation**
     - 复用真实 CLI 主测试缝，按 §16.5 与完整 PRD 验证任务管理/确认、受控时间、并发/恢复、无人 Print、Skill 接线、服务替身、秘密扫描及 macOS/Linux × Node 24 行为矩阵。
     - 只验证提示词注入和既有 guard，不把模型遵守业务规则当作硬权限测试；不触碰真实任务或账户。
+
+17. **Host Agent delegation bridge**
+    - `skills/feishu/`（桥 Skill + `feishu-send`）用临时 HOME 与 PATH 注入的假 `feishu` 跑真实子进程验证：`--raw` 在消息头加固定模式指令，默认摘要模式不加；退出码映射与 `--session` 续接行为不变（`test/print-continuation.test.ts`）。
+    - 宿主 pi Extension（`pi-extension/feishu-delegate.ts`）不纳入仓库自动化测试：宿主 pi 与本仓库钉的 SDK 版本可能错位，且它依赖宿主运行时提供的 `typebox` 虚拟模块。它的唯一契约是已测的 `feishu-send`，验证方式为宿主 pi 加载冒烟，步骤见 `pi-extension/README.md`。
 
 ### Prior art
 
