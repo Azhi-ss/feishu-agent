@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import type { ModelResponder } from "./helpers/remote-bridge-fixture.js";
@@ -233,6 +233,41 @@ test("non-text inbound messages (images/files/stickers) receive a v1 acknowledge
     assert.doesNotMatch(result.output, /Agent is already processing/);
     assert.doesNotMatch(result.output, new RegExp(SECRET));
     assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET), "app secret must not reach the loopback");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a provider error that Pi auto-retries still delivers the retried answer to the phone", async () => {
+  let requests = 0;
+  const flakyModel: ModelResponder = (lastUser) => {
+    requests += 1;
+    // A bodyless 502 is retryable: Pi ends the first run with an error-only
+    // assistant message and starts a second run for the real answer.
+    return requests === 1 ? { status: 502 } : { sse: sse(`PTY-PONG:${lastUser}`) };
+  };
+  const f = await fixture(flakyModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "retry-1", messageType: "text", text: "retry-me" } },
+  ]);
+  // Shorten the auto-retry backoff; the default is seconds. Merge into the
+  // fixture settings: that file also holds the installed Remote Package.
+  const settingsPath = join(f.home, ".feishu-agent", "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(readFileSync(settingsPath, "utf8")), retry: { enabled: true, maxRetries: 2, baseDelayMs: 100 } }));
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "PTY-PONG:retry-me", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    assert.equal(requests, 2, "the provider error must be retried once");
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened.length, 1, JSON.stringify(stats.cards.opened));
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0].text, "PTY-PONG:retry-me", "the retried run's answer must still reach the phone");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);

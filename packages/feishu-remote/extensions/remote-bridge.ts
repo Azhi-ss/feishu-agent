@@ -96,7 +96,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let status: RemoteStatus = "off";
     let credentials: RemoteCredentials | undefined;
     let secret: string | undefined; // in memory only; dropped on stop
-    let activeTurn: { chatId: string; stopRequested?: boolean } | undefined;
+    let activeTurn: { chatId: string; reply?: string; stopRequested?: boolean } | undefined;
     let activeCard: ActiveCard | undefined;
     const queue: QueuedMessage[] = [];
     let latestCtx: ExtensionContext | undefined;
@@ -107,6 +107,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
     let standbyHolder: string | undefined;
     const dedup = new MessageDedup();
     let handoffTimer: NodeJS.Timeout | undefined;
+    let autostartTimer: NodeJS.Timeout | undefined;
 
     // /remote switch from another window: the requester writes a yield file
     // (no signals — SIGUSR2 interrupts the TUI raw-mode stdin read). While this
@@ -204,6 +205,20 @@ export function remoteBridgeExtension(): ExtensionFactory {
         },
       );
       return card;
+    }
+
+    async function finalizeCard(turn: { chatId: string; reply?: string }, card: ActiveCard): Promise<void> {
+      const reply = turn.reply ?? "";
+      const session = await card.open;
+      if (!session) {
+        // Card open failed: the plain-message path still delivers the answer.
+        if (gateway && reply) await gateway.sendMessage(turn.chatId, reply).catch(() => { /* outbound failures never abort the turn */ });
+        return;
+      }
+      const shards = shardText(reply);
+      await session.finalize(shards[0]);
+      const gw = gateway;
+      for (const shard of shards.slice(1)) await gw?.sendMessage(turn.chatId, shard).catch(() => {});
     }
 
     function submit(next: QueuedMessage): void {
@@ -371,10 +386,24 @@ export function remoteBridgeExtension(): ExtensionFactory {
     pi.on("session_start", (_event, ctx) => {
       latestCtx = ctx;
       paint(ctx);
-      if (ctx.mode === "tui" && process.env[REMOTE_AUTOSTART_ENV] === "1" && !gateway && !pendingGateway) void start(ctx, { quietIfHeld: true });
+      if (ctx.mode === "tui" && process.env[REMOTE_AUTOSTART_ENV] === "1" && !gateway && !pendingGateway) {
+        // Let the TUI finish its first paint before any remote handshake can
+        // enter the event loop. Explicit /remote start remains immediate.
+        if (autostartTimer) clearTimeout(autostartTimer);
+        autostartTimer = setTimeout(() => {
+          autostartTimer = undefined;
+          if (!gateway && !pendingGateway) void start(ctx, { quietIfHeld: true });
+        }, 100);
+      }
     });
 
-    pi.on("session_shutdown", () => stop());
+    pi.on("session_shutdown", () => {
+      if (autostartTimer) {
+        clearTimeout(autostartTimer);
+        autostartTimer = undefined;
+      }
+      return stop();
+    });
 
     pi.on("agent_start", (_event, ctx) => {
       // sendUserMessage starts asynchronously: a same-batch stop can precede
@@ -401,32 +430,28 @@ export function remoteBridgeExtension(): ExtensionFactory {
       });
     });
 
-    pi.on("agent_end", async (event) => {
+    pi.on("agent_end", (event) => {
+      // agent_end closes ONE low-level run: auto-retry after a provider error,
+      // overflow recovery and compaction can still produce the answer in a later
+      // run of the same turn. Keep the last run that actually produced text and
+      // let agent_settled finalize; closing here sent an empty card and dropped
+      // the retried answer from the phone.
       const turn = activeTurn;
       if (!turn) return;
+      const reply = lastAssistantText(event.messages);
+      if (reply) turn.reply = reply;
+    });
+
+    pi.on("agent_settled", async () => {
+      const turn = activeTurn;
       activeTurn = undefined;
       const card = activeCard;
       activeCard = undefined;
-      const reply = lastAssistantText(event.messages) ?? "";
-      // Pi remains busy while this handler finalizes the card, so inbound
-      // messages stay in our queue until agent_settled starts the next run.
-      if (!card) return;
-      const session = await card.open;
-      if (!session) {
-        // Card open failed: the plain-message path still delivers the answer.
-        if (gateway && reply) await gateway.sendMessage(turn.chatId, reply).catch(() => { /* outbound failures never abort the turn */ });
-        return;
-      }
-      const shards = shardText(reply);
-      await session.finalize(shards[0]);
-      const gw = gateway;
-      for (const shard of shards.slice(1)) await gw?.sendMessage(turn.chatId, shard).catch(() => {});
-    });
-
-    pi.on("agent_settled", () => {
-      // An aborted run does not drain follow-ups queued during agent_end in
-      // Pi 0.87.1. Start the next message only after settlement; Pi defers the
-      // fresh run until every agent_settled handler has finished.
+      if (turn && card) await finalizeCard(turn, card);
+      // An aborted run does not drain follow-ups queued during settlement in
+      // Pi 0.87.1, and a phone message that arrived while the card closed may
+      // already own the next turn. Pi defers the fresh run until every
+      // agent_settled handler has finished.
       if (activeTurn) return;
       const next = queue.shift();
       if (next) submit(next);

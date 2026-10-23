@@ -191,6 +191,8 @@ export interface ModelPlan {
   delayMs?: number;
   sse?: string;
   stream?: Array<{ line: string; delayMs: number }>;
+  /** Fail with this HTTP status and no body (drives Pi's auto-retry). */
+  status?: number;
 }
 
 export type ModelResponder = (lastUserText: string) => ModelPlan;
@@ -229,6 +231,7 @@ export async function modelServer(responder: ModelResponder): Promise<{ server: 
       } catch { /* not a chat completion */ }
       const plan = responder(lastUser);
       const write = () => {
+        if (plan.status) return void response.writeHead(plan.status).end();
         response.writeHead(200, { "content-type": "text/event-stream" });
         if (plan.stream) {
           let index = 0;
