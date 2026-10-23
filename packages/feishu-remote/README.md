@@ -15,9 +15,11 @@ answer text starts.
 
 Delivery has a definite outcome. When the card cannot be opened, or its close
 fails after one retry, the complete reply is re-sent once as a plain message and
-the TUI warning says so. A failed stream append is non-fatal — the final close
-writes the complete reply — and a connection interruption is reported as such,
-not as a card write failure.
+the TUI warning says so. A settle with no visible reply body — every low-level
+run failed, or the turn only produced internal reasoning — closes the card with
+one short, actionable notice instead of an empty card. A failed stream append is
+non-fatal — the final close writes the complete reply — and a connection
+interruption is reported as such, not as a card write failure.
 
 For group @mentions, the bridge may run a separate current-message-only reaction
 selector. It validates the selected Feishu reaction, adds it to the source

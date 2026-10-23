@@ -23,6 +23,9 @@ import { acquireRemoteLock, clearHandoffRequest, describeHolder, hasHandoffReque
 import { fallbackReaction, parseReactionChoice, REACTION_PROMPT_FOR_MODEL, type ReactionChoice } from "./reaction-selector.js";
 import { shardText, StreamCardSession, THINKING_STATUS, WORKING_STATUS, visibleAssistantText } from "./stream-card.js";
 
+/** One short, actionable line the phone gets instead of an empty card when a settled turn has no visible reply body. */
+export const EMPTY_REPLY_NOTICE = "Remote bridge: this turn ended without a reply. Send your message again, or check the terminal.";
+
 type RemoteStatus = "off" | "standby" | "connecting" | "connected" | "error";
 const REMOTE_STATUS_KEY = "feishu-3-remote";
 
@@ -43,9 +46,6 @@ interface ActiveCard {
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-/** Plain-message fallback outcome: no reply text, a landed send, or a failed send. */
-type PlainDelivery = "sent" | "failed" | "empty";
 
 function toolStatusLine(): string {
   return WORKING_STATUS;
@@ -217,38 +217,41 @@ export function remoteBridgeExtension(): ExtensionFactory {
       return card;
     }
 
-    async function plainFallback(chatId: string, reply: string): Promise<PlainDelivery> {
+    async function plainFallback(chatId: string, text: string): Promise<boolean> {
       const gw = gateway;
-      if (!reply) return "empty";
-      if (!gw) return "failed";
+      if (!gw) return false;
       // The send error itself is dropped: the card failure is the actionable cause,
-      // and the warning already states that the reply did not arrive.
-      return gw.sendMessage(chatId, reply).then((): PlainDelivery => "sent", (): PlainDelivery => "failed");
+      // and the warning already states whether the fallback landed.
+      return gw.sendMessage(chatId, text).then(() => true, () => false);
     }
 
-    function fallbackText(outcome: PlainDelivery): string {
-      if (outcome === "sent") return "the reply was sent as a plain message";
-      if (outcome === "failed") return "the plain-message fallback also failed";
-      return "there was no reply text to re-send";
+    function fallbackText(sent: boolean, notice: boolean): string {
+      if (notice) return sent ? "the notice was sent as a plain message" : "the notice could not be sent either";
+      return sent ? "the reply was sent as a plain message" : "the plain-message fallback also failed";
     }
 
     async function finalizeCard(turn: { chatId: string; reply?: string }, card: ActiveCard): Promise<void> {
       const reply = turn.reply ?? "";
+      // A settle with no visible reply body — every low-level run failed, or the turn
+      // only produced internal reasoning — owes the phone an actionable line: an empty
+      // card is indistinguishable from a bridge that is still working.
+      const notice = !reply;
+      const text = notice ? EMPTY_REPLY_NOTICE : reply;
       const session = await card.open;
       if (!session) {
-        const fallback = await plainFallback(turn.chatId, reply);
-        notify(latestCtx, `Remote bridge could not open the streaming card; ${fallbackText(fallback)}: ${errorText(card.openError)}`, "warning");
+        const sent = await plainFallback(turn.chatId, text);
+        notify(latestCtx, `Remote bridge could not open the streaming card; ${fallbackText(sent, notice)}: ${errorText(card.openError)}`, "warning");
         return;
       }
-      const shards = shardText(reply);
+      const shards = shardText(text);
       const outcome = await session.finalize(shards[0]);
       if (!outcome.closed) {
-        // The card may still be streaming: deliver the complete reply as a plain
+        // The card may still be streaming: deliver the complete text as a plain
         // message instead, exactly once, rather than leaving partial text. One
         // message, not sharded: a reply above Feishu's text-message limit would
         // need sharding here.
-        const fallback = await plainFallback(turn.chatId, reply);
-        notify(latestCtx, `Remote bridge card close failed after a retry; ${fallbackText(fallback)} (the card may still be streaming): ${errorText(outcome.error)}`, "warning");
+        const sent = await plainFallback(turn.chatId, text);
+        notify(latestCtx, `Remote bridge card close failed after a retry; ${fallbackText(sent, notice)} (the card may still be streaming): ${errorText(outcome.error)}`, "warning");
         return;
       }
       const gw = gateway;

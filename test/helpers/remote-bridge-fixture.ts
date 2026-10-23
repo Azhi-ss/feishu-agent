@@ -68,8 +68,8 @@ export interface FeishuStats {
   };
 }
 
-/** Card endpoints the loopback fake can be told to fail, keyed by the bridge operation. */
-export type OutboundEndpoint = "cardOpen" | "cardAppend" | "cardClose";
+/** Outbound endpoints the loopback fake can be told to fail, keyed by the bridge operation. */
+export type OutboundEndpoint = "cardOpen" | "cardAppend" | "cardClose" | "sendMessage";
 
 export interface LoopbackOptions {
   failPollsAfterFirst?: number;
@@ -98,7 +98,7 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     pollTimes: [] as number[],
     scripted: false,
   };
-  const failureBudget: Record<OutboundEndpoint, number> = { cardOpen: 0, cardAppend: 0, cardClose: 0, ...options.outboundFailures };
+  const failureBudget: Record<OutboundEndpoint, number> = { cardOpen: 0, cardAppend: 0, cardClose: 0, sendMessage: 0, ...options.outboundFailures };
   const failInjected = (endpoint: OutboundEndpoint, response: ServerResponse): boolean => {
     const remaining = failureBudget[endpoint];
     if (!(remaining > 0)) return false;
@@ -164,7 +164,11 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     let body = "";
     request.on("data", (chunk) => body += chunk);
     request.on("end", () => {
-      if (request.url === "/send-message") { state.sends.push({ ...(JSON.parse(body) as { chatId: string; text: string }), at: Date.now() }); response.writeHead(200).end(); }
+      if (request.url === "/send-message") {
+        if (failInjected("sendMessage", response)) return;
+        state.sends.push({ ...(JSON.parse(body) as { chatId: string; text: string }), at: Date.now() });
+        response.writeHead(200).end();
+      }
       else if (request.url === "/add-reaction") { state.reactions.push({ ...(JSON.parse(body) as { messageId: string; emojiType: string }), at: Date.now() }); response.writeHead(200).end(); }
       else if (request.url === "/open-stream-card") {
         if (failInjected("cardOpen", response)) return;

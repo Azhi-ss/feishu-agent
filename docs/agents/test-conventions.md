@@ -114,17 +114,19 @@ the property is broken:
 The loopback fake Feishu service (`test/helpers/remote-bridge-fixture.ts`) records
 outbound calls and can be told to fail leading calls per card endpoint:
 
-- `outboundFailures: { cardOpen?, cardAppend?, cardClose? }` — the leading N calls
-  per endpoint answer HTTP 500; `Infinity` fails every call.
+- `outboundFailures: { cardOpen?, cardAppend?, cardClose?, sendMessage? }` — the
+  leading N calls per endpoint answer HTTP 500; `Infinity` fails every call.
 - Injected failures are recorded in `stats.failures` (`{ endpoint, at }`), while
-  `cards.opened/appends/closes` keep meaning "wire writes the server actually
-  served" — a failed open leaves `opened` empty.
+  `cards.opened/appends/closes` and `sends` keep meaning "wire writes the server
+  actually served" — a failed open leaves `opened` empty, and a failed plain
+  message never appears in `sends`.
 - `markCardClosed(path)` writes the marker once a successful close is served, so a
   test can synchronise on finalization through `waitFile` instead of reaching into
   the fake server's request events (same protocol for every card-delivery test).
 - Real user: the Remote Bridge delivery-fallback tests in
   `remote-bridge-core.test.ts` (card open/append/close failure, bounded close
-  retry), with the state-machine half covered in `stream-card.test.ts`.
+  retry, and a plain-message fallback that cannot land), with the state-machine
+  half covered in `stream-card.test.ts`.
 
 ## Diagnosis notes (why these, not other fixes)
 

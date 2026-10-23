@@ -83,9 +83,11 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
 - If the card cannot be opened, or its close fails after one retry, the complete
   reply is re-sent once as a plain message and the TUI warning says so (the card
   may stay in streaming mode). A failed stream append is non-fatal: the final
-  close writes the complete reply. Connection interruptions are reported
-  separately, so a warning tells you whether to reconnect or whether the reply
-  already fell back to a plain message.
+  close writes the complete reply. A settle with no visible reply body — every
+  low-level run failed, or the turn only produced internal reasoning — closes the
+  card with one short, actionable notice instead of an empty card. Connection
+  interruptions are reported separately, so a warning tells you whether to
+  reconnect or whether the reply already fell back to a plain message.
 
 ## Constraints
 

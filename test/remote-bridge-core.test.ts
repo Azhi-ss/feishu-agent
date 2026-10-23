@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import type { ModelResponder } from "./helpers/remote-bridge-fixture.js";
+import type { LoopbackOptions, ModelResponder, RemoteFixture } from "./helpers/remote-bridge-fixture.js";
+import { EMPTY_REPLY_NOTICE } from "../packages/feishu-remote/extensions/remote-bridge.js";
 import { THINKING_STATUS, WORKING_STATUS } from "../packages/feishu-remote/extensions/stream-card.js";
 import {
   fixture,
@@ -489,6 +490,128 @@ test("reasoning before the answer keeps the tool status until visible assistant 
     assert.ok(!stats.cards.statuses.some((status) => status.text === ""), "empty content must never be sent to CardKit");
     for (const clear of cleared) assert.ok(firstAppendAt - clear.at < 200, `status must clear when visible text starts, not at message_start: clear=${clear.at} firstAppend=${firstAppendAt}`);
     assert.doesNotMatch(JSON.stringify(stats.cards.appends), /THOUGHT-/, "reasoning never reaches the card");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+// A model that always answers with a retryable provider error, plus the fixture's
+// short retry budget so the exhausted-retry settle happens inside the test window.
+async function providerDownFixture(messageId: string, loopback: LoopbackOptions = {}): Promise<RemoteFixture> {
+  const f = await fixture(() => ({ status: 502 }), [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId, messageType: "text", text: "provider-down" } },
+  ], loopback);
+  const settingsPath = join(f.home, ".feishu-agent", "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(readFileSync(settingsPath, "utf8")), retry: { enabled: true, maxRetries: 1, baseDelayMs: 100 } }));
+  return f;
+}
+
+test("a settle with no visible reply closes the card with a short notice instead of empty content", async () => {
+  // First low-level run calls a tool (whose raw output must stay local); the run
+  // that answers emits internal reasoning only, so the turn has no visible text.
+  const toolCall = `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "notice-tool-1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf RAW_TOOL_OUTPUT_SHOULD_STAY_LOCAL" }) } }] }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`;
+  let toolSent = false;
+  const reasoningOnly: ModelResponder = () => {
+    if (!toolSent) {
+      toolSent = true;
+      return { sse: toolCall };
+    }
+    return { sse: sseDelta({ reasoning_content: "THOUGHT-ONLY-RAW" }) + sseDone() };
+  };
+  const f = await fixture(reasoningOnly, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "reasoning-only-1", messageType: "text", text: "reasoning-only" } },
+  ]);
+  const closed = join(f.root, "reasoning-only-closed");
+  f.feishu.markCardClosed(closed);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { waitFile: closed, send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened.length, 1, JSON.stringify(stats.cards.opened));
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0]?.text, EMPTY_REPLY_NOTICE, "the phone gets a short notice instead of an empty card");
+    assert.match(stats.cards.closes[0]?.text ?? "", /ended without a reply/, "the notice is non-empty even if the constant regresses");
+    assert.equal(stats.sends.length, 0, "the notice rides the card: a one-card turn gains no plain message");
+    assert.doesNotMatch(JSON.stringify(stats), /THOUGHT-ONLY-RAW/, "the notice must not carry raw thinking");
+    assert.ok(f.timeoutProgress().modelRequests >= 2, "the tool round-trip happened before the notice");
+    assert.doesNotMatch(JSON.stringify(stats), /RAW_TOOL_OUTPUT_SHOULD_STAY_LOCAL/, "the notice must not carry raw tool output");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("provider errors that exhaust Pi's auto-retry leave a short notice on the card, not an empty card", async () => {
+  const f = await providerDownFixture("provider-down-1");
+  const closed = join(f.root, "provider-down-closed");
+  f.feishu.markCardClosed(closed);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { waitFile: closed, send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    assert.ok(f.timeoutProgress().modelRequests >= 2, "the provider error must be retried before the settle");
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0]?.text, EMPTY_REPLY_NOTICE, "the phone gets a short notice instead of an empty card");
+    assert.match(stats.cards.closes[0]?.text ?? "", /ended without a reply/, "the notice is non-empty even if the constant regresses");
+    assert.equal(stats.sends.length, 0, "the notice rides the card: a one-card turn gains no plain message");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("when the card never opens, a no-visible-reply settle arrives as exactly one plain notice", async () => {
+  const f = await providerDownFixture("provider-down-no-card", { outboundFailures: { cardOpen: Infinity } });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "could not open the streaming card", send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened.length, 0, "the card never opened");
+    assert.equal(stats.cards.closes.length, 0);
+    assert.deepEqual(stats.sends.map((send) => send.text), [EMPTY_REPLY_NOTICE], "the notice arrives as exactly one plain message");
+    assert.match(stats.sends[0]?.text ?? "", /ended without a reply/, "the notice is non-empty even if the constant regresses");
+    assert.match(result.output, /notice was sent as a plain message/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a notice that cannot be delivered does not affect settlement; the bridge keeps running", async () => {
+  const f = await providerDownFixture("provider-down-undeliverable", { outboundFailures: { cardOpen: Infinity, sendMessage: Infinity } });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "could not be sent either", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.sends.length, 0, "the failed notice never reaches the wire");
+    assert.equal(stats.failures.filter((failure) => failure.endpoint === "sendMessage").length, 1);
+    assert.match(result.output, /notice could not be sent either/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);
