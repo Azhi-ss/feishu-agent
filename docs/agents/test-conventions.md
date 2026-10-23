@@ -109,6 +109,23 @@ the property is broken:
   phone-originated turns"): the guard fired, the model answered, the card opened
   and closed, and only the harness was stuck waiting.
 
+## 4. Loopback fake: inject outbound card failures
+
+The loopback fake Feishu service (`test/helpers/remote-bridge-fixture.ts`) records
+outbound calls and can be told to fail leading calls per card endpoint:
+
+- `outboundFailures: { cardOpen?, cardAppend?, cardClose? }` — the leading N calls
+  per endpoint answer HTTP 500; `Infinity` fails every call.
+- Injected failures are recorded in `stats.failures` (`{ endpoint, at }`), while
+  `cards.opened/appends/closes` keep meaning "wire writes the server actually
+  served" — a failed open leaves `opened` empty.
+- `markCardClosed(path)` writes the marker once a successful close is served, so a
+  test can synchronise on finalization through `waitFile` instead of reaching into
+  the fake server's request events (same protocol for every card-delivery test).
+- Real user: the Remote Bridge delivery-fallback tests in
+  `remote-bridge-core.test.ts` (card open/append/close failure, bounded close
+  retry), with the state-machine half covered in `stream-card.test.ts`.
+
 ## Diagnosis notes (why these, not other fixes)
 
 - The 5s budget was not "too tight for a slow machine" in the abstract: bisection

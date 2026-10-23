@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -57,6 +57,9 @@ export interface FeishuStats {
   sends: Array<{ chatId: string; text: string; at: number }>;
   reactions: Array<{ messageId: string; emojiType: string; at: number }>;
   closes: number[];
+  /** Injected outbound failures, in arrival order. The successful-write arrays below
+   * (opened/appends/cardCloses) only record calls the server actually served. */
+  failures: Array<{ endpoint: OutboundEndpoint; at: number }>;
   cards: {
     opened: Array<{ chatId: string; cardId: string; at: number }>;
     statuses: Array<{ cardId: string; text: string; at: number }>;
@@ -65,7 +68,18 @@ export interface FeishuStats {
   };
 }
 
-export async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent | InboundEvent[] }>, options: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats>; timeoutProgress(): Record<string, number> }> {
+/** Card endpoints the loopback fake can be told to fail, keyed by the bridge operation. */
+export type OutboundEndpoint = "cardOpen" | "cardAppend" | "cardClose";
+
+export interface LoopbackOptions {
+  failPollsAfterFirst?: number;
+  cardOpenDelayMs?: number;
+  holdFirstPollUntil?: string;
+  /** Fail the leading calls per endpoint with HTTP 500; `Infinity` fails every call. */
+  outboundFailures?: Partial<Record<OutboundEndpoint, number>>;
+}
+
+export async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent | InboundEvent[] }>, options: LoopbackOptions = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats>; markCardClosed(path: string): void; timeoutProgress(): Record<string, number> }> {
   const state = {
     seq: 0,
     pollSeqs: [] as number[],
@@ -79,9 +93,19 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     statuses: [] as Array<{ cardId: string; text: string; at: number }>,
     appends: [] as Array<{ cardId: string; text: string; sequence: number; uuid: string; at: number }>,
     cardCloses: [] as Array<{ cardId: string; text: string; at: number }>,
+    failures: [] as Array<{ endpoint: OutboundEndpoint; at: number }>,
     polls: 0,
     pollTimes: [] as number[],
     scripted: false,
+  };
+  const failureBudget: Record<OutboundEndpoint, number> = { cardOpen: 0, cardAppend: 0, cardClose: 0, ...options.outboundFailures };
+  const failInjected = (endpoint: OutboundEndpoint, response: ServerResponse): boolean => {
+    const remaining = failureBudget[endpoint];
+    if (!(remaining > 0)) return false;
+    if (Number.isFinite(remaining)) failureBudget[endpoint] = remaining - 1;
+    state.failures.push({ endpoint, at: Date.now() });
+    response.writeHead(500).end();
+    return true;
   };
   const server = createServer((request, response) => {
     if (request.url === "/events") {
@@ -143,6 +167,7 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
       if (request.url === "/send-message") { state.sends.push({ ...(JSON.parse(body) as { chatId: string; text: string }), at: Date.now() }); response.writeHead(200).end(); }
       else if (request.url === "/add-reaction") { state.reactions.push({ ...(JSON.parse(body) as { messageId: string; emojiType: string }), at: Date.now() }); response.writeHead(200).end(); }
       else if (request.url === "/open-stream-card") {
+        if (failInjected("cardOpen", response)) return;
         const { chatId } = JSON.parse(body) as { chatId: string };
         const cardId = `card-${state.opened.length + 1}`;
         state.opened.push({ chatId, cardId, at: Date.now() });
@@ -159,17 +184,19 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
         response.writeHead(200).end();
       }
       else if (request.url === "/append-stream-text") {
+        if (failInjected("cardAppend", response)) return;
         const { cardId, text, sequence, uuid } = JSON.parse(body) as { cardId: string; text: string; sequence: number; uuid: string };
         state.appends.push({ cardId, text, sequence, uuid, at: Date.now() });
         response.writeHead(200).end();
       }
       else if (request.url === "/close-stream-card") {
+        if (failInjected("cardClose", response)) return;
         const { cardId, text } = JSON.parse(body) as { cardId: string; text: string };
         state.cardCloses.push({ cardId, text, at: Date.now() });
         response.writeHead(200).end();
       }
       else if (request.url === "/disconnect") { const now = Date.now(); const seq = ++state.seq; state.closes.push(now); state.closeSeqs.push(seq); response.writeHead(200).end(); }
-      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, sends: state.sends, reactions: state.reactions, closes: state.closes, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
+      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, sends: state.sends, reactions: state.reactions, closes: state.closes, failures: state.failures, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
       else response.writeHead(404).end();
     });
   });
@@ -180,6 +207,14 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     server,
     url: `http://127.0.0.1:${address.port}`,
     timeoutProgress: () => ({ cardsOpened: state.opened.length, cardAppends: state.appends.length, cardsClosed: state.cardCloses.length }),
+    /** Write `path` once the fake serves a successful card close, so a test can
+     * wait for finalization through `waitFile` instead of polling the wire. */
+    markCardClosed: (path: string) => {
+      server.on("request", (request, response) => {
+        if (request.url !== "/close-stream-card") return;
+        response.once("finish", () => { if (response.statusCode === 200) writeFileSync(path, "closed"); });
+      });
+    },
     stats: async () => {
       const response = await fetch(`http://127.0.0.1:${address.port}/stats`);
       return (await response.json()) as FeishuStats;
@@ -268,13 +303,13 @@ export interface RemoteFixture {
   bin: string;
   larkTrace: string;
   model: { server: Server; modelUrl: string };
-  feishu: { server: Server; url: string; stats(): Promise<FeishuStats> };
+  feishu: { server: Server; url: string; stats(): Promise<FeishuStats>; markCardClosed(path: string): void };
   env: (extra: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   sessionFiles(): string[];
   timeoutProgress(): Record<string, number>;
 }
 
-export async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent | InboundEvent[] }>, loopbackOptions: { failPollsAfterFirst?: number; cardOpenDelayMs?: number; holdFirstPollUntil?: string } = {}): Promise<RemoteFixture> {
+export async function fixture(responder: ModelResponder, script: Array<{ delayMs: number; event: InboundEvent | InboundEvent[] }>, loopbackOptions: LoopbackOptions = {}): Promise<RemoteFixture> {
   const root = mkdtempSync(join(tmpdir(), "feishu-remote-bridge-"));
   const home = join(root, "home");
   const project = join(root, "project");

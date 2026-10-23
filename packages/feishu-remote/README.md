@@ -13,6 +13,12 @@ Streaming cards use two compact phase labels, `💭 思考中…` and `⚙️ wo
 raw model thinking is not shown. The phase label is replaced when visible
 answer text starts.
 
+Delivery has a definite outcome. When the card cannot be opened, or its close
+fails after one retry, the complete reply is re-sent once as a plain message and
+the TUI warning says so. A failed stream append is non-fatal — the final close
+writes the complete reply — and a connection interruption is reported as such,
+not as a card write failure.
+
 For group @mentions, the bridge may run a separate current-message-only reaction
 selector. It validates the selected Feishu reaction, adds it to the source
 message, and does not add the selector request or result to the main session.

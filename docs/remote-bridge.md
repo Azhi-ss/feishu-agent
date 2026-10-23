@@ -80,6 +80,12 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
   `/abort`) interrupts the running turn like Ctrl+C.
 - A hard connection failure surfaces a TUI warning while the session keeps
   working locally.
+- If the card cannot be opened, or its close fails after one retry, the complete
+  reply is re-sent once as a plain message and the TUI warning says so (the card
+  may stay in streaming mode). A failed stream append is non-fatal: the final
+  close writes the complete reply. Connection interruptions are reported
+  separately, so a warning tells you whether to reconnect or whether the reply
+  already fell back to a plain message.
 
 ## Constraints
 

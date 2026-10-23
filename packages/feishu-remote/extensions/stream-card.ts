@@ -86,6 +86,13 @@ export interface StreamCardOps {
   closeCard(cardId: string, finalText: string): Promise<void>;
 }
 
+/** Outcome of the authoritative close: `closed` false means the final text never
+ * landed, so the caller must deliver the reply another way. */
+export interface CardCloseResult {
+  closed: boolean;
+  error?: unknown;
+}
+
 export class StreamCardSession {
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
@@ -96,6 +103,7 @@ export class StreamCardSession {
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private lastFlushAt = 0;
   private sequence = 0;
+  private closeRun: Promise<CardCloseResult> | undefined;
 
   constructor(
     readonly cardId: string,
@@ -122,22 +130,38 @@ export class StreamCardSession {
     this.enqueueStatus(text);
   }
 
-  /** Authoritative close: delivers the complete final text even if stream writes failed. */
-  async finalize(finalText: string): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    this.clearTimer();
-    if (this.statusText) {
-      // Strip the status strip before the final close so it never reaches the finalized reply.
-      this.statusText = "";
-      this.enqueueStatus("");
+  /**
+   * Authoritative close: delivers the complete final text even if stream writes
+   * failed. Reports whether the final write landed so the caller can send the
+   * reply as a plain message instead; a close that fails is retried exactly
+   * once, so a transient CardKit error never duplicates the reply.
+   */
+  finalize(finalText: string): Promise<CardCloseResult> {
+    if (!this.closeRun) {
+      this.closed = true;
+      this.clearTimer();
+      if (this.statusText) {
+        // Strip the status strip before the final close so it never reaches the finalized reply.
+        this.statusText = "";
+        this.enqueueStatus("");
+      }
+      this.closeRun = this.closeOnce(finalText);
     }
+    return this.closeRun;
+  }
+
+  private async closeOnce(finalText: string): Promise<CardCloseResult> {
     await this.queue;
-    try {
-      await this.ops.closeCard(this.cardId, finalText);
-    } catch (error) {
-      this.onWriteError(error);
+    let error: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await this.ops.closeCard(this.cardId, finalText);
+        return { closed: true };
+      } catch (failure) {
+        error = failure;
+      }
     }
+    return { closed: false, error };
   }
 
   private enqueueStatus(text: string): void {

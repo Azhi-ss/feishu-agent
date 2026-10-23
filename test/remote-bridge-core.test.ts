@@ -274,6 +274,146 @@ test("a provider error that Pi auto-retries still delivers the retried answer to
   }
 });
 
+test("a card close that keeps failing delivers the complete reply as exactly one plain message and warns honestly", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "close-fail-1", messageType: "text", text: "close-fail" } },
+  ], { outboundFailures: { cardClose: Infinity } });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "card close failed after a retry", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.closes.length, 0, "the card close never landed");
+    assert.equal(stats.failures.filter((failure) => failure.endpoint === "cardClose").length, 2, "a failed close is retried exactly once");
+    assert.deepEqual(stats.sends.map((send) => send.text), ["PTY-PONG:close-fail"], "the complete reply arrives as exactly one plain message");
+    assert.match(result.output, /card close failed after a retry/);
+    assert.match(result.output, /plain message/);
+    assert.doesNotMatch(result.output, /still delivered/, "the warning must not claim a delivery that did not happen");
+    assert.doesNotMatch(result.output, /connection interrupted/, "a card write failure is not a connection outage");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    for (const session of f.sessionFiles()) assert.doesNotMatch(session, new RegExp(SECRET), "app secret must not reach session files");
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a card close that fails once then succeeds finalizes the card without a plain message", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "close-retry-1", messageType: "text", text: "close-retry" } },
+  ], { outboundFailures: { cardClose: 1 } });
+  const closed = join(f.root, "card-retry-closed");
+  f.feishu.markCardClosed(closed);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "PTY-PONG:close-retry", send: "" },
+      { waitFile: closed, send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.deepEqual(stats.failures.map((failure) => failure.endpoint), ["cardClose"]);
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0].text, "PTY-PONG:close-retry");
+    assert.equal(stats.sends.length, 0, "a close that lands on retry must not duplicate the reply");
+    assert.doesNotMatch(result.output, /plain message/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a card creation failure delivers the complete reply as exactly one plain message", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "open-fail-1", messageType: "text", text: "open-fail" } },
+  ], { outboundFailures: { cardOpen: Infinity } });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "could not open the streaming card", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened.length, 0, "no card was ever created");
+    assert.deepEqual(stats.sends.map((send) => send.text), ["PTY-PONG:open-fail"], "the complete reply arrives as exactly one plain message");
+    assert.match(result.output, /plain message/);
+    assert.doesNotMatch(result.output, /still delivered/);
+    assert.doesNotMatch(result.output, /connection interrupted/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    for (const session of f.sessionFiles()) assert.doesNotMatch(session, new RegExp(SECRET), "app secret must not reach session files");
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a failed append with a successful close keeps the authoritative final text on the card, with no fallback", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "append-fail-1", messageType: "text", text: "append-fail" } },
+  ], { outboundFailures: { cardAppend: Infinity } });
+  const closed = join(f.root, "append-fail-closed");
+  f.feishu.markCardClosed(closed);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "PTY-PONG:append-fail", send: "" },
+      { waitFile: closed, send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.appends.length, 0, "every stream append failed");
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0].text, "PTY-PONG:append-fail", "the close decides the final text: no truncation");
+    assert.equal(stats.sends.length, 0, "a non-fatal append failure must not trigger the plain-message fallback");
+    assert.match(result.output, /card stream write failed/);
+    assert.doesNotMatch(result.output, /still delivered/, "a stream write failure must not claim the reply was already delivered");
+    assert.doesNotMatch(result.output, /plain message/);
+    assert.doesNotMatch(result.output, /connection interrupted/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("every turn warns again when the card stream keeps failing (the warning latch re-arms per turn)", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "latch-1", messageType: "text", text: "latch-one" } },
+    { delayMs: 600, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "latch-2", messageType: "text", text: "latch-two" } },
+  ], { outboundFailures: { cardAppend: Infinity } });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { wait: "PTY-PONG:latch-one", send: "" },
+      // Turn 1's warning is already behind this window, so the next match is turn 2's.
+      { wait: "PTY-PONG:latch-two", send: "" },
+      { wait: "card stream write failed", send: "/remote status\r" },
+      { wait: "Remote bridge: connected", send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const warnings = result.output.match(/card stream write failed/g) ?? [];
+    assert.equal(warnings.length, 2, `a card outage must warn on each affected turn, saw ${warnings.length}`);
+    assert.equal((await f.feishu.stats()).sends.filter((send) => send.text.startsWith("PTY-PONG:")).length, 0, "a failed append never triggers the fallback");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
 test("tool execution shows a transient friendly status — even when the card is still opening — and clears it before finalizing", async () => {
   const toolResponses = [
     `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "status-tool-1", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "printf RAW_TOOL_OUTPUT_SHOULD_STAY_LOCAL" }) } }] }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`,
@@ -288,11 +428,7 @@ test("tool execution shows a transient friendly status — even when the card is
     { delayMs: 100, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "status-1", messageType: "text", text: "run-tool" } },
   ], { cardOpenDelayMs: 150 });
   const finalized = join(f.root, "card-finalized");
-  f.feishu.server.on("request", (request, response) => {
-    if (request.url === "/close-stream-card") {
-      response.once("finish", () => writeFileSync(finalized, "closed"));
-    }
-  });
+  f.feishu.markCardClosed(finalized);
   try {
     const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
       { wait: "fake-model", send: "" },

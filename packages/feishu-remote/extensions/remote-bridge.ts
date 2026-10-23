@@ -36,7 +36,16 @@ interface QueuedMessage {
 
 interface ActiveCard {
   open: Promise<StreamCardSession | undefined>;
+  /** Why the card could not be opened; the fallback warning reports it at settle. */
+  openError?: unknown;
 }
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Plain-message fallback outcome: no reply text, a landed send, or a failed send. */
+type PlainDelivery = "sent" | "failed" | "empty";
 
 function toolStatusLine(): string {
   return WORKING_STATUS;
@@ -194,34 +203,62 @@ export function remoteBridgeExtension(): ExtensionFactory {
             (error) => {
               if (reportedCardError) return;
               reportedCardError = true;
-              notify(latestCtx, `Remote bridge card write failed (the final reply is still delivered): ${error instanceof Error ? error.message : String(error)}`, "warning");
+              // Non-fatal: the final close rewrites the complete reply. Say only that.
+              notify(latestCtx, `Remote bridge card stream write failed; the card may be incomplete until it closes: ${errorText(error)}`, "warning");
             },
           );
           return session;
         },
         (error) => {
-          notify(latestCtx, `Remote bridge could not open the streaming card (the reply will arrive as a plain message): ${error instanceof Error ? error.message : String(error)}`, "warning");
+          card.openError = error;
           return undefined;
         },
       );
       return card;
     }
 
+    async function plainFallback(chatId: string, reply: string): Promise<PlainDelivery> {
+      const gw = gateway;
+      if (!reply) return "empty";
+      if (!gw) return "failed";
+      // The send error itself is dropped: the card failure is the actionable cause,
+      // and the warning already states that the reply did not arrive.
+      return gw.sendMessage(chatId, reply).then((): PlainDelivery => "sent", (): PlainDelivery => "failed");
+    }
+
+    function fallbackText(outcome: PlainDelivery): string {
+      if (outcome === "sent") return "the reply was sent as a plain message";
+      if (outcome === "failed") return "the plain-message fallback also failed";
+      return "there was no reply text to re-send";
+    }
+
     async function finalizeCard(turn: { chatId: string; reply?: string }, card: ActiveCard): Promise<void> {
       const reply = turn.reply ?? "";
       const session = await card.open;
       if (!session) {
-        // Card open failed: the plain-message path still delivers the answer.
-        if (gateway && reply) await gateway.sendMessage(turn.chatId, reply).catch(() => { /* outbound failures never abort the turn */ });
+        const fallback = await plainFallback(turn.chatId, reply);
+        notify(latestCtx, `Remote bridge could not open the streaming card; ${fallbackText(fallback)}: ${errorText(card.openError)}`, "warning");
         return;
       }
       const shards = shardText(reply);
-      await session.finalize(shards[0]);
+      const outcome = await session.finalize(shards[0]);
+      if (!outcome.closed) {
+        // The card may still be streaming: deliver the complete reply as a plain
+        // message instead, exactly once, rather than leaving partial text. One
+        // message, not sharded: a reply above Feishu's text-message limit would
+        // need sharding here.
+        const fallback = await plainFallback(turn.chatId, reply);
+        notify(latestCtx, `Remote bridge card close failed after a retry; ${fallbackText(fallback)} (the card may still be streaming): ${errorText(outcome.error)}`, "warning");
+        return;
+      }
       const gw = gateway;
       for (const shard of shards.slice(1)) await gw?.sendMessage(turn.chatId, shard).catch(() => {});
     }
 
     function submit(next: QueuedMessage): void {
+      // One card-write warning per turn: a card outage that spans turns must not
+      // go silent after the first warning, so re-arm the latch at each new turn.
+      reportedCardError = false;
       activeTurn = { chatId: next.chatId };
       try {
         pi.sendUserMessage(next.text);
@@ -375,6 +412,7 @@ export function remoteBridgeExtension(): ExtensionFactory {
       // Close any in-flight streaming card before dropping the gateway so the
       // phone never watches a card hang in streaming mode.
       const session = await card?.open;
+      // Shutdown close failures are intentionally not reported: the session is going away.
       if (session) await session.finalize("").catch(() => {});
       await candidate?.close();
       dropLock();

@@ -178,6 +178,41 @@ test("finalize also clears a lingering status strip with a space, not empty cont
   assert.ok(!rec.statusWrites.some((text) => text === ""));
 });
 
+test("a failed final write is retried once and reported to the caller when it still does not land", async () => {
+  let attempts = 0;
+  const streamErrors: unknown[] = [];
+  const session = new StreamCardSession("dead-close", {
+    append: async () => {},
+    setStatus: async () => {},
+    closeCard: async () => { attempts += 1; throw new Error("loopback card close failed: HTTP 500"); },
+  }, (error) => { streamErrors.push(error); });
+  const outcome = await session.finalize("the answer");
+  assert.equal(outcome.closed, false, "an unlanded final write must be observable by the caller");
+  assert.match(String(outcome.error), /loopback card close failed/);
+  assert.equal(attempts, 2, "a failed close is retried exactly once, never looped");
+  assert.deepEqual(streamErrors, [], "the close outcome travels through finalize's result, not the stream-write callback");
+});
+
+test("a close that fails once succeeds on the bounded retry without reporting a write error", async () => {
+  let attempts = 0;
+  const closes: string[] = [];
+  const streamErrors: unknown[] = [];
+  const session = new StreamCardSession("flaky-close", {
+    append: async () => {},
+    setStatus: async () => {},
+    closeCard: async (_id, text) => {
+      attempts += 1;
+      closes.push(text);
+      if (attempts === 1) throw new Error("transient CardKit 500");
+    },
+  }, (error) => { streamErrors.push(error); });
+  const outcome = await session.finalize("the answer");
+  assert.equal(outcome.closed, true);
+  assert.equal(attempts, 2, "the retry lands the final write");
+  assert.deepEqual(closes, ["the answer", "the answer"], "the retry writes the same authoritative final text");
+  assert.deepEqual(streamErrors, []);
+});
+
 test("shardText passes short replies through as a single shard", () => {
   assert.deepEqual(shardText("short reply"), ["short reply"]);
 });
