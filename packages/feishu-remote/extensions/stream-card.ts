@@ -104,6 +104,7 @@ export class StreamCardSession {
   private lastFlushAt = 0;
   private sequence = 0;
   private closeRun: Promise<CardCloseResult> | undefined;
+  private latestReplyBody = "";
 
   constructor(
     readonly cardId: string,
@@ -114,6 +115,7 @@ export class StreamCardSession {
   /** Feed the complete visible text so far; rapid updates are coalesced behind the throttle. */
   update(text: string): void {
     if (this.closed || !text) return;
+    this.latestReplyBody = text;
     // Decide against what the card already shows OR what an in-flight/queued
     // write is about to show, so the first-text force does not re-fire while
     // the first append is still on the wire.
@@ -128,6 +130,15 @@ export class StreamCardSession {
     if (this.closed || text === this.statusText) return;
     this.statusText = text;
     this.enqueueStatus(text);
+  }
+
+  /**
+   * The latest visible reply body snapshot fed to this card ("" until the first
+   * streamed text). Stop-time finalization reads it so closing a card mid-turn
+   * does not fall back to an emptier body than what the phone already saw.
+   */
+  replyBody(): string {
+    return this.latestReplyBody;
   }
 
   /**

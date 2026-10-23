@@ -26,6 +26,11 @@ import { shardText, StreamCardSession, THINKING_STATUS, WORKING_STATUS, visibleA
 /** One short, actionable line the phone gets instead of an empty card when a settled turn has no visible reply body. */
 export const EMPTY_REPLY_NOTICE = "Remote bridge: this turn ended without a reply. Send your message again, or check the terminal.";
 
+/** One line the phone gets when stopping the bridge drops messages that were queued but never answered. */
+export function droppedQueueNotice(count: number): string {
+  return `Remote bridge stopped: ${count} queued ${count === 1 ? "message" : "messages"} did not get an answer.`;
+}
+
 type RemoteStatus = "off" | "standby" | "connecting" | "connected" | "error";
 const REMOTE_STATUS_KEY = "feishu-3-remote";
 
@@ -45,6 +50,20 @@ interface ActiveCard {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The most complete reply body known at stop time: the settled reply, else the last streamed card
+ * snapshot. The longer one wins, so a settled reply from an earlier low-level run of the same turn
+ * can never shrink the card past content it already streamed. */
+function knownReplyBody(reply: string | undefined, session: StreamCardSession | undefined): string {
+  const streamed = session?.replyBody() ?? "";
+  return streamed.length > (reply?.length ?? 0) ? streamed : reply || "";
+}
+
+function droppedByChat(messages: QueuedMessage[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const message of messages) counts.set(message.chatId, (counts.get(message.chatId) ?? 0) + 1);
+  return counts;
 }
 
 function toolStatusLine(): string {
@@ -402,21 +421,41 @@ export function remoteBridgeExtension(): ExtensionFactory {
       generation += 1;
       const candidate = gateway ?? pendingGateway;
       const card = activeCard;
+      const turn = activeTurn;
+      const dropped = queue.splice(0);
       gateway = undefined;
       pendingGateway = undefined;
       stopHandoffWatch();
       transport = undefined;
       activeTurn = undefined;
       activeCard = undefined;
-      queue.length = 0;
       secret = undefined;
       reportedPollError = false;
       reportedCardError = false;
-      // Close any in-flight streaming card before dropping the gateway so the
-      // phone never watches a card hang in streaming mode.
+      // Finalize any in-flight streaming card BEFORE dropping the gateway so the
+      // phone never watches a card hang in streaming mode. Stop shares the
+      // settle-time rule — close with the most complete reply body known at stop
+      // time (the settled reply, else the last streamed snapshot), sharded like a
+      // settle — and falls back to one plain message when the close does not land,
+      // never empty content that would erase what the phone already saw. It
+      // reports nothing: the session is going away.
       const session = await card?.open;
-      // Shutdown close failures are intentionally not reported: the session is going away.
-      if (session) await session.finalize("").catch(() => {});
+      if (turn) {
+        const body = knownReplyBody(turn.reply, session) || EMPTY_REPLY_NOTICE;
+        const shards = shardText(body);
+        // Best-effort: the session is going away, so a failed outbound is not reported.
+        const send = (text: string) => candidate?.sendMessage(turn.chatId, text).catch(() => { /* stop is best-effort: a failed outbound must not fail it */ });
+        const closed = session ? (await session.finalize(shards[0])).closed : false;
+        if (closed) for (const shard of shards.slice(1)) await send(shard);
+        else await send(body);
+      }
+      // Queued phone messages are dropped, not answered: say how many, once per
+      // chat. Best-effort and untried — a failed notice never fails the stop.
+      if (candidate) {
+        for (const [queuedChatId, count] of droppedByChat(dropped)) {
+          await candidate.sendMessage(queuedChatId, droppedQueueNotice(count)).catch(() => { /* the dropped-message notice is best-effort; stop must not fail on it */ });
+        }
+      }
       await candidate?.close();
       dropLock();
       // No paint on session_shutdown: the captured ctx is stale and the UI is going away.
