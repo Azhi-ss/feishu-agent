@@ -12,20 +12,35 @@ export const REMOTE_LOOPBACK_ENV = "FEISHU_REMOTE_LOOPBACK_URL";
 export const REMOTE_APP_ID_ENV = "FEISHU_REMOTE_APP_ID";
 export const REMOTE_OWNER_OPEN_ID_ENV = "FEISHU_REMOTE_OWNER_OPEN_ID";
 export const REMOTE_OUTBOUND_TIMEOUT_ENV = "FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS";
+export const REMOTE_HANDSHAKE_TIMEOUT_ENV = "FEISHU_REMOTE_HANDSHAKE_TIMEOUT_MS";
 
 /**
- * Shared bounded wait for every outbound Remote Bridge call (same order as the
- * WS handshake). The Card Kit SDK has no request timeout, and card finalization
- * runs inside Pi's settlement, so one hung outbound call would hold the TUI in
- * Working and block /quit. Overridable via the env var; tests shrink it.
+ * Shared bounded wait for every outbound Remote Bridge call. The Card Kit SDK
+ * has no request timeout, and card finalization runs inside Pi's settlement, so
+ * one hung outbound call would hold the TUI in Working and block /quit.
+ * Overridable via the env var; tests shrink it.
  */
 export const REMOTE_OUTBOUND_TIMEOUT_MS = 15_000;
 
-export function outboundTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env[REMOTE_OUTBOUND_TIMEOUT_ENV];
-  if (!raw || !/^[1-9][0-9]*$/.test(raw)) return REMOTE_OUTBOUND_TIMEOUT_MS;
+/**
+ * Shared WS handshake budget for /remote start: both the outer wait and the
+ * SDK's own handshakeTimeoutMs. A slow connect-config fetch can outlast the 15s
+ * default, so raise the budget with the env var when it does.
+ */
+export const REMOTE_HANDSHAKE_TIMEOUT_MS = 15_000;
+
+function envTimeoutMs(raw: string | undefined, fallback: number): number {
+  if (!raw || !/^[1-9][0-9]*$/.test(raw)) return fallback;
   const ms = Number(raw);
-  return Number.isSafeInteger(ms) && ms <= 2_147_483_647 ? ms : REMOTE_OUTBOUND_TIMEOUT_MS;
+  return Number.isSafeInteger(ms) && ms <= 2_147_483_647 ? ms : fallback;
+}
+
+export function outboundTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  return envTimeoutMs(env[REMOTE_OUTBOUND_TIMEOUT_ENV], REMOTE_OUTBOUND_TIMEOUT_MS);
+}
+
+export function handshakeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  return envTimeoutMs(env[REMOTE_HANDSHAKE_TIMEOUT_ENV], REMOTE_HANDSHAKE_TIMEOUT_MS);
 }
 
 export interface RemoteInboundEvent {
@@ -122,6 +137,7 @@ export class FeishuGateway implements RemoteGateway {
     private readonly credentials: RemoteCredentials,
     appSecret: string,
     private readonly sdk: FeishuGatewaySdk = loadFeishuGatewaySdk(),
+    private readonly handshakeBudgetMs: number = handshakeTimeoutMs(),
   ) {
     this.#appSecret = appSecret;
   }
@@ -153,14 +169,14 @@ export class FeishuGateway implements RemoteGateway {
         this.closed = true;
         ws?.close({ force: true });
         finish(resolve, reject, new Error("Feishu WebSocket handshake timed out"));
-      }, 15_000);
+      }, this.handshakeBudgetMs);
       try {
         ws = this.sdk.createWsClient({
           appId: this.credentials.appId,
           appSecret,
           domain,
           autoReconnect: true,
-          handshakeTimeoutMs: 15_000,
+          handshakeTimeoutMs: this.handshakeBudgetMs,
           onReady: () => {
             ready = true;
             finish(resolve, reject);
@@ -528,12 +544,13 @@ function defaultRead(path: string): string | undefined {
 
 export function createGatewayFromEnv(env: NodeJS.ProcessEnv = process.env, credentials?: RemoteCredentials): { gateway: RemoteGateway; transport: string } | { error: string } {
   const timeoutMs = outboundTimeoutMs(env);
+  const handshakeMs = handshakeTimeoutMs(env);
   const loopback = env[REMOTE_LOOPBACK_ENV];
   if (loopback) return { gateway: withOutboundBudget(new LoopbackGateway(loopback), timeoutMs), transport: "loopback" };
   if (!credentials) return { error: "Remote bridge cannot create the Feishu gateway without credentials." };
   const secret = env[REMOTE_SECRET_ENV];
   if (!secret) return { error: `Remote bridge needs ${REMOTE_SECRET_ENV} to use the Feishu SDK gateway.` };
-  return { gateway: withOutboundBudget(new FeishuGateway(credentials, secret), timeoutMs), transport: "feishu-sdk" };
+  return { gateway: withOutboundBudget(new FeishuGateway(credentials, secret, undefined, handshakeMs), timeoutMs), transport: "feishu-sdk" };
 }
 
 /**

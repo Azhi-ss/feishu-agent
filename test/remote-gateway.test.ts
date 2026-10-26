@@ -18,6 +18,9 @@ import {
   REMOTE_OUTBOUND_TIMEOUT_ENV,
   REMOTE_OUTBOUND_TIMEOUT_MS,
   outboundTimeoutMs,
+  REMOTE_HANDSHAKE_TIMEOUT_ENV,
+  REMOTE_HANDSHAKE_TIMEOUT_MS,
+  handshakeTimeoutMs,
   withOutboundBudget,
   type RemoteGateway,
 } from "../packages/feishu-remote/extensions/remote-gateway.js";
@@ -25,6 +28,18 @@ import { THINKING_STATUS } from "../packages/feishu-remote/extensions/stream-car
 
 function inbound(overrides: Partial<RemoteInboundEvent>): RemoteInboundEvent {
   return { ownerOpenId: "ou_owner", chatId: "oc_chat", chatType: "p2p", messageId: "msg-1", messageType: "text", text: "hi", ...overrides };
+}
+
+/** Run `body` under the handshake env override, restoring the previous value. */
+async function withHandshakeBudget(ms: string, body: () => Promise<void>): Promise<void> {
+  const previous = process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV];
+  process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV] = ms;
+  try {
+    await body();
+  } finally {
+    if (previous === undefined) delete process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV];
+    else process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV] = previous;
+  }
 }
 
 test("authorizeInbound accepts owner P2P and explicitly mentioned group messages", () => {
@@ -135,6 +150,15 @@ test("the outbound budget is one shared default with an env override for tests",
   assert.equal(outboundTimeoutMs({ [REMOTE_OUTBOUND_TIMEOUT_ENV]: "250" }), 250);
   for (const invalid of ["0", "-5", "abc", "1.5", ""]) {
     assert.equal(outboundTimeoutMs({ [REMOTE_OUTBOUND_TIMEOUT_ENV]: invalid }), REMOTE_OUTBOUND_TIMEOUT_MS, `"${invalid}" must fall back to the shared default`);
+  }
+});
+
+test("the WS handshake budget is one shared default with an env override for tests", () => {
+  assert.equal(REMOTE_HANDSHAKE_TIMEOUT_MS, 15_000, "a 15s default shared by the outer wait and the SDK");
+  assert.equal(handshakeTimeoutMs({}), REMOTE_HANDSHAKE_TIMEOUT_MS);
+  assert.equal(handshakeTimeoutMs({ [REMOTE_HANDSHAKE_TIMEOUT_ENV]: "60000" }), 60_000, "the override can raise the budget past the default");
+  for (const invalid of ["0", "-5", "abc", "1.5", ""]) {
+    assert.equal(handshakeTimeoutMs({ [REMOTE_HANDSHAKE_TIMEOUT_ENV]: invalid }), REMOTE_HANDSHAKE_TIMEOUT_MS, `"${invalid}" must fall back to the shared default`);
   }
 });
 
@@ -356,19 +380,88 @@ test("FeishuGateway rejects a hard initial WS failure without leaking the secret
 });
 
 test("FeishuGateway close aborts an in-flight handshake so start() does not hang", async () => {
+  const previous = process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV];
+  delete process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV];
+  let wsOptions: { handshakeTimeoutMs: number } | undefined;
   const sdk: FeishuGatewaySdk = {
     createClient: () => ({}) as never,
     createDispatcher: () => ({ register: () => undefined }),
-    createWsClient: () => ({
-      start: async () => { /* stay connecting until close() */ },
-      close: () => undefined,
-    }),
+    createWsClient: (options) => {
+      wsOptions = options;
+      return {
+        start: async () => { /* stay connecting until close() */ },
+        close: () => undefined,
+      };
+    },
   };
-  const gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk);
-  const started = gateway.start(() => undefined, () => undefined);
-  await new Promise((done) => setImmediate(done));
-  await gateway.close();
-  await assert.rejects(started, /Remote gateway closed/);
+  let gateway: FeishuGateway | undefined;
+  try {
+    gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk);
+    const started = gateway.start(() => undefined, () => undefined);
+    started.catch(() => undefined); // asserted below; a failed assertion must not also surface as an unhandled rejection
+    assert.equal(wsOptions?.handshakeTimeoutMs, REMOTE_HANDSHAKE_TIMEOUT_MS, "without an override the SDK budget is the shared 15s default");
+    await new Promise((done) => setImmediate(done));
+    await gateway.close();
+    await assert.rejects(started, /Remote gateway closed/);
+  } finally {
+    await gateway?.close();
+    if (previous === undefined) delete process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV];
+    else process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV] = previous;
+  }
+});
+
+test("FeishuGateway takes the WS handshake budget from the env override, not the 15s literal", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let wsOptions: { handshakeTimeoutMs: number } | undefined;
+  const sdk: FeishuGatewaySdk = {
+    createClient: () => ({}) as never,
+    createDispatcher: () => ({ register: () => undefined }),
+    createWsClient: (options) => {
+      wsOptions = options;
+      return { start: async () => { /* never becomes ready */ }, close: () => undefined };
+    },
+  };
+  await withHandshakeBudget("150", async () => {
+    const gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk);
+    const started = gateway.start(() => undefined, () => undefined);
+    const rejection = assert.rejects(started, /Feishu WebSocket handshake timed out/, "a never-completing handshake must keep the existing actionable error");
+    rejection.catch(() => undefined); // only awaited below; a failed assertion must not also surface as an unhandled rejection
+    try {
+      assert.equal(wsOptions?.handshakeTimeoutMs, 150, "the SDK handshake budget must come from the shared override, not a 15s literal");
+      t.mock.timers.tick(150);
+      await rejection;
+    } finally {
+      await gateway.close();
+    }
+  });
+});
+
+test("a handshake slower than the 15s default succeeds when the override raises the budget", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let wsOptions: { handshakeTimeoutMs: number } | undefined;
+  const sdk: FeishuGatewaySdk = {
+    createClient: () => ({}) as never,
+    createDispatcher: () => ({ register: () => undefined }),
+    createWsClient: (options) => {
+      wsOptions = options;
+      return {
+        start: async () => { await new Promise((done) => setTimeout(done, 20_000)); options.onReady(); },
+        close: () => undefined,
+      };
+    },
+  };
+  await withHandshakeBudget("60000", async () => {
+    const gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk);
+    const started = gateway.start(() => undefined, () => undefined);
+    started.catch(() => undefined); // only awaited below; a failed assertion must not also surface as an unhandled rejection
+    try {
+      assert.equal(wsOptions?.handshakeTimeoutMs, 60_000, "the SDK handshake budget must follow the override past the 15s default");
+      t.mock.timers.tick(20_000);
+      await started;
+    } finally {
+      await gateway.close();
+    }
+  });
 });
 
 test("loopback gateway polls events, sends messages, and closes with a recorded disconnect", async () => {

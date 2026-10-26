@@ -367,6 +367,7 @@ export async function fixture(responder: ModelResponder, script: Array<{ delayMs
   delete baseEnv.FEISHU_REMOTE_APP_ID;
   delete baseEnv.FEISHU_REMOTE_OWNER_OPEN_ID;
   delete baseEnv.FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS;
+  delete baseEnv.FEISHU_REMOTE_HANDSHAKE_TIMEOUT_MS;
   // A real MEM0_API_KEY leaking from the developer's shell would make every CLI
   // subprocess ping the production Mem0 API, adding seconds of jitter to these
   // timing-sensitive PTY tests (and violating the loopback-only test rule).

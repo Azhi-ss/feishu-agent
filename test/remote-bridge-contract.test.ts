@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { REMOTE_OUTBOUND_TIMEOUT_ENV, REMOTE_OUTBOUND_TIMEOUT_MS } from "../packages/feishu-remote/extensions/remote-gateway.js";
+import { REMOTE_HANDSHAKE_TIMEOUT_ENV, REMOTE_HANDSHAKE_TIMEOUT_MS, REMOTE_OUTBOUND_TIMEOUT_ENV, REMOTE_OUTBOUND_TIMEOUT_MS } from "../packages/feishu-remote/extensions/remote-gateway.js";
 
 // SPEC §9.1 is the single source of truth for the Remote Bridge delivery contract;
 // packages/feishu-remote/README.md and docs/remote-bridge.md restate parts of it in prose
@@ -49,5 +49,16 @@ test("SPEC §9.1: one bounded outbound budget covers every outbound call", () =>
     "/quit",
     REMOTE_OUTBOUND_TIMEOUT_ENV,
     String(REMOTE_OUTBOUND_TIMEOUT_MS),
+  ]);
+});
+
+test("SPEC §9.1: the WS handshake wait and the SDK budget share one env-overridable default", () => {
+  requireAll(bullet("握手预算"), [
+    "/remote start",
+    "外层握手等待",
+    "handshakeTimeoutMs",
+    "不得写死毫秒",
+    REMOTE_HANDSHAKE_TIMEOUT_ENV,
+    String(REMOTE_HANDSHAKE_TIMEOUT_MS),
   ]);
 });

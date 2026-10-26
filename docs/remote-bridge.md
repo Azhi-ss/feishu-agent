@@ -103,6 +103,11 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
   call that does not answer in the budget is treated as a failure and takes the
   normal fallback path, so a stuck Card Kit request cannot hold the turn's
   settlement or `/quit`. Tests set a smaller value.
+- `FEISHU_REMOTE_HANDSHAKE_TIMEOUT_MS` sets the `/remote start` WebSocket
+  handshake budget: the outer wait and the SDK's own `handshakeTimeoutMs` share
+  the 15000 ms default. Raise it on a machine whose connect-config fetch is
+  slower than that; a handshake that never completes still fails in-budget with
+  `Feishu WebSocket handshake timed out`.
 
 ## Verifying on a real device
 
