@@ -39,7 +39,8 @@ const MISSING_SECRET = `Remote bridge needs an app secret: set ${REMOTE_SECRET_E
 interface QueuedMessage {
   chatId: string;
   text: string;
-  opening?: string;
+  /** Card opening line from the group reaction classifier; resolves off the injection path. */
+  opening?: Promise<string | undefined>;
 }
 
 interface ActiveCard {
@@ -206,11 +207,14 @@ export function remoteBridgeExtension(): ExtensionFactory {
       return activeTurn !== undefined || !(latestCtx?.isIdle() ?? true);
     }
 
-    function beginCard(chatId: string, initialText?: string): ActiveCard | undefined {
+    function beginCard(chatId: string, opening?: Promise<string | undefined>): ActiveCard | undefined {
       const gw = gateway;
       if (!gw) return undefined;
       const card: ActiveCard = { open: Promise.resolve(undefined) };
-      card.open = gw.openStreamCard(chatId, initialText || undefined).then(
+      // The classifier runs off the injection path, so its opening line arrives as
+      // a promise: a slow selector delays only the card decoration, never the
+      // message, and the selector aborts itself rather than hanging the card.
+      card.open = Promise.resolve(opening).then((initialText) => gw.openStreamCard(chatId, initialText || undefined)).then(
         (cardId) => {
           const session = new StreamCardSession(
             cardId,
@@ -326,16 +330,21 @@ export function remoteBridgeExtension(): ExtensionFactory {
       return `Remote bridge: unsupported ${messageType || "message type"} messages in v1. Send text instead.`;
     }
 
-    async function onInbound(event: RemoteInboundEvent): Promise<void> {
+    function onInbound(event: RemoteInboundEvent): void {
       if (!credentials || !authorizeInbound(event, credentials.ownerOpenId)) return;
       if (!dedup.claim(event.messageId)) return;
       if (event.messageType !== "text") {
         acknowledge(event.chatId, unsupportedMessageType(event.messageType));
         return;
       }
-      const choice = event.chatType === "group" ? await chooseReaction(latestCtx, event.text) : undefined;
-      if (choice && gateway) await gateway.addReaction(event.messageId, choice.emojiType).catch(() => {});
-      deliver({ chatId: event.chatId, text: event.text, opening: choice?.opening });
+      // Same-batch messages must inject in arrival order, so the isolated group
+      // reaction classifier stays best-effort beside the turn: its reaction and
+      // card opening land when the bounded current-message-only selector returns,
+      // never in front of the next message's injection. The extra catch keeps a
+      // future selector rejection from turning lost decoration into a card failure.
+      const choice = event.chatType === "group" ? chooseReaction(latestCtx, event.text).catch(() => fallbackReaction) : undefined;
+      if (choice) void choice.then((picked) => { void gateway?.addReaction(event.messageId, picked.emojiType).catch(() => { /* a reaction is decoration */ }); });
+      deliver({ chatId: event.chatId, text: event.text, opening: choice?.then((picked) => picked.opening) });
     }
 
     async function start(ctx: ExtensionContext, options: { quietIfHeld?: boolean } = {}): Promise<void> {

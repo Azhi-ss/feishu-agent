@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { LoopbackOptions, ModelResponder, RemoteFixture } from "./helpers/remote-bridge-fixture.js";
+import type { InboundEvent, LoopbackOptions, ModelResponder, RemoteFixture } from "./helpers/remote-bridge-fixture.js";
 import { EMPTY_REPLY_NOTICE } from "../packages/feishu-remote/extensions/remote-bridge.js";
+import { REACTION_PROMPT_FOR_MODEL } from "../packages/feishu-remote/extensions/reaction-selector.js";
 import { THINKING_STATUS, WORKING_STATUS } from "../packages/feishu-remote/extensions/stream-card.js";
 import {
   fixture,
@@ -112,6 +114,45 @@ test("a mentioned group message drives the session and replies in that group", a
     assert.deepEqual({ messageId: stats.reactions[0]?.messageId, emojiType: stats.reactions[0]?.emojiType }, { messageId: "group-msg-1", emojiType: "GLANCE" });
     assert.equal(stats.cards.opened[0]?.chatId, "oc_group");
     assert.equal(stats.cards.closes[0]?.text, "PTY-PONG:请回复群里的问题");
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+// single-test PTY script: not shared
+test("same-batch group messages are injected in server arrival order, with the earlier message's slower classifier off the injection path", async () => {
+  const injected: string[] = [];
+  let classifierRequests = 0;
+  const bothTurnsRequested = join(mkdtempSync(join(tmpdir(), "feishu-batch-order-")), "marker");
+  const batch: InboundEvent[] = [
+    { ownerOpenId: "ou_group_member", chatId: "oc_group", chatType: "group", mentionedBot: true, messageId: "batch-1", messageType: "text", text: "batch-1" },
+    { ownerOpenId: "ou_group_member", chatId: "oc_group", chatType: "group", mentionedBot: true, messageId: "batch-2", messageType: "text", text: "batch-2" },
+  ];
+  const responder: ModelResponder = (lastUser, systemPrompt) => {
+    // The isolated reaction classifier. Make the first arrival's selector much
+    // slower than the second's: if injection waits for it, the batch inverts.
+    if (systemPrompt.includes(REACTION_PROMPT_FOR_MODEL)) {
+      classifierRequests++;
+      return { delayMs: lastUser === "batch-1" ? 900 : 0, sse: sse('{"emoji_type":"PARTY","opening":"来了"}') };
+    }
+    injected.push(lastUser);
+    if (injected.length === 2) writeFileSync(bothTurnsRequested, injected.join("\n"));
+    return { sse: sse(`PTY-PONG:${lastUser}`) };
+  };
+  const f = await fixture(responder, [{ delayMs: 400, event: batch }]);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
+      { wait: "fake-model", send: "/remote start\r" },
+      { wait: "Remote bridge connected", send: "" },
+      { waitFile: bothTurnsRequested, send: "/quit\r" },
+    ]);
+    assert.equal(result.code, 0, result.output);
+    assert.equal(classifierRequests, 2, "both group messages must take the isolated classifier branch — otherwise this test could pass for the wrong reason");
+    const stats = await f.feishu.stats();
+    const arrivalOrder = [...stats.arrivals].sort((a, b) => a.seq - b.seq).map((entry) => entry.messageId);
+    assert.deepEqual(arrivalOrder, ["batch-1", "batch-2"], "the whole batch arrives at the server in script order");
+    assert.deepEqual(injected, arrivalOrder, "same-batch group messages must reach the session in server arrival order");
   } finally {
     await closeServer(f.feishu.server);
     await closeServer(f.model.server);

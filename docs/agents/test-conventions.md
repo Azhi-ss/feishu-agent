@@ -32,8 +32,11 @@ so they now inherit the default.
 When asserting "nothing happened after point X", compare **monotonic server-side
 sequence numbers**, never `Date.now()`.
 
-- Seam: `pollSeqs` / `closeSeqs` in `test/helpers/remote-bridge-fixture.ts`,
-  asserted in `test/remote-bridge-core.test.ts` ("no polling after teardown").
+- Seam: `pollSeqs` / `closeSeqs` / `arrivals` in
+  `test/helpers/remote-bridge-fixture.ts`, asserted in
+  `test/remote-bridge-core.test.ts` ("no polling after teardown"; `arrivals`
+  stamps each inbound event with the server's monotonic seq, so a batch's
+  arrival order can be compared to the bridge's injection order).
 - Why: `Date.now()` jumped *backwards* ~2.6s under load in this sandbox. Polls
   recorded before a gateway disconnect got larger timestamps than the disconnect,
   so the clock-based assertion failed while the bridge was behaving correctly.

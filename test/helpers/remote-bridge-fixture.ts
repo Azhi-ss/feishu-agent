@@ -65,6 +65,10 @@ export interface FeishuStats {
    * the server after the first disconnect has a seq greater than closeSeqs[0]. */
   pollSeqs: number[];
   closeSeqs: number[];
+  /** Each inbound event with the monotonic seq the server assigned on arrival.
+   * A batch arrives in ascending-seq order, so this is the order the bridge must
+   * inject in (test-conventions §2 — order by seq, never by wall clock). */
+  arrivals: Array<{ messageId: string; seq: number }>;
   sends: Array<{ chatId: string; text: string; at: number }>;
   reactions: Array<{ messageId: string; emojiType: string; at: number }>;
   closes: number[];
@@ -100,6 +104,7 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     seq: 0,
     pollSeqs: [] as number[],
     closeSeqs: [] as number[],
+    arrivals: [] as Array<{ messageId: string; seq: number }>,
     pending: [] as InboundEvent[],
     waiters: [] as Array<(events: InboundEvent[]) => void>,
     sends: [] as Array<{ chatId: string; text: string; at: number }>,
@@ -150,7 +155,9 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
         state.scripted = true;
         for (const step of script) setTimeout(() => {
           // One response can contain several events after network/event-loop delays.
-          state.pending.push(...(Array.isArray(step.event) ? step.event : [step.event]));
+          const events = Array.isArray(step.event) ? step.event : [step.event];
+          for (const event of events) state.arrivals.push({ messageId: event.messageId, seq: ++state.seq });
+          state.pending.push(...events);
           for (const waiter of state.waiters.splice(0)) waiter([]);
         }, step.delayMs).unref();
       }
@@ -231,7 +238,7 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
         response.writeHead(200).end();
       }
       else if (request.url === "/disconnect") { const now = Date.now(); const seq = ++state.seq; state.closes.push(now); state.closeSeqs.push(seq); response.writeHead(200).end(); }
-      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, sends: state.sends, reactions: state.reactions, closes: state.closes, failures: state.failures, hangs: state.hangs, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
+      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, arrivals: state.arrivals, sends: state.sends, reactions: state.reactions, closes: state.closes, failures: state.failures, hangs: state.hangs, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
       else response.writeHead(404).end();
     });
   });
@@ -265,7 +272,13 @@ export interface ModelPlan {
   status?: number;
 }
 
-export type ModelResponder = (lastUserText: string) => ModelPlan;
+export type ModelResponder = (lastUserText: string, systemPrompt: string) => ModelPlan;
+
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((part): part is { type?: string; text?: string } => (part as { type?: string })?.type === "text").map((part) => part.text ?? "").join(" ");
+}
 
 export function sse(content: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`;
@@ -290,16 +303,16 @@ export async function modelServer(responder: ModelResponder): Promise<{ server: 
       requests++;
       response.once("finish", () => responsesFinished++);
       let lastUser = "";
+      let systemPrompt = "";
       try {
         const messages = JSON.parse(body).messages as Array<{ role: string; content: unknown }>;
-        const userTexts = messages.filter((message) => message.role === "user").map((message) => {
-          if (typeof message.content === "string") return message.content;
-          if (Array.isArray(message.content)) return message.content.filter((part): part is { type: string; text?: string } => (part as { type?: string }).type === "text").map((part) => part.text ?? "").join(" ");
-          return "";
-        });
+        // The system prompt lets a responder tell the isolated group reaction
+        // classifier request apart from a session turn request.
+        systemPrompt = contentText(messages.find((message) => message.role === "system")?.content);
+        const userTexts = messages.filter((message) => message.role === "user").map((message) => contentText(message.content));
         lastUser = userTexts[userTexts.length - 1] ?? "";
       } catch { /* not a chat completion */ }
-      const plan = responder(lastUser);
+      const plan = responder(lastUser, systemPrompt);
       const write = () => {
         if (plan.status) return void response.writeHead(plan.status).end();
         response.writeHead(200, { "content-type": "text/event-stream" });

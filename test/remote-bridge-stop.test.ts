@@ -95,7 +95,7 @@ test("process shutdown mid-turn shares the stop finalization: the card closes wi
 });
 
 test("a handoff requested by another window's /remote switch mid-turn finalizes the holder's card with the streamed body, and the new window then delivers a reply", async () => {
-  const responder: ModelResponder = (lastUser) => (lastUser.includes("after-handoff") ? { sse: sse("PTY-PONG:after-handoff") } : streamingModel()(lastUser));
+  const responder: ModelResponder = (lastUser, systemPrompt) => (lastUser.includes("after-handoff") ? { sse: sse("PTY-PONG:after-handoff") } : streamingModel()(lastUser, systemPrompt));
   const f = await fixture(responder, [
     { delayMs: 300, event: phone("switch-mid-1", "slow-stream") },
     { delayMs: 9000, event: phone("switch-mid-2", "after-handoff") },

@@ -36,6 +36,10 @@ test("SPEC §9.1: stop, handoff, session replacement and shutdown keep the strea
   requireAll(bullet("停桥收尾"), ["/remote stop", "/remote switch", "/new", "/reload", "关停", "不擦除", "流式快照", "排队", "条数"]);
 });
 
+test("SPEC §9.1: same-batch messages inject in server arrival order with the classifier off the path", () => {
+  requireAll(bullet("按序注入"), ["同一批", "到达顺序", "注入", "分类器", "best-effort", "不丢消息"]);
+});
+
 test("SPEC §9.1: one bounded outbound budget covers every outbound call", () => {
   requireAll(bullet("出站有界预算"), [
     "预算",
