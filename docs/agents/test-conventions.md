@@ -152,22 +152,70 @@ outbound calls and can be told to fail or hang leading calls per card endpoint:
   The sequence-number version was verified red-capable by injecting a real
   post-teardown poller.
 
-## Known load flakes: re-run, don't re-diagnose
+## Full-suite file concurrency: the first remedy for a red local run
 
-A few timing tests can exceed a deliberately short budget when the full suite runs
-in parallel on a busy machine. Each passes in isolation, none indicates a product
-defect, and **CI has never shown any of them** (the three-job matrix has been green
-on every run so far). Local full-suite runs are a reference, not the gate: if one
-of these goes red locally, re-run it (or the suite) rather than re-diagnosing.
+`npm test` runs `node --test dist/test/*.test.js` at Node's **default file
+concurrency** — `availableParallelism() - 1` file slots, so 19 of the 66 files in
+flight at once here — and each file spawns its own children. That self-inflicted
+oversubscription makes the whole suite both red and *slower*; it is the same
+load-threshold class as the 5s-budget bisection in the diagnosis notes above.
+Measured 2026-10-26 on this box (the bounded-concurrency row predates the
+post-recovery row, hence 397 vs 401 tests):
+
+| Run | Result | Wall clock |
+|---|---|---|
+| `npm test` (default concurrency), 4 attempts in the red window | red: 9 / 14 / 18 / 19 failures, all `condition was not met before timeout` on the shared 15s `waitFor` or PTY exit `124`, in `automation-trigger-*`, `automation-service`, `automation-package` and startup tests | 383–660s |
+| `node --test --test-concurrency=6 …` | red: 3 failures, same class | 661s |
+| `node --test --test-concurrency=4 …` | **green: 397 tests, 393 pass, 0 fail, 4 skipped** | **138s** |
+| `automation-trigger-interval` + `automation-trigger-cron` sequentially | green 12/12 | 19.7s |
+| `automation-service` + `automation-package` sequentially | green 12/12 | 20.4s |
+| literal `npm test` (default concurrency), later quiet run | **green: 401 tests, 397 pass, 0 fail, 4 skipped** | **105s** |
+
+The failing set is different on every run and each of those files passes in
+isolation, so no individual test is broken; the default is both flakier and
+2.8–4.8× slower than bounded concurrency (383–660s vs 138s). The overload is the
+suite's own file parallelism, not an external benchmark: 20 cores, and during a
+red run `vmstat` showed 100% idle, run queue 0, `/proc/pressure/*` ~0, no
+containers and no leftover test children. Nor is it a product regression: it
+reproduced at a 386-test scope with the newer test files removed, and none of the
+failing families were touched by recent work.
+
+These are **host-contention flakes, not product regressions**: the fix is lower
+file concurrency, never a wider per-test budget at the call site.
+
+**When a local full suite goes red this way:**
+
+1. Re-run it — the single file, or the suite. Green on the re-run means this class.
+2. If it repeats, bound file concurrency explicitly:
+   `npm run build && node --test --test-concurrency=4 dist/test/*.test.js`. For
+   this class the fix is the flag, not a budget: do **not** edit `package.json`'s
+   `test` script. What expires is the shared 15s `waitFor`, the 12s window
+   `remote-bridge-diagnostics` asserts, or the PTY harness `timeoutSec` under
+   load — not a condition that needs more time. §1 still allows a genuinely
+   measured override, but a full-suite load failure is not one: a wider budget
+   would slow every genuine failure and hide the concurrency problem instead of
+   fixing it.
+3. Only a failure that is **reproducible in CI**, or that repeats at bounded
+   concurrency, is a real regression to diagnose.
+
+CI's three-job matrix has never shown these failures, so this is (at least) a
+local-runs concern; a local full-suite run is a reference, not the gate.
+
+## Known load flakes: instances of the class above
+
+Both rows below are the same oversubscription class, already explained by the
+section above: the shared `waitFor` default or the PTY harness expiring while the
+whole suite runs in parallel. Each passes in isolation, none indicates a product
+defect, and CI has never shown either. If one goes red locally, apply the remedy
+above — re-run, then `--test-concurrency=4` if it repeats. Row 1's 30s override
+was a measured exception added 2026-09-28 (`settledOccurrence(..., 600)`), not a
+precedent for widening a budget for the class above.
 
 | Test | Budget | What overload looks like |
 |---|---|---|
 | `automation-trigger-interval` "overlap-skipped without queuing" | shared 15s `waitFor` | the awaited condition needs 19.7s (measured once, ~1 run in 15) — resolved 2026-09-28: that call site now carries a measured 30s override (`settledOccurrence(..., 600)`); the entry stays for history |
 | `remote-bridge-diagnostics` "card open delay 0ms" | 12s, asserted as a 12–15s window | the first turn takes so long that the harness times out on action 0, indistinguishable from the intended stall |
 
-Act only when one of them fails **in CI**, or repeats in consecutive local runs.
-Then the levers — in order of preference — are: reduce `--test-concurrency` so the
-suite stops oversubscribing the machine, give that call site a measured override,
-or make the test load-aware. Do not delete the test: it covers real behaviour
-(overlap-skip, timeout diagnostics), and losing it would hide the risk rather than
-remove it.
+Act only when one of them fails **in CI**, or repeats at bounded concurrency. Do
+not delete the test: it covers real behaviour (overlap-skip, timeout diagnostics),
+and losing it would hide the risk rather than remove it.
