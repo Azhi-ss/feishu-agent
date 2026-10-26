@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { REMOTE_HANDSHAKE_TIMEOUT_ENV, REMOTE_HANDSHAKE_TIMEOUT_MS, REMOTE_OUTBOUND_TIMEOUT_ENV, REMOTE_OUTBOUND_TIMEOUT_MS } from "../packages/feishu-remote/extensions/remote-gateway.js";
+import { REMOTE_HANDSHAKE_TIMEOUT_ENV, REMOTE_HANDSHAKE_TIMEOUT_MS, REMOTE_OUTBOUND_TIMEOUT_ENV, REMOTE_OUTBOUND_TIMEOUT_MS, REMOTE_PROBE_TIMEOUT_ENV, REMOTE_PROBE_TIMEOUT_MS } from "../packages/feishu-remote/extensions/remote-gateway.js";
 
 // SPEC §9.1 is the single source of truth for the Remote Bridge delivery contract;
 // packages/feishu-remote/README.md and docs/remote-bridge.md restate parts of it in prose
@@ -64,5 +64,19 @@ test("SPEC §9.1: the WS handshake wait and the SDK budget share one env-overrid
     "不得写死毫秒",
     REMOTE_HANDSHAKE_TIMEOUT_ENV,
     String(REMOTE_HANDSHAKE_TIMEOUT_MS),
+  ]);
+});
+
+test("SPEC §9.1: a reachability probe fails a dead path fast instead of spending the handshake budget", () => {
+  requireAll(bullet("可达性探测"), [
+    "TLS",
+    "open.feishu.cn:443",
+    "REMOTE_PROBE_TIMEOUT_MS",
+    String(REMOTE_PROBE_TIMEOUT_MS),
+    "不得写死毫秒",
+    REMOTE_PROBE_TIMEOUT_ENV,
+    "不打开 WebSocket",
+    "可操作错误",
+    "泄露 app secret",
   ]);
 });

@@ -3,6 +3,7 @@
 // clients when the bridge is explicitly started.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { connect as tlsConnect } from "node:tls";
 import * as lark from "@larksuiteoapi/node-sdk";
 import { THINKING_STATUS } from "./stream-card.js";
 
@@ -13,6 +14,7 @@ export const REMOTE_APP_ID_ENV = "FEISHU_REMOTE_APP_ID";
 export const REMOTE_OWNER_OPEN_ID_ENV = "FEISHU_REMOTE_OWNER_OPEN_ID";
 export const REMOTE_OUTBOUND_TIMEOUT_ENV = "FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS";
 export const REMOTE_HANDSHAKE_TIMEOUT_ENV = "FEISHU_REMOTE_HANDSHAKE_TIMEOUT_MS";
+export const REMOTE_PROBE_TIMEOUT_ENV = "FEISHU_REMOTE_PROBE_TIMEOUT_MS";
 
 /**
  * Shared bounded wait for every outbound Remote Bridge call. The Card Kit SDK
@@ -34,6 +36,15 @@ export const REMOTE_OUTBOUND_TIMEOUT_MS = 15_000;
  */
 export const REMOTE_HANDSHAKE_TIMEOUT_MS = 45_000;
 
+/**
+ * Budget for the TLS reachability probe that runs before the handshake. A dead
+ * network path never reaches the SDK's onError — it retries retryable failures
+ * forever — so without this the 45s handshake budget is the only way out of a
+ * black hole. 5s of silence on TCP 443 is a dead path; a slow-but-alive start
+ * still gets its full handshake budget after the probe passes.
+ */
+export const REMOTE_PROBE_TIMEOUT_MS = 5_000;
+
 function envTimeoutMs(raw: string | undefined, fallback: number): number {
   if (!raw || !/^[1-9][0-9]*$/.test(raw)) return fallback;
   const ms = Number(raw);
@@ -46,6 +57,10 @@ export function outboundTimeoutMs(env: NodeJS.ProcessEnv = process.env): number 
 
 export function handshakeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   return envTimeoutMs(env[REMOTE_HANDSHAKE_TIMEOUT_ENV], REMOTE_HANDSHAKE_TIMEOUT_MS);
+}
+
+export function probeTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  return envTimeoutMs(env[REMOTE_PROBE_TIMEOUT_ENV], REMOTE_PROBE_TIMEOUT_MS);
 }
 
 export interface RemoteInboundEvent {
@@ -116,6 +131,8 @@ interface FeishuWsClient {
 export interface FeishuGatewaySdk {
   createClient(params: { appId: string; appSecret: string; domain: "feishu" | "lark" }): FeishuClient;
   createDispatcher(): FeishuDispatcher;
+  /** Fail fast when the WS host is unreachable, before the handshake budget applies. */
+  probe(host: string, port: number, timeoutMs: number): Promise<void>;
   createWsClient(options: {
     appId: string;
     appSecret: string;
@@ -143,6 +160,7 @@ export class FeishuGateway implements RemoteGateway {
     appSecret: string,
     private readonly sdk: FeishuGatewaySdk = loadFeishuGatewaySdk(),
     private readonly handshakeBudgetMs: number = handshakeTimeoutMs(),
+    private readonly probeBudgetMs: number = probeTimeoutMs(),
   ) {
     this.#appSecret = appSecret;
   }
@@ -150,12 +168,13 @@ export class FeishuGateway implements RemoteGateway {
   async start(onEvent: (event: RemoteInboundEvent) => void, onPollError: (error: Error) => void, onPollRecovered?: () => void): Promise<void> {
     const appSecret = this.requireSecret();
     this.closed = false;
+    const domain = this.credentials.brand === "lark" ? "lark" : "feishu";
+    await this.sdk.probe(domain === "lark" ? "open.larksuite.com" : "open.feishu.cn", 443, this.probeBudgetMs);
     const dispatcher = this.sdk.createDispatcher();
     dispatcher.register({
       "im.message.receive_v1": (raw) => this.emitInbound(raw, onEvent),
     });
 
-    const domain = this.credentials.brand === "lark" ? "lark" : "feishu";
     let ready = false;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -463,9 +482,43 @@ function streamingCard(initialText = THINKING_STATUS): object {
   };
 }
 
+/**
+ * One TLS handshake. This is what turns a dead network path into a fast,
+ * actionable `/remote start` failure: the SDK treats a failed connect as
+ * retryable and reconnects silently, so no error event is ever raised for it.
+ *
+ * A bare TCP dial would not do: with a TUN-mode proxy the handshake is answered
+ * locally, so `connect` succeeds in 0ms even when nothing upstream is reachable
+ * (measured). The ClientHello has to round-trip to prove the path. Certificates
+ * are not verified — this is a liveness check, and the bridge's own calls are
+ * where a bad certificate has to fail.
+ */
+export function probeTlsReachable(host: string, port: number, timeoutMs: number): Promise<void> {
+  const advice = "check the network or proxy, then run /remote start again.";
+  return new Promise<void>((resolve, reject) => {
+    const socket = tlsConnect({ host, port, servername: host, rejectUnauthorized: false });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`Remote bridge cannot complete a TLS handshake with ${host}:${port} within ${timeoutMs}ms: ${advice}`));
+    }, timeoutMs);
+    timer.unref();
+    socket.once("secureConnect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve();
+    });
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      socket.destroy();
+      reject(new Error(`Remote bridge cannot reach ${host}:${port} (${error.code ?? error.message}): ${advice}`));
+    });
+  });
+}
+
 function loadFeishuGatewaySdk(): FeishuGatewaySdk {
   const quietLogger = { error() {}, warn() {}, info() {}, debug() {}, trace() {} };
   return {
+    probe: probeTlsReachable,
     createClient: (params) => new lark.Client({
       appId: params.appId,
       appSecret: params.appSecret,
@@ -555,7 +608,7 @@ export function createGatewayFromEnv(env: NodeJS.ProcessEnv = process.env, crede
   if (!credentials) return { error: "Remote bridge cannot create the Feishu gateway without credentials." };
   const secret = env[REMOTE_SECRET_ENV];
   if (!secret) return { error: `Remote bridge needs ${REMOTE_SECRET_ENV} to use the Feishu SDK gateway.` };
-  return { gateway: withOutboundBudget(new FeishuGateway(credentials, secret, undefined, handshakeMs), timeoutMs), transport: "feishu-sdk" };
+  return { gateway: withOutboundBudget(new FeishuGateway(credentials, secret, undefined, handshakeMs, probeTimeoutMs(env)), timeoutMs), transport: "feishu-sdk" };
 }
 
 /**

@@ -20,7 +20,10 @@ import {
   outboundTimeoutMs,
   REMOTE_HANDSHAKE_TIMEOUT_ENV,
   REMOTE_HANDSHAKE_TIMEOUT_MS,
+  REMOTE_PROBE_TIMEOUT_ENV,
+  REMOTE_PROBE_TIMEOUT_MS,
   handshakeTimeoutMs,
+  probeTimeoutMs,
   withOutboundBudget,
   type RemoteGateway,
 } from "../packages/feishu-remote/extensions/remote-gateway.js";
@@ -162,6 +165,54 @@ test("the WS handshake budget is one shared default with an env override for tes
   }
 });
 
+test("the reachability probe budget is one shared default with an env override for tests", () => {
+  assert.equal(REMOTE_PROBE_TIMEOUT_MS, 5_000, "a 5s default: dead-path detection must not wait for the 45s handshake budget");
+  assert.equal(probeTimeoutMs({}), REMOTE_PROBE_TIMEOUT_MS);
+  assert.equal(probeTimeoutMs({ [REMOTE_PROBE_TIMEOUT_ENV]: "250" }), 250);
+  for (const invalid of ["0", "-5", "abc", "1.5", ""]) {
+    assert.equal(probeTimeoutMs({ [REMOTE_PROBE_TIMEOUT_ENV]: invalid }), REMOTE_PROBE_TIMEOUT_MS, `"${invalid}" must fall back to the shared default`);
+  }
+});
+
+test("a dead network path fails start() in the probe budget without waiting for the handshake or opening a WS", async () => {
+  let wsCreated = false;
+  const sdk: FeishuGatewaySdk = {
+    probe: async (host, port, timeoutMs) => {
+      await new Promise((done) => setTimeout(done, 5));
+      throw new Error(`Remote bridge cannot reach ${host}:${port} within ${timeoutMs}ms: check the network or proxy, then run /remote start again.`);
+    },
+    createClient: () => ({}) as never,
+    createDispatcher: () => ({ register: () => undefined }),
+    createWsClient: () => {
+      wsCreated = true;
+      return { start: async () => { /* would hang on a dead path */ }, close: () => undefined };
+    },
+  };
+  const gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk, 45_000, 150);
+  const started = Date.now();
+  await assert.rejects(gateway.start(() => undefined, () => undefined), (error: Error) => {
+    assert.match(error.message, /cannot reach open\.feishu\.cn:443 within 150ms/, "the error must name the host and the probe budget");
+    assert.match(error.message, /run \/remote start again/, "the error must say what to do next");
+    assert.doesNotMatch(error.message, /secret-must-stay-in-memory/);
+    return true;
+  });
+  assert.ok(Date.now() - started < 45_000, "a dead path must not cost the whole handshake budget");
+  assert.equal(wsCreated, false, "no WebSocket may be opened once the probe failed");
+});
+
+test("the probe targets the WS host of the configured brand", async () => {
+  const probed: string[] = [];
+  const makeSdk = (): FeishuGatewaySdk => ({
+    probe: async (host) => { probed.push(host); },
+    createClient: () => ({}) as never,
+    createDispatcher: () => ({ register: () => undefined }),
+    createWsClient: (options) => ({ start: async () => { options.onReady(); }, close: () => undefined }),
+  });
+  await new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", makeSdk()).start(() => undefined, () => undefined);
+  await new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "lark" }, "secret-must-stay-in-memory", makeSdk()).start(() => undefined, () => undefined);
+  assert.deepEqual(probed, ["open.feishu.cn", "open.larksuite.com"]);
+});
+
 test("withOutboundBudget turns a hung outbound call into a failure at the budget", async () => {
   const never = () => new Promise<never>(() => {});
   const stalled: RemoteGateway = {
@@ -241,6 +292,7 @@ test("FeishuGateway maps WS events and Card Kit operations without exposing the 
     },
   };
   const sdk: FeishuGatewaySdk = {
+    probe: async () => undefined,
     createClient: (params) => {
       receivedSecret = params.appSecret;
       calls.push({ operation: "client" });
@@ -324,6 +376,7 @@ test("FeishuGateway quotes the message a text reply points at", async () => {
   };
   let handlers: Record<string, (event: unknown) => unknown> = {};
   const sdk: FeishuGatewaySdk = {
+    probe: async () => undefined,
     createClient: () => ({
       request: async <T = unknown>() => ({ bot: { open_id: "ou_bot" } } as T),
       im: { v1: { message: {
@@ -364,6 +417,7 @@ test("FeishuGateway quotes the message a text reply points at", async () => {
 
 test("FeishuGateway rejects a hard initial WS failure without leaking the secret", async () => {
   const sdk: FeishuGatewaySdk = {
+    probe: async () => undefined,
     createClient: () => ({}) as never,
     createDispatcher: () => ({ register: () => undefined }),
     createWsClient: (options) => ({
@@ -384,6 +438,7 @@ test("FeishuGateway close aborts an in-flight handshake so start() does not hang
   delete process.env[REMOTE_HANDSHAKE_TIMEOUT_ENV];
   let wsOptions: { handshakeTimeoutMs: number } | undefined;
   const sdk: FeishuGatewaySdk = {
+    probe: async () => undefined,
     createClient: () => ({}) as never,
     createDispatcher: () => ({ register: () => undefined }),
     createWsClient: (options) => {
@@ -399,8 +454,8 @@ test("FeishuGateway close aborts an in-flight handshake so start() does not hang
     gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk);
     const started = gateway.start(() => undefined, () => undefined);
     started.catch(() => undefined); // asserted below; a failed assertion must not also surface as an unhandled rejection
+    await new Promise((done) => setImmediate(done)); // let the reachability probe settle before the WS client exists
     assert.equal(wsOptions?.handshakeTimeoutMs, REMOTE_HANDSHAKE_TIMEOUT_MS, "without an override the SDK budget is the shared default");
-    await new Promise((done) => setImmediate(done));
     await gateway.close();
     await assert.rejects(started, /Remote gateway closed/);
   } finally {
@@ -414,6 +469,7 @@ test("FeishuGateway takes the WS handshake budget from the env override, not the
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let wsOptions: { handshakeTimeoutMs: number } | undefined;
   const sdk: FeishuGatewaySdk = {
+    probe: async () => undefined,
     createClient: () => ({}) as never,
     createDispatcher: () => ({ register: () => undefined }),
     createWsClient: (options) => {
@@ -427,6 +483,7 @@ test("FeishuGateway takes the WS handshake budget from the env override, not the
     const rejection = assert.rejects(started, /Feishu WebSocket handshake timed out/, "a never-completing handshake must keep the existing actionable error");
     rejection.catch(() => undefined); // only awaited below; a failed assertion must not also surface as an unhandled rejection
     try {
+      await new Promise((done) => setImmediate(done)); // let the reachability probe settle before the WS client exists
       assert.equal(wsOptions?.handshakeTimeoutMs, 150, "the SDK handshake budget must come from the shared override, not a default literal");
       t.mock.timers.tick(150);
       await rejection;
@@ -440,6 +497,7 @@ test("a handshake slower than the default succeeds when the override raises the 
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let wsOptions: { handshakeTimeoutMs: number } | undefined;
   const sdk: FeishuGatewaySdk = {
+    probe: async () => undefined,
     createClient: () => ({}) as never,
     createDispatcher: () => ({ register: () => undefined }),
     createWsClient: (options) => {
@@ -455,6 +513,7 @@ test("a handshake slower than the default succeeds when the override raises the 
     const started = gateway.start(() => undefined, () => undefined);
     started.catch(() => undefined); // only awaited below; a failed assertion must not also surface as an unhandled rejection
     try {
+      await new Promise((done) => setImmediate(done)); // let the reachability probe settle before the WS client exists
       assert.equal(wsOptions?.handshakeTimeoutMs, 60_000, "the SDK handshake budget must follow the override past the 45s default");
       t.mock.timers.tick(50_000);
       await started;

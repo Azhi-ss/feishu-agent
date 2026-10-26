@@ -109,6 +109,15 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
   device. Raise it further on a machine that is slower still; a handshake that
   never completes still fails in-budget with
   `Feishu WebSocket handshake timed out`.
+- `FEISHU_REMOTE_PROBE_TIMEOUT_MS` sets the budget of the TLS reachability
+  probe that runs before the handshake (default 5000 ms, against
+  `open.feishu.cn:443`, or `open.larksuite.com:443` for a Lark identity). A
+  dead network path makes `/remote start` fail with an actionable error in that
+  budget instead of waiting out the 45 s handshake budget — the SDK treats a
+  failed connect as retryable and retries silently, so it never reports one.
+  The probe is a real TLS handshake, not a bare TCP dial: a TUN-mode proxy
+  answers the TCP handshake locally, so `connect` succeeds even when nothing
+  upstream is reachable.
 
 ## Verifying on a real device
 
