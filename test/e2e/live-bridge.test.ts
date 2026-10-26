@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { newestCardAfter, oneCardNoExtraViolations } from "../helpers/lark-chat-page.js";
+import type { ChatMessage } from "../helpers/lark-chat-page.js";
 import { resolveRemoteCredentials } from "../../packages/feishu-remote/extensions/remote-gateway.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -37,6 +39,24 @@ function resolveBotChatId(): string {
     if (chatId) return chatId;
   } catch {}
   return fallbackChatId;
+}
+
+function listRecentMessages(chatId: string, pageSize = 10): ChatMessage[] {
+  // `--order desc` is the CLI default, passed explicitly because every assertion below
+  // assumes a newest-first page.
+  const res = execFileSync("lark-cli", [
+    "im", "+chat-messages-list",
+    "--chat-id", chatId,
+    "--as", "user",
+    "--json",
+    "--order", "desc",
+    "--page-size", String(pageSize)
+  ], { encoding: "utf8", timeout: 15_000 });
+  return JSON.parse(res).data?.messages ?? [];
+}
+
+function newestMessageId(chatId: string): string | undefined {
+  return listRecentMessages(chatId, 1)[0]?.message_id;
 }
 
 function capturePane(session: string): string {
@@ -107,6 +127,11 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
     const nonce = `e2e-${Date.now()}`;
     const testPrompt = `E2E-PROBE-${nonce}: 快速测试，请只回复单个英文单词 PONG`;
 
+    // Snapshot the newest message before the probe so the new card can be told apart
+    // from a card an earlier run left behind.
+    const baseline = newestMessageId(chatId);
+    assert.ok(baseline, `chat ${chatId} must have at least one message before the probe`);
+
     // Send message as user into the P2P chat with the bot
     const sendRes = execFileSync("lark-cli", [
       "im", "+messages-send",
@@ -125,30 +150,27 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
     // Verify Feishu chat receives the bot's interactive card reply
     const startWait = Date.now();
     let gotInteractiveCard = false;
+    let page: ChatMessage[] = [];
     while (Date.now() - startWait < 45_000) {
       try {
-        const listRes = execFileSync("lark-cli", [
-          "im", "+chat-messages-list",
-          "--chat-id", chatId,
-          "--as", "user",
-          "--json",
-          "--page-size", "5"
-        ], { encoding: "utf8", timeout: 15_000 });
-        const listJson = JSON.parse(listRes);
-        const messages: Array<{ sender?: { sender_type?: string }; msg_type?: string; message_id?: string }> = listJson.data?.messages ?? [];
-        const botCard = messages.find((m) => m.sender?.sender_type === "app" && m.msg_type === "interactive");
-        if (botCard?.message_id) {
-          gotInteractiveCard = true;
-          firstCardMessageId = botCard.message_id;
-          break;
-        }
-      } catch {}
+        page = listRecentMessages(chatId);
+      } catch {
+        // Transient lark-cli failure: retry inside the wait window rather than fail the run.
+      }
+      const card = newestCardAfter(page, baseline);
+      if (card) {
+        gotInteractiveCard = true;
+        firstCardMessageId = card;
+        break;
+      }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
     }
-    // Wait until agent finishes the turn and returns to idle
+    // Wait until agent finishes the turn and returns to idle. Card finalization runs inside
+    // Pi's settlement, so idle means the close (or its fallback) already happened.
     waitForIdle(sessionName);
-    assert.equal(gotInteractiveCard, true, `Bot must reply with an interactive card message in chat ${chatId}`);
+    assert.equal(gotInteractiveCard, true, `Bot must reply with an interactive card message in chat ${chatId}; newest message ids seen: ${page.slice(0, 3).map((m) => m.message_id).join(", ")}`);
     assert.ok(firstCardMessageId.startsWith("om_"), `Card message ID must be valid: ${firstCardMessageId}`);
+    assert.deepEqual(oneCardNoExtraViolations(listRecentMessages(chatId), baseline, firstCardMessageId), [], "normal reply turn");
   });
 
   await t.test("3. Tool execution turn runs locally and delivers finalized card", () => {
@@ -171,30 +193,26 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
     const startWait = Date.now();
     let gotReply = false;
     let toolCardMessageId = "";
+    let page: ChatMessage[] = [];
     while (Date.now() - startWait < 45_000) {
       try {
-        const listRes = execFileSync("lark-cli", [
-          "im", "+chat-messages-list",
-          "--chat-id", chatId,
-          "--as", "user",
-          "--json",
-          "--page-size", "5"
-        ], { encoding: "utf8", timeout: 15_000 });
-        const listJson = JSON.parse(listRes);
-        const messages: Array<{ sender?: { sender_type?: string }; msg_type?: string; message_id?: string }> = listJson.data?.messages ?? [];
-        const botCard = messages.find((m) => m.sender?.sender_type === "app" && m.msg_type === "interactive" && m.message_id !== firstCardMessageId);
-        if (botCard?.message_id) {
-          gotReply = true;
-          toolCardMessageId = botCard.message_id;
-          break;
-        }
-      } catch {}
+        page = listRecentMessages(chatId);
+      } catch {
+        // Transient lark-cli failure: retry inside the wait window rather than fail the run.
+      }
+      const card = newestCardAfter(page, firstCardMessageId);
+      if (card) {
+        gotReply = true;
+        toolCardMessageId = card;
+        break;
+      }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
     }
     // Wait until agent finishes the tool turn and returns to idle
     waitForIdle(sessionName);
-    assert.equal(gotReply, true, "Bot must deliver reply for tool turn");
+    assert.equal(gotReply, true, `Bot must deliver reply for tool turn; newest message ids seen: ${page.slice(0, 3).map((m) => m.message_id).join(", ")}`);
     assert.ok(toolCardMessageId.startsWith("om_"));
+    assert.deepEqual(oneCardNoExtraViolations(listRecentMessages(chatId), firstCardMessageId, toolCardMessageId), [], "tool turn");
   });
 
   await t.test("4. /remote stop disconnects the bridge and reflects in TUI", () => {

@@ -230,6 +230,9 @@ Feishu Agent 暴露 Pi 的基础文件和 Shell 工具，飞书操作通过 Bash
 - 多窗口待机：同一应用禁止两条 WebSocket 长连接（事件会被飞书负载均衡到不同消费者，见 ADR-0001），多窗口永远只有一个连接消费者；常驻转发网关是未来选项，不在本里程碑。另一个 TUI 窗口活持锁时，`/remote start` 仍报错；`FEISHU_REMOTE=1` 自启则不报错，安静进入 `standby` 状态，状态行显示 `remote:standby` 与持锁 pid/目录名，`/remote status` 同口径展示。
 - `/remote switch` 在本窗口请求接管：写一个短生命周期（~15s）的 yield 请求文件 `<appId>.yield` 并等待锁释放（轮询 ~200ms，上限 10s），拿到锁后正常建连；本窗口已连接则提示已连接。持锁窗口用 unref'd 定时器（250ms）轮询该文件，发现后在自己的事件循环 tick 上优雅停桥（状态行 `remote:off`，通知 `handed off`），不处理 turn 之外的任何逻辑。不用进程信号（SIGUSR2 会打断 TUI 原始模式 stdin read）；无锁/死 pid 锁直接回收后连接；持锁者已死（请求文件无人响应）超时则报错，不强杀对方。锁释放时清理残留 yield 文件。
 - `/new`、`/resume`、`/fork`、`/reload` 等会话替换必须立刻作废尚未完成的 `start()`：不得把 gateway 交给已失效的 Extension runner，也不得用过期 `pi.sendUserMessage` 注入。新会话需要重新 `/remote start` 或 `FEISHU_REMOTE=1` 自动启动。
+- 卡片投递收尾只做一次决定：一次回合里，建卡失败或卡片关闭失败（含因超出出站预算而失败）时，用一条**普通消息**补发**同一份完整回复正文**（回退不分片，受飞书单条文本上限约束），恰好一次；关闭落地时就只有卡片，不再另发一份完整正文。追加失败是非致命的：关闭写入权威正文，因此不触发回退。关闭失败会重试一次（两次调用各自计时，共用同一预算），仍失败才回退，并在 TUI 警告里说明卡片可能停在流式状态——卡片上已经流出的内容可能还在，手机端因此可能看到一次重复正文。一轮 settle 没有任何可见正文时，用一句面向主人的短说明收尾，**不写空卡**；建卡或关闭已失败时，同一句说明走普通消息回退。说明与回退都不含 raw thinking、工具原始输出或凭证。
+- 停桥收尾：`/remote stop`、`/remote switch` 交接、`/new`、`/reload` 与进程关停共用同一语义（`/new`、`/resume`、`/fork`、`/reload` 都经 `session_shutdown` 走同一条收尾路径）——用当时已知最完整的正文（已结算回复与最后一次流式快照取较长者，分片）收尾卡片，**绝不擦除已经流到手机上的内容**；关闭未落地时用一条普通消息补发，没有任何可见正文时用同一句短说明。被丢弃的排队消息按聊天各说明一次（条数 + 未获回答）；说明投递失败不影响停桥，停桥仍是本地优先、不做重试队列。
+- 出站有界预算：建卡、追加、状态、卡片关闭、普通消息与 reaction 共享一个上限预算，默认 `REMOTE_OUTBOUND_TIMEOUT_MS` = 15000ms，可用 `FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS` 覆盖，调用点**不得写死毫秒**。预算覆盖 pending 的追加链；到点即按失败处理并走上面的回退，所以挂住的出站调用只会按预算次数延长——不会无限期拖住 Pi 的 settlement 与 `/quit`。预算是每次调用；挂住的请求本身不被中断。
 - TUI 状态由包直接调用 Pi `setStatus`，文案保持 `remote:<status>`。核心不为 Remote 增加状态插槽。
 - 运输保持 ADR-0001：进程内官方 SDK `WSClient`；不得与 `lark-cli event consume` 同时占用同一应用。包从本仓库 workspace 公开发布到 npm，发布制品只包含 Extension 源码和包文档。
 

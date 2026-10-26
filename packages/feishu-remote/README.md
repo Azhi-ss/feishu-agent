@@ -20,12 +20,12 @@ run failed, or the turn only produced internal reasoning — closes the card wit
 one short, actionable notice instead of an empty card. Stopping the bridge
 mid-turn (`/remote stop`, a handoff, `/new`/`/reload`, or process shutdown)
 finalizes the card with the most complete reply body known at that moment — the
-settled reply, else the last streamed snapshot — never empty content that erases
-what the phone already saw — and tells the phone how many queued messages the
-stop dropped and left unanswered (once, best-effort; stop is local-first and
-keeps no retry queue). A failed stream append is non-fatal — the final close
-writes the complete reply — and a connection interruption is reported as such,
-not as a card write failure.
+settled reply and the last streamed snapshot, whichever is longer — never empty
+content that erases what the phone already saw — and tells the phone how many
+queued messages the stop dropped and left unanswered (once, best-effort; stop
+is local-first and keeps no retry queue). A failed stream append is non-fatal —
+the final close writes the complete reply — and a connection interruption is
+reported as such, not as a card write failure.
 
 For group @mentions, the bridge may run a separate current-message-only reaction
 selector. It validates the selected Feishu reaction, adds it to the source
