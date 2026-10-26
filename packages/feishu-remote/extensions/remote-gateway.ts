@@ -24,10 +24,15 @@ export const REMOTE_OUTBOUND_TIMEOUT_MS = 15_000;
 
 /**
  * Shared WS handshake budget for /remote start: both the outer wait and the
- * SDK's own handshakeTimeoutMs. A slow connect-config fetch can outlast the 15s
- * default, so raise the budget with the env var when it does.
+ * SDK's own handshakeTimeoutMs. Measured on real devices (2026-10-26, issue
+ * #66): a successful handshake takes 16.4-23.6s, of which the connect-config
+ * fetch is 11.0-13.4s, and a single dial costs 5-13s when name resolution drags
+ * (measured: an AAAA query on an IPv6-less host whose resolver still tries IPv6
+ * upstreams burns 11s). A 15s default therefore failed by design; 45s covers
+ * two such dials plus the fetch. Raise it further with
+ * the env var when a machine is slower still.
  */
-export const REMOTE_HANDSHAKE_TIMEOUT_MS = 15_000;
+export const REMOTE_HANDSHAKE_TIMEOUT_MS = 45_000;
 
 function envTimeoutMs(raw: string | undefined, fallback: number): number {
   if (!raw || !/^[1-9][0-9]*$/.test(raw)) return fallback;

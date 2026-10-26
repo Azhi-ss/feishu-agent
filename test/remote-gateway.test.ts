@@ -154,7 +154,7 @@ test("the outbound budget is one shared default with an env override for tests",
 });
 
 test("the WS handshake budget is one shared default with an env override for tests", () => {
-  assert.equal(REMOTE_HANDSHAKE_TIMEOUT_MS, 15_000, "a 15s default shared by the outer wait and the SDK");
+  assert.equal(REMOTE_HANDSHAKE_TIMEOUT_MS, 45_000, "a 45s default shared by the outer wait and the SDK: above the 16.4-23.6s handshake measured on a real device");
   assert.equal(handshakeTimeoutMs({}), REMOTE_HANDSHAKE_TIMEOUT_MS);
   assert.equal(handshakeTimeoutMs({ [REMOTE_HANDSHAKE_TIMEOUT_ENV]: "60000" }), 60_000, "the override can raise the budget past the default");
   for (const invalid of ["0", "-5", "abc", "1.5", ""]) {
@@ -399,7 +399,7 @@ test("FeishuGateway close aborts an in-flight handshake so start() does not hang
     gateway = new FeishuGateway({ appId: "cli_app", ownerOpenId: "ou_owner", brand: "feishu" }, "secret-must-stay-in-memory", sdk);
     const started = gateway.start(() => undefined, () => undefined);
     started.catch(() => undefined); // asserted below; a failed assertion must not also surface as an unhandled rejection
-    assert.equal(wsOptions?.handshakeTimeoutMs, REMOTE_HANDSHAKE_TIMEOUT_MS, "without an override the SDK budget is the shared 15s default");
+    assert.equal(wsOptions?.handshakeTimeoutMs, REMOTE_HANDSHAKE_TIMEOUT_MS, "without an override the SDK budget is the shared default");
     await new Promise((done) => setImmediate(done));
     await gateway.close();
     await assert.rejects(started, /Remote gateway closed/);
@@ -410,7 +410,7 @@ test("FeishuGateway close aborts an in-flight handshake so start() does not hang
   }
 });
 
-test("FeishuGateway takes the WS handshake budget from the env override, not the 15s literal", async t => {
+test("FeishuGateway takes the WS handshake budget from the env override, not the default literal", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let wsOptions: { handshakeTimeoutMs: number } | undefined;
   const sdk: FeishuGatewaySdk = {
@@ -427,7 +427,7 @@ test("FeishuGateway takes the WS handshake budget from the env override, not the
     const rejection = assert.rejects(started, /Feishu WebSocket handshake timed out/, "a never-completing handshake must keep the existing actionable error");
     rejection.catch(() => undefined); // only awaited below; a failed assertion must not also surface as an unhandled rejection
     try {
-      assert.equal(wsOptions?.handshakeTimeoutMs, 150, "the SDK handshake budget must come from the shared override, not a 15s literal");
+      assert.equal(wsOptions?.handshakeTimeoutMs, 150, "the SDK handshake budget must come from the shared override, not a default literal");
       t.mock.timers.tick(150);
       await rejection;
     } finally {
@@ -436,7 +436,7 @@ test("FeishuGateway takes the WS handshake budget from the env override, not the
   });
 });
 
-test("a handshake slower than the 15s default succeeds when the override raises the budget", async t => {
+test("a handshake slower than the default succeeds when the override raises the budget", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let wsOptions: { handshakeTimeoutMs: number } | undefined;
   const sdk: FeishuGatewaySdk = {
@@ -445,7 +445,7 @@ test("a handshake slower than the 15s default succeeds when the override raises 
     createWsClient: (options) => {
       wsOptions = options;
       return {
-        start: async () => { await new Promise((done) => setTimeout(done, 20_000)); options.onReady(); },
+        start: async () => { await new Promise((done) => setTimeout(done, 50_000)); options.onReady(); },
         close: () => undefined,
       };
     },
@@ -455,8 +455,8 @@ test("a handshake slower than the 15s default succeeds when the override raises 
     const started = gateway.start(() => undefined, () => undefined);
     started.catch(() => undefined); // only awaited below; a failed assertion must not also surface as an unhandled rejection
     try {
-      assert.equal(wsOptions?.handshakeTimeoutMs, 60_000, "the SDK handshake budget must follow the override past the 15s default");
-      t.mock.timers.tick(20_000);
+      assert.equal(wsOptions?.handshakeTimeoutMs, 60_000, "the SDK handshake budget must follow the override past the 45s default");
+      t.mock.timers.tick(50_000);
       await started;
     } finally {
       await gateway.close();
