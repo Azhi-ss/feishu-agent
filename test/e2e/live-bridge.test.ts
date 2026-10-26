@@ -117,8 +117,11 @@ test("Live Remote Bridge E2E (Real Feishu Device/Bot Cutover)", { skip: !canRunL
       process.execPath, cliPath
     ]);
 
-    // Wait for the status bar to show remote:connected
-    const pane = waitForPane(sessionName, "remote:connected", 20_000);
+    // Wait for the status bar to show remote:connected. Measured on this box: the SDK's WS
+    // handshake alone takes 16.4-23.6s (its connect-config fetch is 11.0-13.4s of that, see
+    // issue #66) on top of TUI boot, and the run sets FEISHU_REMOTE_HANDSHAKE_TIMEOUT_MS to
+    // cover it, so this waits the measured worst case with margin instead of 20s.
+    const pane = waitForPane(sessionName, "remote:connected", 60_000);
     assert.match(pane, /remote:connected/, "Status bar must show remote:connected");
     assert.match(pane, /Remote bridge connected/, "Startup log must confirm bridge connection");
   });
