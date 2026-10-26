@@ -14,6 +14,7 @@ import {
   sse,
   sseDelta,
   sseDone,
+  warningThenQuit,
   SECRET,
 } from "./helpers/remote-bridge-fixture.js";
 
@@ -281,10 +282,7 @@ test("a card close that keeps failing delivers the complete reply as exactly one
   ], { outboundFailures: { cardClose: Infinity } });
   try {
     const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
-      { wait: "fake-model", send: "" },
-      { wait: "remote:connected", send: "" },
-      { wait: "card close failed after a retry", send: "/remote status\r" },
-      { wait: "Remote bridge: connected", send: "/quit\r" },
+      ...warningThenQuit("card close failed after a retry"),
     ], 60, f.timeoutProgress);
     assert.equal(result.code, 0, result.output);
     const stats = await f.feishu.stats();
@@ -337,10 +335,7 @@ test("a card creation failure delivers the complete reply as exactly one plain m
   ], { outboundFailures: { cardOpen: Infinity } });
   try {
     const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
-      { wait: "fake-model", send: "" },
-      { wait: "remote:connected", send: "" },
-      { wait: "could not open the streaming card", send: "/remote status\r" },
-      { wait: "Remote bridge: connected", send: "/quit\r" },
+      ...warningThenQuit("could not open the streaming card"),
     ], 60, f.timeoutProgress);
     assert.equal(result.code, 0, result.output);
     const stats = await f.feishu.stats();
@@ -600,16 +595,117 @@ test("a notice that cannot be delivered does not affect settlement; the bridge k
   const f = await providerDownFixture("provider-down-undeliverable", { outboundFailures: { cardOpen: Infinity, sendMessage: Infinity } });
   try {
     const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url }), [
-      { wait: "fake-model", send: "" },
-      { wait: "remote:connected", send: "" },
-      { wait: "could not be sent either", send: "/remote status\r" },
-      { wait: "Remote bridge: connected", send: "/quit\r" },
+      ...warningThenQuit("could not be sent either"),
     ], 60, f.timeoutProgress);
     assert.equal(result.code, 0, result.output);
     const stats = await f.feishu.stats();
     assert.equal(stats.sends.length, 0, "the failed notice never reaches the wire");
     assert.equal(stats.failures.filter((failure) => failure.endpoint === "sendMessage").length, 1);
     assert.match(result.output, /notice could not be sent either/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+// Hung outbound calls are the whole point of the outbound budget: the fake never
+// answers, so only the client-side bound lets settlement and /quit finish. The
+// budget itself is the product default; the test only shrinks it through the env
+// var. 2s is comfortably above localhost round-trip jitter under a loaded suite
+// (500ms produced false timeouts) and small enough to keep each hung path quick.
+const HANG_BUDGET_ENV = { FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS: "2000" };
+
+test("a hung card close is bounded: the complete reply arrives once as a plain message and the TUI frees up", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "close-hang-1", messageType: "text", text: "close-hang" } },
+  ], { hangOutbound: { cardClose: Infinity } });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url, ...HANG_BUDGET_ENV }), [
+      ...warningThenQuit("card close failed after a retry"),
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.closes.length, 0, "the hung close never lands");
+    assert.equal(stats.hangs.filter((hang) => hang.endpoint === "cardClose").length, 2, "the hung close is retried exactly once, and both attempts are bounded");
+    assert.deepEqual(stats.sends.map((send) => send.text), ["PTY-PONG:close-hang"], "the complete reply arrives as exactly one plain message");
+    assert.match(result.output, /card close failed after a retry/);
+    assert.match(result.output, /plain message/);
+    assert.match(result.output, /timed out after 2000ms/, "the warning names the injected budget, so the timeout did not come from a call-site literal");
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a hung card append cannot hold card finalization: the close still lands with the complete reply", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "append-hang-1", messageType: "text", text: "append-hang" } },
+  ], { hangOutbound: { cardAppend: Infinity } });
+  const closed = join(f.root, "append-hang-closed");
+  f.feishu.markCardClosed(closed);
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url, ...HANG_BUDGET_ENV }), [
+      { wait: "fake-model", send: "" },
+      { wait: "remote:connected", send: "" },
+      { waitFile: closed, send: "/quit\r" },
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.appends.length, 0, "every stream append hung");
+    assert.ok(stats.hangs.some((hang) => hang.endpoint === "cardAppend"), "the append reached the wire and hung");
+    assert.equal(stats.cards.closes.length, 1, JSON.stringify(stats.cards.closes));
+    assert.equal(stats.cards.closes[0]?.text, "PTY-PONG:append-hang", "the close decides the final text: the hung append cannot block or truncate it");
+    assert.equal(stats.sends.length, 0, "a hung append must not trigger the plain-message fallback");
+    assert.match(result.output, /card stream write failed/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a hung card open still settles within the budget: the reply arrives as one plain message and /quit exits", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "open-hang-1", messageType: "text", text: "open-hang" } },
+  ], { hangOutbound: { cardOpen: Infinity } });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url, ...HANG_BUDGET_ENV }), [
+      ...warningThenQuit("could not open the streaming card"),
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.cards.opened.length, 0, "the hung open never returns a card");
+    assert.equal(stats.hangs.filter((hang) => hang.endpoint === "cardOpen").length, 1, "the hung open is not retried; the fallback is the single retry");
+    assert.deepEqual(stats.sends.map((send) => send.text), ["PTY-PONG:open-hang"], "the complete reply arrives as exactly one plain message");
+    assert.match(result.output, /could not open the streaming card/);
+    assert.match(result.output, /timed out after 2000ms/);
+    assert.doesNotMatch(result.output, new RegExp(SECRET));
+    assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
+  } finally {
+    await closeServer(f.feishu.server);
+    await closeServer(f.model.server);
+  }
+});
+
+test("a hung plain-message fallback is bounded too: the turn still settles and reports the fallback failure", async () => {
+  const f = await fixture(echoModel, [
+    { delayMs: 300, event: { ownerOpenId: "ou_fake_owner", chatId: "oc_phone", chatType: "p2p", messageId: "send-hang-1", messageType: "text", text: "send-hang" } },
+  ], { hangOutbound: { cardClose: Infinity, sendMessage: Infinity } });
+  try {
+    const result = await runPty(f.project, [], f.env({ FEISHU_REMOTE: "1", FEISHU_REMOTE_APP_SECRET: SECRET, FEISHU_REMOTE_LOOPBACK_URL: f.feishu.url, ...HANG_BUDGET_ENV }), [
+      ...warningThenQuit("plain-message fallback also failed"),
+    ], 60, f.timeoutProgress);
+    assert.equal(result.code, 0, result.output);
+    const stats = await f.feishu.stats();
+    assert.equal(stats.sends.length, 0, "the hung fallback never reaches the wire");
+    assert.equal(stats.hangs.filter((hang) => hang.endpoint === "sendMessage").length, 1, "the hung fallback is attempted exactly once, bounded");
+    assert.deepEqual([...new Set(stats.hangs.map((hang) => hang.endpoint))].sort(), ["cardClose", "sendMessage"]);
+    assert.match(result.output, /plain-message fallback also failed/);
     assert.doesNotMatch(result.output, new RegExp(SECRET));
     assert.doesNotMatch(JSON.stringify(stats), new RegExp(SECRET));
   } finally {

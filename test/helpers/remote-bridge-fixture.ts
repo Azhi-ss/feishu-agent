@@ -16,6 +16,17 @@ export const SECRET = "FEISHU-SECRET-supersecret-42";
 
 export interface PtyAction { wait?: string; waitFile?: string; send?: string; }
 
+/** Shared PTY script for the delivery-failure tests: handshake, wait for the bridge
+ * warning, prove the TUI still answers `/remote status`, then quit. */
+export function warningThenQuit(warning: string): PtyAction[] {
+  return [
+    { wait: "fake-model", send: "" },
+    { wait: "remote:connected", send: "" },
+    { wait: warning, send: "/remote status\r" },
+    { wait: "Remote bridge: connected", send: "/quit\r" },
+  ];
+}
+
 export function runPty(cwd: string, args: string[], env: NodeJS.ProcessEnv, actions: PtyAction[], timeoutSec = 60, timeoutProgress?: () => Record<string, number>, cliPath = cli): Promise<{ code: number | null; output: string }> {
   return runHarness(cwd, args, env, actions, { timeoutSec, cliPath, diagnostics: true, resend: true, onTimeoutProgress: timeoutProgress }).then(({ code, output, timeoutProgress: progress }) => {
     if (code !== 124 || !output.startsWith("PTY_TIMEOUT ")) return { code, output };
@@ -60,6 +71,9 @@ export interface FeishuStats {
   /** Injected outbound failures, in arrival order. The successful-write arrays below
    * (opened/appends/cardCloses) only record calls the server actually served. */
   failures: Array<{ endpoint: OutboundEndpoint; at: number }>;
+  /** Injected outbound hangs, in arrival order: the call reached the server and never
+   * got a response, so the client itself must bound the wait. */
+  hangs: Array<{ endpoint: OutboundEndpoint; at: number }>;
   cards: {
     opened: Array<{ chatId: string; cardId: string; at: number }>;
     statuses: Array<{ cardId: string; text: string; at: number }>;
@@ -77,6 +91,8 @@ export interface LoopbackOptions {
   holdFirstPollUntil?: string;
   /** Fail the leading calls per endpoint with HTTP 500; `Infinity` fails every call. */
   outboundFailures?: Partial<Record<OutboundEndpoint, number>>;
+  /** Never answer the leading calls per endpoint; `Infinity` hangs every call. */
+  hangOutbound?: Partial<Record<OutboundEndpoint, number>>;
 }
 
 export async function feishuLoopback(script: Array<{ delayMs: number; event: InboundEvent | InboundEvent[] }>, options: LoopbackOptions = {}): Promise<{ server: Server; url: string; stats(): Promise<FeishuStats>; markCardClosed(path: string): void; timeoutProgress(): Record<string, number> }> {
@@ -94,17 +110,28 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     appends: [] as Array<{ cardId: string; text: string; sequence: number; uuid: string; at: number }>,
     cardCloses: [] as Array<{ cardId: string; text: string; at: number }>,
     failures: [] as Array<{ endpoint: OutboundEndpoint; at: number }>,
+    hangs: [] as Array<{ endpoint: OutboundEndpoint; at: number }>,
     polls: 0,
     pollTimes: [] as number[],
     scripted: false,
   };
   const failureBudget: Record<OutboundEndpoint, number> = { cardOpen: 0, cardAppend: 0, cardClose: 0, sendMessage: 0, ...options.outboundFailures };
+  const hangBudget: Record<OutboundEndpoint, number> = { cardOpen: 0, cardAppend: 0, cardClose: 0, sendMessage: 0, ...options.hangOutbound };
   const failInjected = (endpoint: OutboundEndpoint, response: ServerResponse): boolean => {
     const remaining = failureBudget[endpoint];
     if (!(remaining > 0)) return false;
     if (Number.isFinite(remaining)) failureBudget[endpoint] = remaining - 1;
     state.failures.push({ endpoint, at: Date.now() });
     response.writeHead(500).end();
+    return true;
+  };
+  // A hung call leaves the response open: the real fix is the client-side bound,
+  // so the fake must not paper over it with a timeout of its own.
+  const hangInjected = (endpoint: OutboundEndpoint): boolean => {
+    const remaining = hangBudget[endpoint];
+    if (!(remaining > 0)) return false;
+    if (Number.isFinite(remaining)) hangBudget[endpoint] = remaining - 1;
+    state.hangs.push({ endpoint, at: Date.now() });
     return true;
   };
   const server = createServer((request, response) => {
@@ -165,12 +192,14 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
     request.on("data", (chunk) => body += chunk);
     request.on("end", () => {
       if (request.url === "/send-message") {
+        if (hangInjected("sendMessage")) return;
         if (failInjected("sendMessage", response)) return;
         state.sends.push({ ...(JSON.parse(body) as { chatId: string; text: string }), at: Date.now() });
         response.writeHead(200).end();
       }
       else if (request.url === "/add-reaction") { state.reactions.push({ ...(JSON.parse(body) as { messageId: string; emojiType: string }), at: Date.now() }); response.writeHead(200).end(); }
       else if (request.url === "/open-stream-card") {
+        if (hangInjected("cardOpen")) return;
         if (failInjected("cardOpen", response)) return;
         const { chatId } = JSON.parse(body) as { chatId: string };
         const cardId = `card-${state.opened.length + 1}`;
@@ -188,19 +217,21 @@ export async function feishuLoopback(script: Array<{ delayMs: number; event: Inb
         response.writeHead(200).end();
       }
       else if (request.url === "/append-stream-text") {
+        if (hangInjected("cardAppend")) return;
         if (failInjected("cardAppend", response)) return;
         const { cardId, text, sequence, uuid } = JSON.parse(body) as { cardId: string; text: string; sequence: number; uuid: string };
         state.appends.push({ cardId, text, sequence, uuid, at: Date.now() });
         response.writeHead(200).end();
       }
       else if (request.url === "/close-stream-card") {
+        if (hangInjected("cardClose")) return;
         if (failInjected("cardClose", response)) return;
         const { cardId, text } = JSON.parse(body) as { cardId: string; text: string };
         state.cardCloses.push({ cardId, text, at: Date.now() });
         response.writeHead(200).end();
       }
       else if (request.url === "/disconnect") { const now = Date.now(); const seq = ++state.seq; state.closes.push(now); state.closeSeqs.push(seq); response.writeHead(200).end(); }
-      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, sends: state.sends, reactions: state.reactions, closes: state.closes, failures: state.failures, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
+      else if (request.url === "/stats") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ polls: state.polls, pollTimes: state.pollTimes, pollSeqs: state.pollSeqs, closeSeqs: state.closeSeqs, sends: state.sends, reactions: state.reactions, closes: state.closes, failures: state.failures, hangs: state.hangs, cards: { opened: state.opened, statuses: state.statuses, appends: state.appends, closes: state.cardCloses } })); }
       else response.writeHead(404).end();
     });
   });
@@ -335,6 +366,7 @@ export async function fixture(responder: ModelResponder, script: Array<{ delayMs
   delete baseEnv.FEISHU_REMOTE_LOOPBACK_URL;
   delete baseEnv.FEISHU_REMOTE_APP_ID;
   delete baseEnv.FEISHU_REMOTE_OWNER_OPEN_ID;
+  delete baseEnv.FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS;
   // A real MEM0_API_KEY leaking from the developer's shell would make every CLI
   // subprocess ping the production Mem0 API, adding seconds of jitter to these
   // timing-sensitive PTY tests (and violating the loopback-only test rule).

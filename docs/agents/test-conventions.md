@@ -109,24 +109,37 @@ the property is broken:
   phone-originated turns"): the guard fired, the model answered, the card opened
   and closed, and only the harness was stuck waiting.
 
-## 4. Loopback fake: inject outbound card failures
+## 4. Loopback fake: inject outbound card failures and hangs
 
 The loopback fake Feishu service (`test/helpers/remote-bridge-fixture.ts`) records
-outbound calls and can be told to fail leading calls per card endpoint:
+outbound calls and can be told to fail or hang leading calls per card endpoint:
 
 - `outboundFailures: { cardOpen?, cardAppend?, cardClose?, sendMessage? }` — the
   leading N calls per endpoint answer HTTP 500; `Infinity` fails every call.
-- Injected failures are recorded in `stats.failures` (`{ endpoint, at }`), while
-  `cards.opened/appends/closes` and `sends` keep meaning "wire writes the server
-  actually served" — a failed open leaves `opened` empty, and a failed plain
-  message never appears in `sends`.
+- `hangOutbound: { cardOpen?, cardAppend?, cardClose?, sendMessage? }` — the
+  leading N calls per endpoint never get a response; `Infinity` hangs every call.
+  The fake deliberately supplies no timeout of its own: the hang is only survivable
+  if the client bounds the wait. Recorded in `stats.hangs` (`{ endpoint, at }`),
+  which is the evidence that the hung call actually reached the wire.
+- Both injections fire before the wire write, so `cards.opened/appends/closes` and
+  `sends` keep meaning "wire writes the server actually served" — a failed or hung
+  open leaves `opened` empty, and a failed or hung plain message never appears in
+  `sends`.
 - `markCardClosed(path)` writes the marker once a successful close is served, so a
   test can synchronise on finalization through `waitFile` instead of reaching into
   the fake server's request events (same protocol for every card-delivery test).
 - Real user: the Remote Bridge delivery-fallback tests in
   `remote-bridge-core.test.ts` (card open/append/close failure, bounded close
-  retry, and a plain-message fallback that cannot land), with the state-machine
-  half covered in `stream-card.test.ts`.
+  retry, a plain-message fallback that cannot land, and the hung-close /
+  hung-append / hung-open cases that need the outbound budget), with the
+  state-machine half covered in `stream-card.test.ts` and the budget itself in
+  `remote-gateway.test.ts`.
+- The budget those tests inject is the one shared default
+  (`FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS`), never a millisecond literal at the
+  bridge call site: a smaller value is the only test-side change.
+- `warningThenQuit(warning)` is the family's shared PTY script (handshake → the
+  expected warning → `/remote status` answering → `/quit`): the delivery-failure
+  and hung-outbound tests use it instead of copying those four actions.
 
 ## Diagnosis notes (why these, not other fixes)
 

@@ -98,6 +98,11 @@ FEISHU_REMOTE=1 feishu      # or opt into autostart for a session
   to that group. Other group messages are ignored.
 - `FEISHU_REMOTE_LOOPBACK_URL` selects the local loopback test adapter; it is
   for tests only and is the sole path exercised by CI.
+- `FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS` bounds every outbound call (card open,
+  append, status, close, plain messages, reactions); the default is 15000 ms. A
+  call that does not answer in the budget is treated as a failure and takes the
+  normal fallback path, so a stuck Card Kit request cannot hold the turn's
+  settlement or `/quit`. Tests set a smaller value.
 
 ## Verifying on a real device
 

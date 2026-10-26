@@ -15,6 +15,11 @@ import {
   FeishuGateway,
   REMOTE_APP_ID_ENV,
   REMOTE_OWNER_OPEN_ID_ENV,
+  REMOTE_OUTBOUND_TIMEOUT_ENV,
+  REMOTE_OUTBOUND_TIMEOUT_MS,
+  outboundTimeoutMs,
+  withOutboundBudget,
+  type RemoteGateway,
 } from "../packages/feishu-remote/extensions/remote-gateway.js";
 import { THINKING_STATUS } from "../packages/feishu-remote/extensions/stream-card.js";
 
@@ -122,6 +127,58 @@ test("createGatewayFromEnv selects the production gateway with credentials and s
   const created = createGatewayFromEnv({ FEISHU_REMOTE_APP_SECRET: "secret-not-returned" }, { appId: "cli_app", ownerOpenId: "ou_owner" });
   assert.ok("gateway" in created);
   assert.equal(created.transport, "feishu-sdk");
+});
+
+test("the outbound budget is one shared default with an env override for tests", () => {
+  assert.equal(REMOTE_OUTBOUND_TIMEOUT_MS, 15_000, "a 15s default, the same order as the WS handshake");
+  assert.equal(outboundTimeoutMs({}), REMOTE_OUTBOUND_TIMEOUT_MS);
+  assert.equal(outboundTimeoutMs({ [REMOTE_OUTBOUND_TIMEOUT_ENV]: "250" }), 250);
+  for (const invalid of ["0", "-5", "abc", "1.5", ""]) {
+    assert.equal(outboundTimeoutMs({ [REMOTE_OUTBOUND_TIMEOUT_ENV]: invalid }), REMOTE_OUTBOUND_TIMEOUT_MS, `"${invalid}" must fall back to the shared default`);
+  }
+});
+
+test("withOutboundBudget turns a hung outbound call into a failure at the budget", async () => {
+  const never = () => new Promise<never>(() => {});
+  const stalled: RemoteGateway = {
+    start: async () => {},
+    sendMessage: never,
+    addReaction: never,
+    openStreamCard: never,
+    setStatusLine: never,
+    appendStreamText: never,
+    closeStreamCard: never,
+    close: async () => {},
+  };
+  const bounded = withOutboundBudget(stalled, 50);
+  const calls: Array<[string, () => Promise<unknown>]> = [
+    ["message send", () => bounded.sendMessage("oc_chat", "hi")],
+    ["reaction add", () => bounded.addReaction("om_1", "PARTY")],
+    ["card open", () => bounded.openStreamCard("oc_chat")],
+    ["card status write", () => bounded.setStatusLine("card-1", "working")],
+    ["card append", () => bounded.appendStreamText("card-1", "text", 1, "uuid-1")],
+    ["card close", () => bounded.closeStreamCard("card-1", "final")],
+  ];
+  for (const [label, call] of calls) {
+    await assert.rejects(call(), new RegExp(`Remote bridge ${label} timed out after 50ms`), `${label} must reject at the budget`);
+  }
+});
+
+test("createGatewayFromEnv bounds the loopback transport with the env-configured budget", async () => {
+  // A server that accepts the request and never answers: only the client-side
+  // budget can end the call, so this is red before the fix.
+  const server = createServer(() => { /* hung on purpose */ });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  try {
+    const created = createGatewayFromEnv({ [REMOTE_LOOPBACK_ENV]: `http://127.0.0.1:${address.port}`, [REMOTE_OUTBOUND_TIMEOUT_ENV]: "100" });
+    assert.ok("gateway" in created);
+    await assert.rejects(created.gateway.sendMessage("oc_chat", "hi"), /Remote bridge message send timed out after 100ms/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  }
 });
 
 test("FeishuGateway maps WS events and Card Kit operations without exposing the secret", async () => {

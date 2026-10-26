@@ -11,6 +11,22 @@ export const REMOTE_AUTOSTART_ENV = "FEISHU_REMOTE";
 export const REMOTE_LOOPBACK_ENV = "FEISHU_REMOTE_LOOPBACK_URL";
 export const REMOTE_APP_ID_ENV = "FEISHU_REMOTE_APP_ID";
 export const REMOTE_OWNER_OPEN_ID_ENV = "FEISHU_REMOTE_OWNER_OPEN_ID";
+export const REMOTE_OUTBOUND_TIMEOUT_ENV = "FEISHU_REMOTE_OUTBOUND_TIMEOUT_MS";
+
+/**
+ * Shared bounded wait for every outbound Remote Bridge call (same order as the
+ * WS handshake). The Card Kit SDK has no request timeout, and card finalization
+ * runs inside Pi's settlement, so one hung outbound call would hold the TUI in
+ * Working and block /quit. Overridable via the env var; tests shrink it.
+ */
+export const REMOTE_OUTBOUND_TIMEOUT_MS = 15_000;
+
+export function outboundTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[REMOTE_OUTBOUND_TIMEOUT_ENV];
+  if (!raw || !/^[1-9][0-9]*$/.test(raw)) return REMOTE_OUTBOUND_TIMEOUT_MS;
+  const ms = Number(raw);
+  return Number.isSafeInteger(ms) && ms <= 2_147_483_647 ? ms : REMOTE_OUTBOUND_TIMEOUT_MS;
+}
 
 export interface RemoteInboundEvent {
   ownerOpenId: string;
@@ -511,12 +527,47 @@ function defaultRead(path: string): string | undefined {
 }
 
 export function createGatewayFromEnv(env: NodeJS.ProcessEnv = process.env, credentials?: RemoteCredentials): { gateway: RemoteGateway; transport: string } | { error: string } {
+  const timeoutMs = outboundTimeoutMs(env);
   const loopback = env[REMOTE_LOOPBACK_ENV];
-  if (loopback) return { gateway: new LoopbackGateway(loopback), transport: "loopback" };
+  if (loopback) return { gateway: withOutboundBudget(new LoopbackGateway(loopback), timeoutMs), transport: "loopback" };
   if (!credentials) return { error: "Remote bridge cannot create the Feishu gateway without credentials." };
   const secret = env[REMOTE_SECRET_ENV];
   if (!secret) return { error: `Remote bridge needs ${REMOTE_SECRET_ENV} to use the Feishu SDK gateway.` };
-  return { gateway: new FeishuGateway(credentials, secret), transport: "feishu-sdk" };
+  return { gateway: withOutboundBudget(new FeishuGateway(credentials, secret), timeoutMs), transport: "feishu-sdk" };
+}
+
+/**
+ * Race one outbound call against the budget: a hung request becomes a failure at
+ * the deadline instead of a promise that outlives Pi's settlement. The underlying
+ * request is not aborted (the SDK exposes no signal), so the caller's fallback
+ * delivery is what unblocks the turn.
+ */
+function boundedOutbound<T>(call: () => Promise<T>, label: string, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Remote bridge ${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    timer.unref(); // the budget itself must never hold the process open at /quit
+    call().then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error: unknown) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/** Apply the shared outbound budget to every transport method the bridge awaits.
+ * `start` stays unbounded: the WS handshake has its own timeout, and the lock
+ * wait must survive a window that is still coming up. */
+export function withOutboundBudget(gateway: RemoteGateway, timeoutMs: number): RemoteGateway {
+  const bounded = <T>(label: string, call: () => Promise<T>): Promise<T> => boundedOutbound(call, label, timeoutMs);
+  return {
+    start: (onEvent, onPollError, onPollRecovered) => gateway.start(onEvent, onPollError, onPollRecovered),
+    sendMessage: (chatId, text) => bounded("message send", () => gateway.sendMessage(chatId, text)),
+    addReaction: (messageId, emojiType) => bounded("reaction add", () => gateway.addReaction(messageId, emojiType)),
+    openStreamCard: (chatId, initialText) => bounded("card open", () => gateway.openStreamCard(chatId, initialText)),
+    setStatusLine: (cardId, text) => bounded("card status write", () => gateway.setStatusLine(cardId, text)),
+    appendStreamText: (cardId, text, sequence, uuid) => bounded("card append", () => gateway.appendStreamText(cardId, text, sequence, uuid)),
+    closeStreamCard: (cardId, finalText) => bounded("card close", () => gateway.closeStreamCard(cardId, finalText)),
+    close: () => gateway.close(),
+  };
 }
 
 /** HTTP long-poll adapter for the loopback fake Feishu server (tests only). */
