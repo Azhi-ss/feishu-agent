@@ -53,7 +53,38 @@ args+=(-p "$message")
 
 cd "$workdir" || exit 1
 status=0
-timeout -k 10 "$timeout_s" feishu "${args[@]}" || status=$?
+
+# GNU coreutils `timeout` is not part of macOS. Prefer it when available, use
+# Homebrew's `gtimeout` when installed, and otherwise use Node (already required
+# by Feishu Agent) as a portable watchdog. The fallback maps a watchdog-triggered
+# SIGTERM/SIGKILL to timeout's conventional 124 exit code.
+if command -v timeout >/dev/null 2>&1; then
+  timeout -k 10 "$timeout_s" feishu "${args[@]}" || status=$?
+elif command -v gtimeout >/dev/null 2>&1; then
+  gtimeout -k 10 "$timeout_s" feishu "${args[@]}" || status=$?
+else
+  node - "$timeout_s" feishu "${args[@]}" <<'NODE'
+const { spawn } = require("node:child_process");
+const [timeoutText, command, ...args] = process.argv.slice(2);
+const timeoutMs = Number(timeoutText) * 1000;
+const child = spawn(command, args, { stdio: "inherit" });
+let timedOut = false;
+const timer = setTimeout(() => {
+  timedOut = true;
+  child.kill("SIGTERM");
+  setTimeout(() => child.kill("SIGKILL"), 10_000).unref();
+}, timeoutMs);
+child.once("error", () => {
+  clearTimeout(timer);
+  process.exit(127);
+});
+child.once("exit", (code) => {
+  clearTimeout(timer);
+  process.exit(timedOut ? 124 : (typeof code === "number" ? code : 1));
+});
+NODE
+  status=$?
+fi
 
 if [[ $status -eq 124 ]]; then
   echo "feishu-send: timed out after ${timeout_s}s (partial work may have completed; inspect or continue the Feishu Session reported above)." >&2
