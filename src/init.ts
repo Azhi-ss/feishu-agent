@@ -20,7 +20,7 @@ function validateSystemIdentity(content: string): void {
 }
 
 export function initializeHome(agentHome: string, reset: { system?: boolean } = {}): { created: string[] } {
-  const directories = ["sessions", "skills", "official-skills", ".compat/projects", "packages"];
+  const directories = ["sessions", "skills", "official-skills", ".compat/projects"];
   for (const directory of directories) mkdirSync(join(agentHome, directory), { recursive: true });
   const created: string[] = [];
   const system = join(agentHome, "SYSTEM.md");

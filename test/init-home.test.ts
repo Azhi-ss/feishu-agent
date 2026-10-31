@@ -9,6 +9,8 @@ test("init creates an idempotent private Home without overwriting choices", () =
   const agent = join(mkdtempSync(join(tmpdir(), "feishu-init-")), ".feishu-agent");
   initializeHome(agent);
   assert.equal(existsSync(join(agent, "mem0-config.json")), false);
+  // Feishu Packages live in npm/ and settings.json; an empty packages/ only misleads.
+  assert.equal(existsSync(join(agent, "packages")), false);
   assert.match(readFileSync(join(agent, "SYSTEM.md"), "utf8"), /lark-cli skills read <name>/);
   const custom = "You are Feishu Agent. CUSTOM SYSTEM\n"; writeFileSync(join(agent, "SYSTEM.md"), custom);
   const settings = '{"defaultProvider":"fake","defaultModel":"one"}\n'; writeFileSync(join(agent, "settings.json"), settings);
