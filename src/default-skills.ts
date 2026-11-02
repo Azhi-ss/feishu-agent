@@ -1494,538 +1494,2147 @@ C 类：GitHub Issues、社区帖子、用户反馈。
 
 const VOLC_DEVINSTANCE = `---
 name: volc-devinstance
-description: "火山引擎机器学习平台（veMLP）开发机管理与算力作业探针。支持快速查询开发机状态、机内正在运行的计算任务与收敛进度、安全开机、以及带作业防断保护的关机操作。当用户询问开发机状态、查看计算作业进度、关闭/开启开发机时使用。"
+description: 查询和管理火山 veMLP 开发机，检查 SSH、机内作业、空闲状态、镜像与闲时关机倒计时，也用于开发机共享存储上的 Pi。
 ---
 
-# 火山引擎开发机控制与算力作业探针 (Volcengine DevInstance & Workload Probe)
+# 火山开发机
 
-本 Skill 用于管理火山引擎机器学习平台开发机（DevInstance）生命周期，具备**双层真值感知**、**作业防断拦截**与**默认安全防护（Fail-Closed）**。
+使用同目录的 \`devctl\`（可将该目录加入 PATH）。按名称或 ID 指定实例；名称有歧义时使用完整名称或 ID。
 
-## 核心机制：双层状态判定
+| 用户要做什么 | 入口 |
+|---|---|
+| 查台数、开机状态、规格、镜像或端口 | \`devctl list\`、\`devctl state [名称]\`、\`devctl status <名称> --no-probe\` |
+| 查任务、服务、会话或判断能不能关机 | 单机用 \`devctl probe <名称>\`，批量用 \`devctl list --probe\` |
+| 登录或排查 SSH | 配置了 SSH 别名时用 \`ssh <别名>\`。其他实例用 \`devctl connect <名称>\` 查地址 |
+| 验证迁移或凭据 | 运行 \`devctl list --json\`，再选一台做 \`status --no-probe --json\`。分别报告云端查询、SSH 和保活的实测结果 |
+| 查或更换镜像、导出或创建实例 | 先用 \`devctl conf <名称>\` 导出模板，再按[操作参考](references/operations.md)预演 |
 
-1. **第一层（云端服务器级别）**：通过火山 OpenAPI 快速查询开发机硬件是 \`Running\` 还是 \`Stopped\`。
-2. **第二层（机内计算进程级别）**：当机器处于 \`Running\` 时，自动通过 SSH 探针进入内部，探测：
-   - 是否有活跃的 \`vasp_*\`、\`python train\`、\`torch\`、\`gpumd\` 等高密集计算进程；
-   - 当前正在执行的后台 tmux 任务名称与对应的工作目录；
-   - 提取最新一行收敛日志（\`OSZICAR\`、\`vasp.log\`、\`train.log\`、\`nohup.out\`）；
-   - 当前 CPU 负载（Load Average）。
+## SSH 与作业判断
 
-## 依赖说明
+在 SSH 别名中配置 \`IdentityFile\`、\`HostKeyAlias volc-<实例ID>\` 和 \`ProxyCommand <devctl绝对路径> ssh-proxy <实例ID>\`。每次连接按实例 ID 查询公网地址和端口。探针与 \`doctor\` 也按实例 ID 记录主机身份；遇到主机密钥变化先核实实例。
 
-- 需要安装火山引擎机器学习平台 CLI \`mlp\`（置于 PATH 中或 \`~/.volc/bin/mlp\`，亦可通过环境变量 \`VOLC_MLP_BIN\` 指定）。
-- SSH 登录凭证优先读取 \`~/.ssh/config\`，亦可通过环境变量 \`VOLC_SSH_KEY\` 自定义。
+已识别作业或 GPU 使用率超过 5% 判为计算中；监听服务和交互会话分别标记。探针失败、关键数据缺失，或未识别进程合计占用至少半个 CPU 核（50%），均为待确认。空闲判定来自一次采样，关机前查看当次结果。
 
-## 常用命令
+## 改变实例状态
 
-所有操作通过底层确定性脚本执行：\`~/.feishu-agent/skills/volc-devinstance/devctl <action> [target]\`
+- \`start\`、\`stop\`、\`reboot\` 会实际执行。关停或重启前报告作业和服务；用户明确要求跳过保护时才用 \`--force\`。下发后用 \`state\` 复核，区分已受理和已完成。
+- \`stop-idle\` 默认预演。先给出名单，确认后再加 \`--apply\`。\`--force-sessions\` 同时允许关闭有会话和有常驻服务的机器；计算中和待确认的机器仍跳过。
+- \`create\` 和 \`set-image\` 默认预演，只有 \`--apply\` 才提交。创建预演检查 YAML 和重名，字段和值由服务端在提交时校验。
+- 连接信息默认隐藏 WebIDE 密码。确需完整地址时用 \`connect --show-secret\` 或 \`status --show-secret\`，避免把凭据写入聊天或日志。
 
-1. **查看所有个人开发机列表**：
-   \`\`\`bash
-   ~/.feishu-agent/skills/volc-devinstance/devctl list
-   \`\`\`
+## 闲时关机与共享环境
 
-2. **查询开发机详情与机内计算进度**（最常用）：
-   \`\`\`bash
-   ~/.feishu-agent/skills/volc-devinstance/devctl status <instance-name-or-id>
-   \`\`\`
-   - 若机器空闲，提示可以安全关机以节省算力费用；
-   - 若有算例在跑，输出算例名称、目录、收敛步日志并发出不要关机的警告。
+同目录的 \`keepalive\` 接受实例 **ID**。\`--check <ID>\` 只查一次状态和倒计时；\`--once <ID>\` 做一次保活，必要时取消闲时关机。持续保活用 \`keepalive <ID> [间隔秒数]\`，应在其他机器上运行。用户要求保护具体任务时再启用，并约定停止时间。
 
-3. **启动开发机**：
-   \`\`\`bash
-   ~/.feishu-agent/skills/volc-devinstance/devctl start <instance-name-or-id>
-   \`\`\`
-
-4. **安全关机（带防误杀拦截保护）**：
-   \`\`\`bash
-   ~/.feishu-agent/skills/volc-devinstance/devctl stop <instance-name-or-id>
-   \`\`\`
-   - **防误杀机制**：
-     1. 若检测到机内有正在运行的计算作业（训练/模拟/高负载），**直接拦截关机**；
-     2. 若网络抖动导致 SSH 探针无法连接，默认安全（Fail-Closed）**强行拦截关机**，防止盲目杀掉任务；
-     3. 若用户确定要强制关机，必须显式附加 \`--force\`：\`devctl stop <target> --force\`。
-
-## 对抗安全规则（Agent 交互规范）
-
-- **多重重名拦截**：若输入的简写匹配到多台机器，工具会拒绝执行并输出候选列表，Agent 必须引导用户明确指定全名或 ID。
-- **凭证安全**：绝不在对话和日志中回显任何 AK/SK 或 Token。
-- **关机确认**：当用户在飞书请求关机时，Agent 必须先执行 \`status\` 汇报当前是否有任务在跑，并在确认安全后再关机。
+共享盘路径、镜像重建后的注意事项和 Pi 入口见[共享存储与 Pi](references/shared-pi.md)。排查特定队列的回收原因或核对旧版演练时，再读[历史记录](references/field-notes.md)。
 `;
 
-const VOLC_DEVCTL = `#!/usr/bin/env python3
+const VOLC_DEVINSTANCE_FILES: Record<string, string> = {
+  "devctl": `#!/usr/bin/env python3
 """
-devctl - Volcengine ML Platform DevInstance CLI Helper
-Hardened with:
- 1. Fail-closed shutdown protection (no kill if probe unreachable unless --force)
- 2. Multi-match collision disambiguation
- 3. Generalized task/load detection (VASP, Python/PyTorch, GPUMD)
- 4. Bounded timeouts & zero-hanging
- 5. Portable path resolution (env vars, PATH, ~/.volc, ~/.ssh)
-"""
-import sys
-import json
-import subprocess
-import os
-import shutil
-import time
+devctl - 火山引擎机器学习平台（veMLP）开发机控制台 + 机内算力作业探针
 
-def find_mlp_bin():
-    """Resolve the mlp CLI binary portably:
-    1. VOLC_MLP_BIN environment variable
-    2. shutil.which("mlp") in PATH
-    3. Common user install path: ~/.volc/bin/mlp
-    4. System-wide / user-local paths: ~/bin/mlp, ~/.local/bin/mlp, /usr/local/bin/mlp
-    """
-    env_bin = os.environ.get("VOLC_MLP_BIN")
-    if env_bin and os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
-        return env_bin
-    which_bin = shutil.which("mlp")
-    if which_bin:
-        return which_bin
-    candidates = [
-        os.path.expanduser("~/.volc/bin/mlp"),
-        os.path.expanduser("~/bin/mlp"),
-        os.path.expanduser("~/.local/bin/mlp"),
-        "/usr/local/bin/mlp",
-    ]
-    for c in candidates:
-        if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
+v2 改整要点：
+ 1. 机内判定改为真采样：读 /proc 两次算 CPU 占用，不再用 pgrep 猜进程名；
+    平台自身进程（supervisord / code-server / nvitop / mlplatform）不再被误判成计算作业。
+ 2. 判定分档：busy（有计算作业）/ session（有交互式 agent 会话）/ idle（空闲），
+    只有 idle 才允许被 stop-idle 批量关机；探针连不上按 fail-closed 一律跳过。
+ 3. 新增子命令：list --probe（并行探针一次看全部）、probe、connect、stop-idle、doctor。
+ 4. mlp 二进制按“实跑 --version 成功”验证后再采用，不再只看存在性与可执行位。
+
+v3 改整要点（镜像与创建维度）：
+ 5. 只读展示补齐镜像维度：list 增加「镜像」列，status 增加 镜像 / 云盘 / 共享存储 / 端口 /
+    自动关机与预约计划；list --json、status --json 同步输出结构化字段。
+ 6. WebIDE 公网地址自带 password 查询串，默认脱敏（password/token 一律 ****），
+    需要原文时显式加 --show-secret。
+ 7. 新增 conf：把线上实例导出成 create/update 用的 YAML 模板（本地生成，不调写接口）。
+ 8. create / set-image 默认预演，加 --apply 才提交。set-image 要求实例已关机（--force 可跳过状态检查）。
+    reboot 对运行中的实例通过安全检查后立即下发重启；--force 跳过机内检查。
+ 9. 新增 save-image：镜像构建是控制台专属能力，这里只报权限状态并给出控制台地址，不做写操作。
+10. 镜像仓库凭据（VOLC_REGISTRY_USER / VOLC_REGISTRY_TOKEN 或 ~/.volc/registry-cred）只在
+    doctor 里检查存在性，任何命令都不回显口令。
+
+v4 改整要点（2026-10-28，被闲时关机坑了五次之后）：
+11. 判定增「有服务」档：读 /proc/net/tcp{,6} 的 LISTEN 端口并反查持有进程（不依赖 ss/netstat），
+    排除平台自带监听与 22/9001。常驻服务 CPU 常 <1%、GPU 0%，旧版会把它们当空闲而误关。
+    stop / stop-idle 对「有服务」默认拦截；--force-sessions 可覆盖。
+12. status 展示「上次停机时间」与「本次已运行多久」；运行不足 6 小时会提示去控制台查闲时关机策略。
+    （autoShutdownType 不在 API 返回字段里，只能控制台看，故不再写一行永远为空的「计划关机」。）
+13. 新增 state：纯 API 快查 Running/Stopped，<1s、不碰 SSH。SSH 连不上时先跑它，
+    避免把「机器被关机」误判成「网关限流」而白白退避。
+"""
+import argparse
+import configparser
+import math
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor
+
+def disp_width(text):
+    """终端显示宽度：CJK 全角按 2 列算，避免中文表格错位。"""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in str(text))
+
+
+def pad(text, width):
+    text = str(text)
+    return text + " " * max(0, width - disp_width(text))
+
+
+def clip(text, width):
+    """按显示宽度截断，超出加省略号；给表格里的长摘要用。"""
+    text = str(text)
+    if disp_width(text) <= width:
+        return text
+    out = ""
+    used = 0
+    for ch in text:
+        w = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if used + w > width - 1:
+            break
+        out += ch
+        used += w
+    return out + "…"
+
+
+SSH_TIMEOUT = int(os.environ.get("VOLC_SSH_TIMEOUT", "8"))
+PROBE_PARALLEL = int(os.environ.get("VOLC_PROBE_PARALLEL", "6"))
+
+# 火山 CLI 使用 Mac 原生 ve，旧 WSL profile 也供 keepalive 使用。
+def ve_env():
+    env = os.environ.copy()
+    path = os.path.expanduser("~/.volc/credentials")
+    if os.path.isfile(path):
+        cfg = configparser.RawConfigParser()
+        with open(path, encoding="utf-8") as stream:
+            cfg.read_file(stream)
+        profile = cfg["default"]
+        env["VOLCENGINE_ACCESS_KEY"] = profile["access_key_id"]
+        env["VOLCENGINE_SECRET_KEY"] = profile["secret_access_key"]
+        env.pop("VOLCENGINE_SESSION_TOKEN", None)
+        token = profile.get("session_token") or profile.get("security_token")
+        if token:
+            env["VOLCENGINE_SESSION_TOKEN"] = token
+    return env
+
+
+def run_ve(action, body, timeout=90):
+    binary = shutil.which(os.environ.get("VOLC_VE_BIN", "ve"))
+    if not binary:
+        return None, "未找到 ve，请安装 @volcengine/cli 或设置 VOLC_VE_BIN。"
+    cmd = [binary, "mlplatform20240701", action, "--region", conf_region(),
+           "--output", "json", "--body", json.dumps(body, ensure_ascii=False)]
+    try:
+        env = ve_env()
+        if os.path.isfile(os.path.expanduser("~/.volc/credentials")):
+            config = os.path.expanduser("~/.volcengine/config.json")
+            native = {}
+            if os.path.isfile(config):
+                with open(config, encoding="utf-8") as stream:
+                    native = json.loads(stream.read() or "{}")
+            if "sk-devinstance" in (native.get("profiles") or {}):
+                cmd += ["--profile", "sk-devinstance"]
+            elif native.get("current") or env.get("VOLCENGINE_PROFILE") or env.get("VOLCSTACK_PROFILE"):
+                return None, "ve 存在其他 profile，请先配置 sk-devinstance，以免使用错误账号。"
+        res = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None, f"{action} 超时（{timeout}s）"
+    except (OSError, ValueError, KeyError, configparser.Error) as exc:
+        return None, f"读取凭据或启动 ve 失败（{type(exc).__name__}）"
+    try:
+        data = json.loads(res.stdout)
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        return None, f"{action} 返回格式异常"
+    error = (data.get("ResponseMetadata") or {}).get("Error") or {}
+    if res.returncode or error:
+        diagnostic = (res.stderr or res.stdout).lower()
+        if "credentials not configured" in diagnostic or "access key" in diagnostic and "not set" in diagnostic:
+            return None, "缺少火山凭据，请迁移 ~/.volc/credentials 或配置 ve。"
+        return None, f"{action} 失败（{error.get('Code') or 've exit ' + str(res.returncode)}）"
+    if "Result" not in data:
+        if action in {"StopDevInstance", "StartDevInstance", "RebootDevInstance", "RebuildDevInstance"} and "ResponseMetadata" in data:
+            return {}, None
+        return None, f"{action} 响应缺少 Result"
+    return data["Result"], None
+
+
+PAGE_SIZE = 100
+
+
+def get_my_instances():
+    items = []
+    seen = set()
+    while True:
+        result, err = run_ve("ListDevInstances", {
+            "Relationship": "Created", "PageNumber": 1 + len(items) // PAGE_SIZE, "PageSize": PAGE_SIZE,
+        })
+        if err:
+            return [], err
+        if not isinstance(result, dict):
+            return [], "ListDevInstances 返回格式异常"
+        batch = result.get("List", result.get("Items", result.get("DevInstances")))
+        if not isinstance(batch, list):
+            return [], "ListDevInstances 响应缺少实例列表"
+        for instance in batch:
+            iid = instance.get("Id") if isinstance(instance, dict) else None
+            if not iid or iid in seen:
+                return [], "开发机分页返回无效或重复 ID，已停止"
+            seen.add(iid)
+        items.extend(batch)
+        if len(batch) < PAGE_SIZE:
+            return items, None
+
+
+def resolve_instance(identifier):
+    items, err = get_my_instances()
+    if err:
+        return None, [], err
+    for it in items:
+        if it.get("Id") == identifier:
+            return it, [], None
+    exact = [it for it in items if it.get("Name") == identifier]
+    if len(exact) == 1:
+        return exact[0], [], None
+    if len(exact) > 1:
+        return None, exact, None
+    fuzzy = [it for it in items if identifier.lower() in (it.get("Name") or "").lower()]
+    if len(fuzzy) == 1:
+        return fuzzy[0], [], None
+    if len(fuzzy) > 1:
+        return None, fuzzy, None
+    return None, [], None
+
+
+def state_of(it):
+    return (it.get("Status") or {}).get("State", "-")
+
+
+def flavor_of(it):
+    return (it.get("ResourceClaim") or {}).get("InstanceTypeId", "-")
+
+
+def ssh_endpoint(it):
+    """返回 (ip, port)；只在 SSH 端口 Available 时给出。"""
+    for p in it.get("Ports") or []:
+        if p.get("Name") == "SSH连接" and (p.get("Status") or {}).get("State") == "Available":
+            if p.get("ExternalIp") and p.get("ExternalPort"):
+                return p["ExternalIp"], p["ExternalPort"]
+    return None, None
+
+
+def webide_url(it):
+    for p in it.get("Ports") or []:
+        if p.get("Name") == "WebIDE" and p.get("APIGPublicUrl"):
+            return p["APIGPublicUrl"]
     return None
 
-def resolve_ssh_key(name):
-    """Resolve identity file from ~/.ssh/config or conventional paths.
-    Prioritizes VOLC_SSH_KEY, ~/.ssh/config Host entry, then conventional candidate keys.
-    """
+
+# --------------------------------------------------- 镜像 / 存储 / 端口 / 控制台
+
+SECRET_RE = re.compile(r"((?:password|token|secret|access_key|signature)=)[^&\\s\\"']+", re.I)
+
+
+def redact(text):
+    """抹掉 URL/文本里的口令类查询串；WebIDE 的 APIG 地址自带 password=…，默认不外显。"""
+    if not text:
+        return text
+    return SECRET_RE.sub(r"\\1****", str(text))
+
+
+def conf_region():
+    """从 ~/.volc/config 读 region（默认 cn-beijing）。"""
+    path = os.path.expanduser("~/.volc/config")
+    region = "cn-beijing"
+    try:
+        cur = None
+        for raw in open(path, errors="ignore"):
+            line = raw.strip()
+            if line.startswith("["):
+                cur = line.strip("[]")
+                continue
+            if cur == "default" and line.lower().startswith("region"):
+                region = line.split("=", 1)[1].strip() or region
+    except Exception:
+        pass
+    return region
+
+
+def short_age(iso):
+    """ISO 时间 → 「多久之前」；读不出返回 None。"""
+    if not iso:
+        return None
+    try:
+        from datetime import datetime, timezone
+        t = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        delta = (datetime.now(timezone.utc) - t).total_seconds()
+    except Exception:
+        return None
+    if delta < 0:
+        delta = 0
+    if delta < 3600:
+        return "%.0f 分钟前" % (delta / 60)
+    if delta < 86400:
+        return "%.1f 小时前" % (delta / 3600)
+    return "%.1f 天前" % (delta / 86400)
+
+
+def _uptime_hours(iso):
+    """从 ISO 时间算已运行小时数；读不出返回 None。"""
+    if not iso:
+        return None
+    try:
+        from datetime import datetime, timezone
+        t = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - t).total_seconds() / 3600
+    except Exception:
+        return None
+
+
+def console_url(page="devinstance", iid=None):
+    """控制台地址：镜像中心、保存镜像等控制台专属能力只能靠它兜底。"""
+    base = f"https://console.volcengine.com/ml-platform/region:ml-platform+{conf_region()}/{page}"
+    if iid:
+        base += f"?id={iid}"
+    return base
+
+
+def image_of(it):
+    """返回 (类型, 镜像地址)。实测 Type 取值有 Custom / VolcEngine 等。"""
+    img = it.get("Image") or {}
+    return (img.get("Type") or "-"), (img.get("Url") or img.get("ImageId") or "-")
+
+
+def image_short(it, width=52):
+    t, url = image_of(it)
+    return clip(f"{t}: {url}", width)
+
+
+def volume_of(it):
+    v = it.get("Volume") or {}
+    return v.get("VolumeTypeId") or "-", v.get("Size"), v.get("Id") or ""
+
+
+def storage_desc(s):
+    """共享存储一行摘要：类型 · 挂载点 · 读写 · 实例/桶标识。"""
+    t = s.get("Type") or "-"
+    parts = [str(t), str(s.get("MountPath") or "-"), "只读" if s.get("ReadOnly") else "读写"]
+    cfg = s.get("Config")
+    node = None
+    if isinstance(cfg, dict):
+        for val in cfg.values():
+            if isinstance(val, dict):
+                node = val
+                break
+    if isinstance(node, dict):
+        ident = node.get("Id") or node.get("Bucket") or node.get("FsName")
+        if ident:
+            parts.append(f"id={ident}")
+        if node.get("SubPath"):
+            parts.append(f"sub={node['SubPath']}")
+        if node.get("HostPath"):
+            parts.append(f"host={node['HostPath']}")
+    return " · ".join(parts)
+
+
+def storages_of(it):
+    return [{"desc": storage_desc(s), "type": s.get("Type"), "mount": s.get("MountPath"),
+             "readonly": bool(s.get("ReadOnly")), "config": s.get("Config")}
+            for s in (it.get("Storages") or [])]
+
+
+def port_rows(it):
+    """端口行：类型 / 名称 / 容器端口 / 公网开关 / 公网地址（已脱敏）。"""
+    rows = []
+    for p in it.get("Ports") or []:
+        ext = f"{p.get('ExternalIp')}:{p.get('ExternalPort')}" if p.get("ExternalIp") else "-"
+        rows.append({
+            "type": p.get("Type") or "-",
+            "name": p.get("Name") or "-",
+            "eni": p.get("EniPort"),
+            "public": bool(p.get("EnablePublicNetworkAccess")),
+            "external": ext,
+            "state": (p.get("Status") or {}).get("State") or "-",
+            "url": redact(p.get("APIGPublicUrl")),
+        })
+    return rows
+
+
+def describe_ports(it, indent="  "):
+    rows = port_rows(it)
+    if not rows:
+        return
+    print(f"{indent}端口:")
+    for r in rows:
+        flag = "公网" if r["public"] else "仅私网"
+        line = f"{indent}  · {r['name']} ({r['type']}) 容器端口 {r['eni']} · {flag} · {r['state']}"
+        if r["external"] != "-":
+            line += f" · {r['external']}"
+        print(line)
+        if r["url"] and r["name"] != "WebIDE":
+            print(f"{indent}      {r['url']}")
+
+
+# ------------------------------------------------------------------ YAML 输出
+def _yaml_scalar(v):
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    s = str(v)
+    if s == "" or re.search(r"[:#{}\\[\\],&*!|>'\\"%@\`\\n]", s) or s != s.strip() \\
+            or s.lower() in ("true", "false", "null", "yes", "no", "on", "off", "~"):
+        return json.dumps(s, ensure_ascii=False)
+    return s
+
+
+def dump_yaml(obj, indent=0):
+    """手写 YAML 输出，避免给 devctl 增加 PyYAML 依赖。"""
+    pad = "  " * indent
+    out = []
+    if isinstance(obj, dict):
+        if not obj:
+            return pad + "{}\\n"
+        for k, v in obj.items():
+            if isinstance(v, (dict, list)) and v:
+                out.append(f"{pad}{k}:\\n")
+                out.append(dump_yaml(v, indent + 1))
+            else:
+                out.append(f"{pad}{k}: {_yaml_scalar(v)}\\n")
+    elif isinstance(obj, list):
+        if not obj:
+            return pad + "[]\\n"
+        for item in obj:
+            if isinstance(item, dict):
+                first = True
+                for k, v in item.items():
+                    prefix = f"{pad}- " if first else f"{pad}  "
+                    first = False
+                    if isinstance(v, (dict, list)) and v:
+                        out.append(f"{prefix}{k}:\\n")
+                        out.append(dump_yaml(v, indent + 2))
+                    else:
+                        out.append(f"{prefix}{k}: {_yaml_scalar(v)}\\n")
+            elif isinstance(item, list):
+                out.append(f"{pad}-\\n")
+                out.append(dump_yaml(item, indent + 1))
+            else:
+                out.append(f"{pad}- {_yaml_scalar(item)}\\n")
+    else:
+        return pad + _yaml_scalar(obj) + "\\n"
+    return "".join(out)
+
+
+# 从线上实例导出 create/update 模板时只保留可写字段，读状态字段（Status/时间戳/公网地址等）不带。
+def conf_template(it, name_prefix=False):
+    conf = {}
+    conf["Name"] = it.get("Name") or ""
+    if it.get("Description"):
+        conf["Description"] = it["Description"]
+    t, url = image_of(it)
+    if url != "-":
+        conf["Image"] = {"Type": t, "Url": url}
+    else:
+        conf["Image"] = {"Type": t}
+    if it.get("ResourceQueueId"):
+        conf["ResourceQueueId"] = it["ResourceQueueId"]
+    if it.get("ResourceReservationPlanId"):
+        conf["ResourceReservationPlanId"] = it["ResourceReservationPlanId"]
+    vt, size, _vid = volume_of(it)
+    conf["Volume"] = {"VolumeTypeId": vt}
+    if size:
+        conf["Volume"]["Size"] = size
+    claim = it.get("ResourceClaim") or {}
+    if claim.get("InstanceTypeId"):
+        spec = {"InstanceTypeId": claim["InstanceTypeId"]}
+        if claim.get("Type"):
+            spec["Type"] = claim["Type"]
+        if claim.get("ZoneId"):
+            spec["ZoneId"] = claim["ZoneId"]
+        conf["ResourceClaim"] = spec
+    if it.get("SshPublicKey"):
+        conf["SshPublicKey"] = it["SshPublicKey"]
+    if it.get("DefaultFolder"):
+        conf["DefaultFolder"] = it["DefaultFolder"]
+    if it.get("NumaAffinity") and it["NumaAffinity"] != "None":
+        conf["NumaAffinity"] = it["NumaAffinity"]
+    if it.get("Storages"):
+        conf["Storages"] = it["Storages"]
+    # 创建模板省略详情中的 ZoneID 和 ProjectName。
+    return conf
+
+
+# ------------------------------------------------------------- SSH key 解析
+
+def ssh_config_hosts():
+    """解析 ~/.ssh/config 的 Host 别名 → {alias: {identityfile, hostname, port}}"""
+    hosts = {}
+    path = os.path.expanduser("~/.ssh/config")
+    if not os.path.exists(path):
+        return hosts
+    current = []
+    try:
+        with open(path, "r", errors="ignore") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split(None, 1)
+                if len(parts) < 2:
+                    continue
+                key, value = parts[0].lower(), parts[1].strip()
+                if key == "host":
+                    current = [h.strip() for h in value.split() if h.strip()]
+                    for h in current:
+                        hosts.setdefault(h.lower(), {})
+                elif current:
+                    for h in current:
+                        hosts[h.lower()][key] = value
+    except Exception:
+        pass
+    return hosts
+
+
+def key_blobs(path):
+    """返回私钥/公钥文件对应的公钥 base64 blob（用于反查私钥）。"""
+    blobs = set()
+    try:
+        if path.endswith(".pub"):
+            parts = open(path, "r", errors="ignore").read().split()
+            if len(parts) >= 2:
+                blobs.add(parts[1])
+        else:
+            res = subprocess.run(["ssh-keygen", "-y", "-f", path], capture_output=True,
+                                 text=True, timeout=10)
+            parts = res.stdout.split()
+            if len(parts) >= 2:
+                blobs.add(parts[1])
+    except Exception:
+        pass
+    return blobs
+
+
+def resolve_ssh_key(name, instance=None):
+    """按环境变量 → ssh config → 实例公钥注释 → 约定路径 → 公钥指纹反查的顺序找私钥。"""
+    name = name or ""
     env_key = os.environ.get("VOLC_SSH_KEY")
     if env_key:
         expanded = os.path.expanduser(env_key)
         if os.path.exists(expanded):
             return expanded
 
-    config_path = os.path.expanduser("~/.ssh/config")
-    if os.path.exists(config_path):
-        current_host = None
-        try:
-            with open(config_path, "r", errors="ignore") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.lower().startswith("host "):
-                        parts = line.split()
-                        if len(parts) > 1:
-                            current_host = parts[1].strip().lower()
-                    elif current_host and current_host == name.lower() and line.lower().startswith("identityfile"):
-                        parts = line.split()
-                        if len(parts) > 1:
-                            key = os.path.expanduser(parts[1].strip())
-                            if os.path.exists(key):
-                                return key
-        except Exception:
-            pass
+    entry = ssh_config_hosts().get(name.lower(), {})
+    if entry.get("identityfile"):
+        candidate = os.path.expanduser(entry["identityfile"])
+        if os.path.exists(candidate):
+            return candidate
 
-    candidates = [
-        f"~/.ssh/keys/{name}",
-        f"~/.ssh/keys/{name.lower()}",
-        f"~/.ssh/{name}",
-        f"~/.ssh/{name.lower()}",
-        "~/.ssh/vasp",
-        "~/.ssh/id_ed25519",
-        "~/.ssh/id_rsa",
-    ]
-    for c in candidates:
-        p = os.path.expanduser(c)
-        if os.path.exists(p):
-            return p
-    return os.path.expanduser("~/.ssh/id_rsa")
-
-def run_mlp(*args):
-    mlp_bin = find_mlp_bin()
-    if not mlp_bin:
-        return None, (
-            "未找到火山引擎 mlp CLI。请先安装 mlp（可置于 ~/.volc/bin/mlp 或加入 PATH），"
-            "或设置环境变量 VOLC_MLP_BIN 指向可执行文件。"
-        )
-    cmd = [mlp_bin, "devinstance"] + list(args)
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        return None, res.stderr.strip() or res.stdout.strip()
-    return res.stdout.strip(), None
-
-def get_my_instances():
-    out, err = run_mlp("list", "--mine", "--output", "json")
-    if err:
-        return [], err
-    if not out:
-        return [], None
-    try:
-        return json.loads(out), None
-    except Exception as e:
-        return [], str(e)
-
-def resolve_instance(identifier):
-    items, err = get_my_instances()
-    if err:
-        return None, [], err
-    # 1. Exact ID match
-    for it in items:
-        if it.get("Id") == identifier:
-            return it, [], None
-    # 2. Exact Name match
-    exact_names = [it for it in items if it.get("Name") == identifier]
-    if len(exact_names) == 1:
-        return exact_names[0], [], None
-    elif len(exact_names) > 1:
-        return None, exact_names, None
-    
-    # 3. Fuzzy Name match (case-insensitive)
-    fuzzy = [it for it in items if identifier.lower() in it.get("Name", "").lower()]
-    if len(fuzzy) == 1:
-        return fuzzy[0], [], None
-    elif len(fuzzy) > 1:
-        return None, fuzzy, None
-        
-    return None, [], None
-
-def probe_instance_workload(ip, port, key_path=None):
-    """Probe inside running instance via SSH with fail-closed state tracking."""
-    ssh_user = os.environ.get("VOLC_SSH_USER", "root")
-    remote_script = r'''
-python3 - << 'INNER'
-import subprocess, os, json
-
-# 1. Tmux sessions
-sessions = []
-try:
-    res = subprocess.run(["tmux", "ls"], capture_output=True, text=True)
-    if res.returncode == 0:
-        for line in res.stdout.strip().splitlines():
-            if line:
-                sessions.append(line.split(":")[0].strip())
-except Exception:
-    pass
-
-# 2. VASP process count
-try:
-    res = subprocess.run(["pgrep", "-c", "vasp_"], capture_output=True, text=True)
-    vasp_ranks = int(res.stdout.strip())
-except Exception:
-    vasp_ranks = 0
-
-# 3. General compute processes (python/train/gpumd)
-general_jobs = []
-try:
-    res = subprocess.run(["pgrep", "-fa", "gpumd|python.*train|torch"], capture_output=True, text=True)
-    general_jobs = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
-except Exception:
-    pass
-
-# 4. Detailed task progress
-tasks = []
-for s in sessions:
-    res = subprocess.run(["tmux", "list-panes", "-t", s, "-F", "#{pane_current_path}"], capture_output=True, text=True)
-    cwd = res.stdout.strip().splitlines()[0] if res.stdout.strip() else "未知目录"
-    
-    recent_info = ""
-    for log_name in ("OSZICAR", "vasp.log", "train.log", "nohup.out"):
-        target_log = os.path.join(cwd, log_name)
-        if os.path.isfile(target_log):
+    candidates = []
+    ssh_dir = os.path.expanduser("~/.ssh")
+    pubs = instance.get("SshPublicKey") if instance else None
+    if pubs:
+        fields = pubs.split()
+        pub_blob = fields[1] if len(fields) >= 2 else ""
+        comment = fields[-1] if len(fields) >= 3 else ""
+        if comment and "@" not in comment:
+            candidates += [os.path.join(ssh_dir, comment), os.path.join(ssh_dir, comment.lower())]
+        if pub_blob:
             try:
-                with open(target_log, "r", errors="ignore") as f:
-                    lines = f.readlines()
+                for fn in sorted(os.listdir(ssh_dir)):
+                    if fn.endswith(".pub"):
+                        continue
+                    path = os.path.join(ssh_dir, fn)
+                    if os.path.isfile(path) and pub_blob in key_blobs(path):
+                        candidates.append(path)
+            except Exception:
+                pass
+    if name:
+        candidates += [os.path.join(ssh_dir, name), os.path.join(ssh_dir, name.lower()),
+                       os.path.join(ssh_dir, "keys", name), os.path.join(ssh_dir, "keys", name.lower())]
+    candidates += [os.path.expanduser("~/.ssh/id_ed25519"), os.path.expanduser("~/.ssh/id_rsa")]
+    for cand in candidates:
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+# -------------------------------------------------------------- 远端探针脚本
+
+PROBE_SOURCE = r'''
+import json, os, re, subprocess, time
+
+PLATFORM_HINTS = (
+    "supervisord", "supervisor-listener", "/mlplatform/", "code-server",
+    "nvitop", "sshd:", "/update_authorized_keys", "inotifywait",
+    "format_sshd_log", "start_sshd.sh",
+)
+AGENT_EXECS = {"pi", "claude", "codex", "opencode", "cursor-agent", "aider", "gemini"}
+JOB_EXECS = {
+    "vasp_std", "vasp_gam", "vasp_ncl", "vasp", "mpirun", "mpiexec", "srun",
+    "gpumd", "lmp", "lmp_mpi", "lmp_serial", "lammps", "cp2k", "cp2k.popt",
+    "gmx", "gmx_mpi", "gromacs", "orca", "namd2", "abacus", "siesta",
+    "pw.x", "cp.x", "dp_train", "dpgen", "torchrun", "deepspeed",
+}
+JOB_ARG_HINTS = ("train.py", "torch.distributed", "dp_train", "dpgen", "deepmd",
+                 "finetune", "--train", "vasp_", "lammps", "gpumd")
+
+# 常驻服务发现：listen 状态的 TCP 端口 → 反查持有进程。
+# 背景（2026-10-27/28 实测）：知识/MCP/Web 六个常驻服务 CPU 约 0.1%、GPU 0%，
+# 被判成 idle 后机器反复被回收五次。这些进程「没有计算、但一关就全没有」，
+# 必须单独成档，不能与真正空闲混淆。
+SERVE_PORTS_SKIP = {22, 9001}  # sshd / supervisord 自身
+
+
+def sh(cmd, timeout=15):
+    try:
+        r = subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True, timeout=timeout)
+        return r.stdout
+    except Exception:
+        return ""
+
+
+def _read_proc(pid):
+    try:
+        with open("/proc/%s/stat" % pid, "rb") as f:
+            raw = f.read()
+        with open("/proc/%s/cmdline" % pid, "rb") as f:
+            cmdline = f.read().replace(b"\\x00", b" ").decode(errors="ignore").strip()
+    except Exception:
+        return None
+    try:
+        tail = raw[raw.rfind(b")") + 2:].split()
+        ticks = int(tail[11]) + int(tail[12])
+    except Exception:
+        return None
+    return {"pid": int(pid), "ticks": ticks, "args": cmdline or "[%s]" % pid}
+
+
+def proc_table():
+    out = {}
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        e = _read_proc(pid)
+        if e:
+            out[e["pid"]] = e
+    return out
+
+
+def sample_cpu(seconds=0.7):
+    """读 /proc 两次取 CPU 时间差，得到真实瞬时占用（ps 的 %CPU 是生命周期均值，会骗人）。"""
+    before = proc_table()
+    t0 = time.time()
+    time.sleep(seconds)
+    after = proc_table()
+    hz = os.sysconf("SC_CLK_TCK") or 100
+    dt = max(time.time() - t0, 0.05)
+    rows = []
+    for pid, e in after.items():
+        if pid not in before:
+            continue
+        pct = (e["ticks"] - before[pid]["ticks"]) / (hz * dt) * 100
+        if pct >= 0.5:
+            rows.append({"pid": pid, "pcpu": round(pct, 1), "args": e["args"][:200]})
+    rows.sort(key=lambda r: -r["pcpu"])
+    return rows
+
+
+def is_platform(args):
+    low = args.lower()
+    return any(h in low for h in PLATFORM_HINTS)
+
+
+def exec_name(args):
+    first = args.split(" ")[0] if args else ""
+    return os.path.basename(first).lower()
+
+
+def classify(args):
+    low = args.lower()
+    exe = exec_name(args)
+    if exe in JOB_EXECS:
+        return "job"
+    if exe.startswith("python") or exe.startswith("node"):
+        if any(h in low for h in JOB_ARG_HINTS):
+            return "job"
+    if exe in AGENT_EXECS:
+        return "agent"
+    return "other"
+
+
+def agent_procs():
+    """按可执行名盘点交互式 agent 进程（不看 CPU，低于阈值的也算），带存活时长。"""
+    try:
+        uptime = float(open("/proc/uptime").read().split()[0])
+    except Exception:
+        uptime = 0.0
+    hz = os.sysconf("SC_CLK_TCK") or 100
+    out = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            raw = open("/proc/%s/stat" % pid, "rb").read()
+            cmdline = open("/proc/%s/cmdline" % pid, "rb").read().replace(b"\\x00", b" ").decode(errors="ignore").strip()
+        except Exception:
+            continue
+        args = cmdline or "[%s]" % pid
+        if exec_name(args) not in AGENT_EXECS:
+            continue
+        try:
+            start = int(raw[raw.rfind(b")") + 2:].split()[19])
+            age_h = round((uptime - start / hz) / 3600, 1)
+        except Exception:
+            age_h = None
+        out.append({"pid": int(pid), "args": args[:120], "age_h": age_h})
+    out.sort(key=lambda r: -(r["age_h"] or 0))
+    return out
+
+
+def tmux_tasks():
+    ls = sh("command -v tmux >/dev/null 2>&1 && tmux ls 2>/dev/null")
+    tasks = []
+    for line in ls.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        session = line.split(":")[0].strip()
+        path = sh("tmux list-panes -t %s -F '#{pane_current_path}' 2>/dev/null" % session).strip().splitlines()
+        cwd = path[0] if path else "未知目录"
+        log_line = ""
+        for log_name in ("OSZICAR", "vasp.log", "train.log", "lcurve.out", "nohup.out"):
+            target = os.path.join(cwd, log_name)
+            if os.path.isfile(target):
+                try:
+                    with open(target, "r", errors="ignore") as f:
+                        lines = f.readlines()
                     if lines:
-                        recent_info = f"{log_name}: {lines[-1].strip()}"
+                        log_line = "%s: %s" % (log_name, lines[-1].strip()[:160])
                         break
-            except: pass
-    
-    tasks.append({"session": s, "directory": cwd, "recent_log": recent_info})
+                except Exception:
+                    pass
+        tasks.append({"session": session, "directory": cwd, "recent_log": log_line})
+    return tasks
+
+
+def listening_ports():
+    """只读 /proc/net/tcp{,6}，返回 {port: inode}，仅 LISTEN(0A)。不依赖 ss/netstat。"""
+    ports = {}
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(path) as f:
+                lines = f.read().splitlines()[1:]
+        except Exception:
+            continue
+        for ln in lines:
+            f = ln.split()
+            if len(f) < 10 or f[3] != "0A":
+                continue
+            try:
+                port = int(f[1].split(":")[1], 16)
+            except Exception:
+                continue
+            inode = f[9]
+            if inode != "0":
+                ports[port] = inode
+    return ports
+
+
+def serving_services(table, ports):
+    """把 LISTEN 端口映射回持有进程，剔除平台自带的监听。"""
+    want = {inode: port for port, inode in ports.items() if port not in SERVE_PORTS_SKIP}
+    if not want:
+        return []
+    found = {}
+    for pid, entry in table.items():
+        fddir = "/proc/%s/fd" % pid
+        try:
+            fds = os.listdir(fddir)
+        except Exception:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(os.path.join(fddir, fd))
+            except Exception:
+                continue
+            if not target.startswith("socket:["):
+                continue
+            inode = target[8:-1]
+            if inode in want:
+                found.setdefault(pid, set()).add(want[inode])
+    out = []
+    for pid, ps in found.items():
+        args = (table.get(pid) or {}).get("args", "[%s]" % pid)
+        if any(h in args.lower() for h in PLATFORM_HINTS):
+            continue  # code-server 等平台自带监听不算
+        out.append({"pid": pid, "ports": sorted(ps), "args": args[:200]})
+    out.sort(key=lambda r: -len(r["ports"]))
+    return out
+
+
 
 load1, load5, load15 = os.getloadavg()
+cores = os.cpu_count() or 1
+rows = sample_cpu()
+real = [r for r in rows if not is_platform(r["args"])]
+jobs = [r for r in real if classify(r["args"]) == "job"]
+others = [r for r in real if classify(r["args"]) not in ("job", "agent")]
+serving = serving_services(proc_table(), listening_ports())
+
+mem_total = mem_avail = 0.0
+try:
+    with open("/proc/meminfo") as f:
+        info = f.read()
+    mem_total = round(int(re.search(r"MemTotal:\\s+(\\d+)", info).group(1)) / 1048576, 1)
+    mem_avail = round(int(re.search(r"MemAvailable:\\s+(\\d+)", info).group(1)) / 1048576, 1)
+except Exception:
+    pass
+
+gpu = [l.strip() for l in sh(
+    "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total "
+    "--format=csv,noheader 2>/dev/null").splitlines() if l.strip()]
 
 print(json.dumps({
-    "success": True,
-    "vasp_ranks": vasp_ranks,
-    "general_jobs_count": len(general_jobs),
-    "load_1m": load1,
-    "load_5m": load5,
-    "tasks": tasks
+    "cores": cores,
+    "load1": round(load1, 2), "load5": round(load5, 2), "load15": round(load15, 2),
+    "mem_total_gb": mem_total, "mem_avail_gb": mem_avail,
+    "cpu_real_pct": round(sum(r["pcpu"] for r in real), 1),
+    "jobs": jobs[:8], "agents": agent_procs(), "others": others[:8],
+    "other_cpu_pct": sum(r["pcpu"] for r in others),
+    "serving": serving[:12],
+    "gpu": gpu,
+    "tasks": tmux_tasks(),
 }))
-INNER
 '''
-    cmd = [
-        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "ConnectTimeout=4", "-p", str(port),
-    ]
-    if key_path and os.path.exists(key_path):
-        cmd.extend(["-i", key_path])
-    cmd.extend([f"{ssh_user}@{ip}", remote_script])
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        return {"success": False, "error": res.stderr.strip() or "SSH connection failed"}
+
+
+def ssh_command(instance_id, ip, port, key_path):
+    cmd = ["ssh", "-o", f"HostKeyAlias=volc-{instance_id}", "-o", "StrictHostKeyChecking=accept-new",
+           "-o", "BatchMode=yes", "-o", f"ConnectTimeout={SSH_TIMEOUT}", "-p", str(port)]
+    if key_path:
+        cmd.extend(["-o", "IdentitiesOnly=yes", "-i", key_path])
+    return cmd + [f"{os.environ.get('VOLC_SSH_USER', 'root')}@{ip}"]
+
+
+def valid_probe(data):
+    if not isinstance(data, dict):
+        return False
+    def number(key):
+        value = data.get(key)
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+    if not all(number(k) for k in ("cpu_real_pct", "load1", "other_cpu_pct", "cores")) or not data["cores"]:
+        return False
+    if not all(isinstance(data.get(k), list) for k in ("jobs", "others", "agents", "tasks", "serving", "gpu")):
+        return False
+    return (all(isinstance(x, str) for x in data["gpu"])
+            and all(isinstance(row, dict) and isinstance(row.get("args"), str)
+                    for k in ("jobs", "others", "agents", "serving") for row in data[k])
+            and all(isinstance(row.get("ports"), list) for row in data["serving"])
+            and all(isinstance(row, dict) and "session" in row and "directory" in row for row in data["tasks"]))
+
+
+def probe_instance(instance_id, ip, port, key_path=None):
+    """用实例 ID 校验 SSH 主机身份；探针结果不完整时返回失败。"""
+    cmd = ssh_command(instance_id, ip, port, key_path) + ["python3 -"]
     try:
-        for line in res.stdout.strip().splitlines():
-            line = line.strip()
-            if line.startswith("{") and line.endswith("}"):
-                d = json.loads(line)
-                d["success"] = True
-                return d
-        return {"success": False, "error": "Invalid probe payload"}
+        res = subprocess.run(cmd, input=PROBE_SOURCE, capture_output=True,
+                             text=True, timeout=SSH_TIMEOUT + 30)
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": f"探针超时（>{SSH_TIMEOUT + 30}s）"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+    if res.returncode != 0:
+        err = (res.stderr or "").strip().splitlines()
+        detail = err[-1] if err else "SSH 连接失败"
+        if "python3" in detail and "not found" in detail:
+            detail = "机内没有 python3，无法执行探针"
+        return {"success": False, "error": detail}
+    for line in res.stdout.strip().splitlines():
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            if not valid_probe(data):
+                continue
+            data["success"] = True
+            return data
+    return {"success": False, "error": "探针返回内容无法解析"}
 
-def cmd_list():
+
+# -------------------------------------------------------------------- 判定
+
+def gpu_busy_of(probe):
+    """任意一张卡利用率 > 5% 即视为 GPU 占用中。"""
+    for line in probe.get("gpu") or []:
+        m = re.search(r"\\b(\\d+)\\s*%", line)
+        if m and int(m.group(1)) > 5:
+            return True
+    return False
+
+
+def cpu_summary(probe):
+    cores = probe.get("cores") or 1
+    load1 = probe.get("load1", 0) or 0
+    cpu = probe.get("cpu_real_pct", 0) or 0
+    return f"load {load1:.2f}/{cores}核 · CPU {cpu / cores:.1f}%"
+
+
+def verdict_of(probe):
+    """把探针结果归成 busy / serving / session / idle 四档，附一行摘要。
+
+    serving 单独成档的原因：常驻服务（知识库/MCP/Web）CPU 往往 <1%、GPU 0%，
+    旧版会判成 idle，于是被 stop-idle 或平台闲时策略关掉。但它们不是「空闲」。
+    """
+    if not probe or not probe.get("success") or not valid_probe(probe):
+        return "unknown", "探针不可用或数据不完整"
+    jobs = probe.get("jobs") or []
+    agents = probe.get("agents") or []
+    tasks = probe.get("tasks") or []
+    serving = probe.get("serving") or []
+    summary = cpu_summary(probe)
+    if jobs:
+        return "busy", summary
+    if gpu_busy_of(probe):
+        return "busy", summary + " · GPU 占用中"
+    if probe["other_cpu_pct"] >= 50:
+        return "unknown", f"未识别进程合计占用 {probe['other_cpu_pct']:.0f}% CPU，需确认作业"
+    if serving:
+        ports = sorted({p for s in serving for p in s["ports"]})
+        shown = ",".join(str(p) for p in ports[:6]) + ("…" if len(ports) > 6 else "")
+        extra = " · 监听 " + shown
+        if tasks or agents:
+            extra += " · 另有 %d tmux/%d agent" % (len(tasks), len(agents))
+        return "serving", "%d 个常驻服务" % len(serving) + extra
+    if tasks or agents:
+        extra = []
+        if tasks:
+            extra.append("%d tmux" % len(tasks))
+        if agents:
+            extra.append("%d 交互 agent" % len(agents))
+        return "session", summary + " · " + "/".join(extra)
+    return "idle", summary + (" · 有非作业进程占用" if probe.get("others") else "")
+
+
+def describe_probe(probe, indent="  "):
+    if not probe or not probe.get("success"):
+        print(f"{indent}⚠️ 探针不可用：{(probe or {}).get('error', '未知原因')}")
+        return
+    print(f"{indent}CPU:        load {probe.get('load1')} / {probe.get('load5')} / {probe.get('load15')}"
+          f"  （{probe.get('cores')} 核，当前实际占用 {(probe.get('cpu_real_pct') or 0) / 100:.2f} 核"
+          f" = {(probe.get('cpu_real_pct') or 0) / (probe.get('cores') or 1):.1f}%）")
+    if probe.get("mem_total_gb"):
+        print(f"{indent}内存:       {probe.get('mem_avail_gb')} / {probe.get('mem_total_gb')} GiB 可用")
+    for line in probe.get("gpu") or []:
+        print(f"{indent}GPU:        {line}")
+    if probe.get("serving"):
+        print(f"{indent}常驻服务（监听端口，不是计算作业，但关机后会全部断掉）:")
+        for s in probe["serving"]:
+            ports = ",".join(str(p) for p in s["ports"])
+            print(f"{indent}  • [{ports}] {s['args'][:110]}")
+    if probe.get("jobs"):
+        print(f"{indent}计算作业（命中作业名单，按 CPU 排序）:")
+        for j in probe["jobs"]:
+            print(f"{indent}  • [{j['pcpu']}%] {j['args']}")
+    if probe.get("tasks"):
+        print(f"{indent}tmux 会话:")
+        for t in probe["tasks"]:
+            print(f"{indent}  ▶ {t['session']}  ({t['directory']})")
+            if t.get("recent_log"):
+                print(f"{indent}     最新进度: {t['recent_log']}")
+    if probe.get("agents"):
+        names = sorted({os.path.basename(a["args"].split(" ")[0]) for a in probe["agents"]})
+        oldest = max((a.get("age_h") or 0) for a in probe["agents"])
+        print(f"{indent}交互 agent 进程: {len(probe['agents'])} 个（{', '.join(names)}，"
+              f"最久已存活 {oldest:.0f} 小时）——不是计算作业，但关机后这些会话会一起消失")
+    if probe.get("others"):
+        print(f"{indent}其他占用进程（非平台进程，供参考）:")
+        for j in probe["others"]:
+            print(f"{indent}  · [{j['pcpu']}%] {j['args'][:120]}")
+
+
+VERDICT_LABEL = {
+    "busy": "计算中",
+    "serving": "有服务",
+    "session": "有会话",
+    "idle": "空闲",
+    "unknown": "未知",
+}
+
+
+# --------------------------------------------------------------- 子命令实现
+
+def collect_probe_rows(instances, probe_running_only=True):
+    """并发探针，返回 {id: {instance, endpoint, key, probe, verdict, summary}}"""
+    rows = {}
+    targets = []
+    for it in instances:
+        st = state_of(it)
+        rows[it.get("Id")] = {"instance": it, "probe": None, "verdict": "-", "summary": "-"}
+        if probe_running_only and st != "Running":
+            continue
+        ip, port = ssh_endpoint(it)
+        if not ip:
+            rows[it.get("Id")]["probe"] = {"success": False, "error": "无可用公网 SSH 端口"}
+            rows[it.get("Id")].update(verdict="unknown", summary="无 SSH 端口")
+            continue
+        targets.append((it, ip, port, resolve_ssh_key(it.get("Name"), it)))
+
+    def work(t):
+        it, ip, port, key = t
+        return it.get("Id"), probe_instance(it["Id"], ip, port, key)
+
+    if targets:
+        with ThreadPoolExecutor(max_workers=max(1, min(PROBE_PARALLEL, len(targets)))) as pool:
+            for iid, probe in pool.map(work, targets):
+                rows[iid]["probe"] = probe
+                v, s = verdict_of(probe)
+                rows[iid]["verdict"] = v
+                rows[iid]["summary"] = s
+    return rows
+
+
+def cmd_list(args):
     items, err = get_my_instances()
     if err:
-        print(f"❌ 获取开发机列表失败: {err}")
-        return
+        print(f"❌ 获取开发机列表失败: {err}", file=sys.stderr)
+        return 1
     if not items:
-        print("未找到当前账号名下的开发机。")
-        return
-    print(f"{'名称 (NAME)':20s} | {'状态 (STATE)':10s} | {'实例ID (ID)':26s} | {'规格 (FLAVOR)':20s} | {'SSH端口'}")
-    print("-" * 95)
+        print("[]" if args.json else "未找到当前账号名下的开发机。")
+        return 0
+    if args.running:
+        items = [it for it in items if state_of(it) == "Running"]
+
+    rows = collect_probe_rows(items) if (args.probe or args.all) else None
+
+    if args.json:
+        payload = []
+        for it in items:
+            row = rows.get(it.get("Id"), {}) if rows else {}
+            probe = row.get("probe") or {}
+            img_type, img_url = image_of(it)
+            vol_type, vol_size, _vol_id = volume_of(it)
+            payload.append({
+                "name": it.get("Name"), "id": it.get("Id"), "state": state_of(it),
+                "flavor": flavor_of(it), "ssh": ssh_endpoint(it),
+                "image_type": img_type, "image_url": img_url,
+                "volume": {"type": vol_type, "size_gb": vol_size},
+                "project": it.get("ProjectName"),
+                "expected_stop_time": it.get("ExpectedStopTime") or None,
+                "reservation_plan_id": it.get("ResourceReservationPlanId") or None,
+                "allow_image_build": it.get("AllowImageBuild"),
+                "is_building_image": it.get("IsBuildingImage"),
+                "storages": storages_of(it),
+                "ports": port_rows(it),
+                "webide": redact(webide_url(it)),
+                "probe_ok": bool(probe.get("success")),
+                "probe_error": probe.get("error"),
+                "cores": probe.get("cores"), "load1": probe.get("load1"),
+                "cpu_real_pct": probe.get("cpu_real_pct"),
+                "jobs": [j["args"] for j in (probe.get("jobs") or [])],
+                "agents": len(probe.get("agents") or []),
+                "tmux": [t["session"] for t in (probe.get("tasks") or [])],
+                "gpu": probe.get("gpu"),
+                "verdict": row.get("verdict", "-"), "summary": row.get("summary", "-"),
+            })
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    if rows:
+        print(f"{pad('名称', 22)}{pad('状态', 9)}{pad('镜像', 38)}{pad('机内', 34)}判定")
+        print("-" * 110)
+    else:
+        print(f"{pad('名称', 22)}{pad('状态', 9)}{pad('规格', 20)}{pad('镜像', 44)}SSH")
+        print("-" * 118)
     for it in items:
         name = it.get("Name", "-")
-        st = it.get("Status", {}).get("State", "-")
-        iid = it.get("Id", "-")
-        flav = it.get("ResourceClaim", {}).get("InstanceTypeId", "-")
-        ports = it.get("Ports", [])
-        ssh_info = "-"
-        for p in ports:
-            if p.get("Name") == "SSH连接" and p.get("Status", {}).get("State") == "Available":
-                ip = p.get("ExternalIp")
-                port = p.get("ExternalPort")
-                if ip and port:
-                    ssh_info = f"{ip}:{port}"
-        print(f"{name:20s} | {st:10s} | {iid:26s} | {flav:20s} | {ssh_info}")
+        st = state_of(it)
+        flav = flavor_of(it)
+        if rows:
+            row = rows.get(it.get("Id"), {})
+            verdict = VERDICT_LABEL.get(row.get("verdict"), "-")
+            print(f"{pad(name, 22)}{pad(st, 9)}{pad(clip(image_short(it, 37), 38), 38)}"
+                  f"{pad(clip(row.get('summary', '-'), 34), 35)}{verdict}")
+        else:
+            ip, port = ssh_endpoint(it)
+            print(f"{pad(name, 22)}{pad(st, 9)}{pad(flav, 20)}{pad(clip(image_short(it, 44), 45), 45)}"
+                  f"{f'{ip}:{port}' if ip else '-'}")
+    if rows:
+        print("\\n判定说明：计算中=有作业或 GPU 占用，别关；有会话=有 tmux/交互 agent，停机前先确认；"
+              "空闲=无作业无会话；未知=探针连不上。镜像列格式为 类型: 地址。")
+    return 0
 
-def cmd_status(target):
-    it, matches, err = resolve_instance(target)
-    if err:
-        print(f"❌ 错误: {err}")
-        return
-    if matches:
-        print(f"❌ 错误：输入 '{target}' 匹配到多个开发机，请使用完整名称或 ID 明确指定：")
-        for m in matches:
-            print(f"  - {m.get('Name')} ({m.get('Id')}) [{m.get('Status',{}).get('State')}]")
-        return
-    if not it:
-        print(f"❌ 未找到与 '{target}' 匹配的开发机。请执行 'devctl list' 查看列表。")
-        return
-    
-    iid = it.get("Id")
-    out, err = run_mlp("get", "--id", iid, "--output", "json")
-    if not out:
-        print(f"获取实例详情失败: {err}")
-        return
-    
-    d = json.loads(out)
-    st = d.get("Status", {}).get("State")
-    msg = d.get("Status", {}).get("Message", "")
-    name = d.get("Name")
-    flav = d.get("ResourceClaim", {}).get("InstanceTypeId")
-    vol = d.get("Volume", {}).get("Size")
-    ports = d.get("Ports", [])
-    launch_time = d.get("LaunchTime", "-")
-    
-    print(f"=== 云端开发机基础状态: {name} ===")
-    print(f"实例 ID:     {iid}")
-    print(f"开机状态:    {st} {('(' + msg + ')') if msg else ''}")
-    print(f"计算规格:    {flav}")
-    print(f"系统盘:      {vol} GiB")
-    print(f"启动时间:    {launch_time}")
-    
-    key_path = resolve_ssh_key(name)
-    ssh_ip, ssh_port = None, None
-    ssh_user = os.environ.get("VOLC_SSH_USER", "root")
-    for p in ports:
-        if p.get("Name") == "SSH连接":
-            p_st = p.get("Status", {}).get("State")
-            ip = p.get("ExternalIp")
-            port = p.get("ExternalPort")
-            if p_st == "Available" and ip and port:
-                ssh_ip, ssh_port = ip, port
-                key_arg = f"-i {key_path} " if os.path.exists(key_path) else ""
-                print(f"SSH 直连:    ssh {key_arg}-p {port} {ssh_user}@{ip}  (或直接: ssh {name.lower()})")
-        elif p.get("Name") == "WebIDE" and st == "Running":
-            url = p.get("APIGPublicUrl")
-            if url:
-                print(f"WebIDE:      {url}")
-    
-    print("\\n--- 机器内部任务与负载深度探针 ---")
+
+def cmd_state(args):
+    """纯 API 快查：只回答「机器现在是 Running / Stopped / Deploying」，不跑探针。
+
+    存在理由：SSH 连不上时，旧流程得靠 status（要探针、几秒起步）或翻 list 表格；
+    2026-10-27/28 我因此误把「机器被关机」当成「网关限流」，白白退避了30分钟。
+    本命令 <1s、不碰 SSH，一律先跑它。
+    """
+    def record(it):
+        return {"name": it.get("Name"), "id": it.get("Id"), "state": state_of(it),
+                "launch_time": it.get("LaunchTime"), "stopped_time": it.get("StoppedTime")}
+    if not args.target:
+        items, err = get_my_instances()
+        if err:
+            print(f"获取实例列表失败: {err}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps([record(it) for it in items], ensure_ascii=False))
+            return 0
+        for it in items:
+            st = state_of(it)
+            mark = {"Running": "●", "Stopped": "○"}.get(st, "◌")
+            launch = it.get("LaunchTime")
+            age = short_age(launch) if st == "Running" else short_age(it.get("StoppedTime"))
+            extra = f"  ({'已运行 ' + age.replace('前', '') if st == 'Running' and age else (age or '')})" if age else ""
+            print("  %s %s%s%s" % (mark, pad(it.get('Name', '-'), 22), pad(st, 12), extra))
+        return 0
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    st = state_of(it)
+    if args.json:
+        print(json.dumps(record(it), ensure_ascii=False))
+        return 0
+    print(st)
     if st != "Running":
-        print(f"机器处于 {st} 状态，未在运行任何计算任务。")
-        return
-    
-    if not (ssh_ip and ssh_port):
-        print("未检测到可用的公网 SSH 端口，无法执行内部探针。")
-        return
-    
-    probe = probe_instance_workload(ssh_ip, ssh_port, key_path=key_path)
-    if not probe or not probe.get("success"):
-        err_msg = probe.get("error") if probe else "连接超时"
-        print(f"⚠️ SSH 探针无法连接 ({err_msg})，请稍后重试。")
-        return
-    
-    ranks = probe.get("vasp_ranks", 0)
-    gjobs = probe.get("general_jobs_count", 0)
-    load = probe.get("load_1m", 0)
-    tasks = probe.get("tasks", [])
-    
-    if ranks > 0 or gjobs > 0 or load > 2.0:
-        print(f"⚡ 【正在计算中】")
-        if ranks > 0:
-            print(f"  • VASP 并行核心数:  {ranks} ranks (高负荷)")
-        if gjobs > 0:
-            print(f"  • 其他活跃计算进程:  {gjobs} 个 (Python/PyTorch/GPUMD)")
-        print(f"  • CPU 1分钟平均负载: {load:.2f}")
-        print(f"  • 活跃后台任务会话:  {len(tasks)} 个")
-        for t in tasks:
-            print(f"    ▶ 会话名:   {t.get('session')}")
-            print(f"      计算目录: {t.get('directory')}")
-            if t.get("recent_log"):
-                print(f"      最新进度: {t.get('recent_log')}")
-        print("⚠️ 警告：当前机器处于繁忙计算状态，切勿随意关机！")
+        print(f"⚠️ 机器不是 Running（当前 {st}）。SSH 连不上时先看这个："
+              f"\`devctl start {it.get('Name')}\`，不要去调 SSH/网关参数。", file=sys.stderr)
+    return 0
+
+
+def cmd_status(args):
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    iid = it.get("Id")
+    name = it.get("Name")
+    out, err = run_ve("GetDevInstance", {"Id": iid})
+    if err or not isinstance(out, dict) or out.get("Id") != iid:
+        print(f"❌ 获取开发机详情失败: {err or '详情与实例 ID 不匹配'}", file=sys.stderr)
+        return 1
+    detail = out
+
+    st = state_of(detail)
+    key_path = resolve_ssh_key(name, detail)
+    ip, port = ssh_endpoint(detail)
+    probe = None
+    if st == "Running" and ip and not args.no_probe:
+        probe = probe_instance(iid, ip, port, key_path)
+    verdict, summary = verdict_of(probe) if probe else ("unknown", "未探测")
+
+    if args.json:
+        print(json.dumps({
+            "name": name, "id": iid, "state": st, "flavor": flavor_of(detail),
+            "image": {"type": image_of(detail)[0], "url": image_of(detail)[1]},
+            "volume": {"type": volume_of(detail)[0], "size_gb": volume_of(detail)[1],
+                       "id": volume_of(detail)[2]},
+            "launch_time": detail.get("LaunchTime"),
+            "ssh": {"ip": ip, "port": port, "key": None if args.no_key else key_path},
+            "webide": webide_url(detail) if args.show_secret else redact(webide_url(detail)),
+            "ports": port_rows(detail),
+            "storages": storages_of(detail),
+            "project": detail.get("ProjectName"),
+            "default_folder": detail.get("DefaultFolder"),
+            "numa_affinity": detail.get("NumaAffinity"),
+            "expected_stop_time": detail.get("ExpectedStopTime") or None,
+            "reservation_plan_id": detail.get("ResourceReservationPlanId") or None,
+            "allow_image_build": detail.get("AllowImageBuild"),
+            "is_building_image": detail.get("IsBuildingImage"),
+            "console": console_url("devinstance", iid),
+            "probe": probe, "verdict": verdict, "summary": summary,
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    img_type, img_url = image_of(detail)
+    vol_type, vol_size, _vol_id = volume_of(detail)
+    print(f"=== {name} ===")
+    print(f"实例 ID:     {iid}")
+    print(f"开机状态:    {st} {(((detail.get('Status') or {}).get('Message')) or '')}")
+    print(f"计算规格:    {flavor_of(detail)}")
+    print(f"镜像:        {img_type}: {img_url}")
+    if detail.get("IsBuildingImage"):
+        print("             ⏳ 正在构建镜像（保存镜像进行中）")
+    print(f"云盘:        {vol_type} · {vol_size} GiB")
+    launch = detail.get("LaunchTime") or detail.get("CreateTime")
+    print(f"启动时间:    {launch or '-'}" + (f"（已运行 {short_age(launch).replace('前','')}）" if short_age(launch) else ""))
+    stopped = detail.get("StoppedTime")
+    if stopped:
+        print(f"上次停机:    {stopped}（{short_age(stopped)}）")
+        up = _uptime_hours(launch)
+        if up is not None and up < 6:
+            print("⚠️ 本次只运行了 %.1f 小时就重启过；若反复被回收，请到控制台看"
+                  "「闲时自动关机」策略（API 不暴露该字段，只能控制台看）。" % up)
+    if detail.get("DefaultFolder"):
+        print(f"WebIDE 目录: {detail['DefaultFolder']}")
+    if detail.get("ProjectName"):
+        print(f"所属项目:    {detail['ProjectName']}")
+    if detail.get("NumaAffinity") and detail["NumaAffinity"] != "None":
+        print(f"NUMA 亲和:   {detail['NumaAffinity']}")
+    if detail.get("ExpectedStopTime"):
+        print(f"计划关机:    {detail['ExpectedStopTime']}（自动/闲时关机）")
+    if detail.get("ResourceReservationPlanId"):
+        print(f"预约计划:    {detail['ResourceReservationPlanId']}")
+    for s in storages_of(detail):
+        print(f"共享存储:    {s['desc']}")
+    if webide_url(detail):
+        url = webide_url(detail) if args.show_secret else redact(webide_url(detail))
+        print(f"WebIDE:      {url}")
+    if ip:
+        key_arg = f"-i {key_path} " if (key_path and not args.no_key) else ""
+        print(f"SSH:         ssh {key_arg}-p {port} {os.environ.get('VOLC_SSH_USER','root')}@{ip}")
     else:
-        print(f"💤 【当前空闲】机内无活跃计算进程 (CPU 负载: {load:.2f})。")
-        if tasks:
-            print(f"存在 {len(tasks)} 个已结束或挂起的 tmux 会话：")
-            for t in tasks:
-                print(f"  - {t.get('session')} ({t.get('directory')})")
-        print("✅ 提示：如果不需要继续计算，建议关机以节省算力费用。")
+        print("SSH:         无可用公网 SSH 端口")
+    describe_ports(detail)
+    if not args.show_secret and webide_url(detail) != redact(webide_url(detail)):
+        print("  （WebIDE 地址里的 password 已脱敏，需要原文加 --show-secret）")
+    print()
+    if st != "Running":
+        print(f"机器处于 {st} 状态，未探测机内作业。")
+        return 0
+    if args.no_probe:
+        print("（已跳过机内探针）")
+        return 0
+    print("--- 机内探针 ---")
+    if not ip:
+        print("无可用 SSH 端口，无法探测。")
+        return 0
+    describe_probe(probe)
+    print()
+    if verdict == "busy":
+        print("⚡ 有计算作业在跑，不要关机。")
+    elif verdict == "serving":
+        print("🟠 没有计算作业，但有**常驻服务**在监听端口。它们 CPU/GPU 占用极低，"
+              "容易被误判为空闲；关机后这些服务会全部断掉且不会自愈。")
+    elif verdict == "session":
+        print("🟡 没有计算作业，但有会话/交互进程，关机前确认这些会话不需要保留。")
+    elif verdict == "idle":
+        print("💤 空闲。若不再需要，可关机省算力。")
+    else:
+        print("⚠️ 探针不可用，状态未知；按 fail-closed 原则不要贸然关机。")
+    return 0
 
-def cmd_start(target):
-    it, matches, err = resolve_instance(target)
-    if err:
-        print(f"❌ 错误: {err}")
-        return
-    if matches:
-        print(f"❌ 错误：输入 '{target}' 匹配到多个开发机，请使用全名指定：")
-        for m in matches:
-            print(f"  - {m.get('Name')} ({m.get('Id')})")
-        return
-    if not it:
-        print(f"❌ 未找到与 '{target}' 匹配的开发机。")
-        return
-    iid = it.get("Id")
+
+def cmd_probe(args):
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    st = state_of(it)
+    ip, port = ssh_endpoint(it)
+    if st != "Running" or not ip:
+        print(f"{it.get('Name')} 处于 {st} 状态或没有可用 SSH 端口，无法探测。", file=sys.stderr)
+        return 1
+    probe = probe_instance(it["Id"], ip, port, resolve_ssh_key(it.get("Name"), it))
+    if args.json:
+        print(json.dumps(probe, ensure_ascii=False, indent=2))
+        return 0 if probe.get("success") else 1
+    print(f"=== {it.get('Name')} 机内探针 ===")
+    describe_probe(probe, indent="")
+    verdict, summary = verdict_of(probe)
+    print(f"\\n判定: {VERDICT_LABEL.get(verdict)} ({summary})")
+    return 0 if probe.get("success") else 1
+
+
+def cmd_ssh_proxy(args):
+    """OpenSSH ProxyCommand：只读查询实例，每次连接使用当前映射。"""
+    detail, error = run_ve("GetDevInstance", {"Id": args.instance_id}, timeout=15)
+    if error or not isinstance(detail, dict) or detail.get("Id") != args.instance_id:
+        print(error or "未能确认 SSH 目标实例", file=sys.stderr)
+        return 1
+    host, port = ssh_endpoint(detail)
+    if state_of(detail) != "Running" or not host or not port:
+        print(f"{detail.get('Name')} 当前为 {state_of(detail)}，SSH 需要运行中的实例和可用端口。", file=sys.stderr)
+        return 1
+    os.execv("/usr/bin/nc", ["nc", "--", host, str(port)])
+
+
+def cmd_connect(args):
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
     name = it.get("Name")
-    print(f"正在启动开发机 {name} ({iid})...")
-    out, err = run_mlp("start", "--id", iid)
-    if err:
-        print(f"启动命令发送失败: {err}")
-        return
-    print("启动指令已下发，正在轮询状态...")
-    for _ in range(8):
-        time.sleep(3)
-        chk, _ = run_mlp("get", "--id", iid, "--output", "json")
-        if chk:
-            st = json.loads(chk).get("Status", {}).get("State")
-            if st in ("Running", "Deploying"):
-                print(f"当前状态: {st}")
-                if st == "Running":
-                    cmd_status(iid)
-                return
-    print("机器已进入启动队列，请稍后查询状态。")
+    st = state_of(it)
+    ip, port = ssh_endpoint(it)
+    key = resolve_ssh_key(name, it)
+    url = webide_url(it)
+    if not args.show_secret:
+        url = redact(url)
+    if args.json:
+        print(json.dumps({"name": name, "id": it["Id"], "state": st, "ip": ip, "port": port, "webide": url}, ensure_ascii=False))
+        return 0
+    if st != "Running":
+        print(f"注意：{name} 当前是 {st}，需要先 devctl start {name}")
+    if ip:
+        key_arg = f"-i {key} " if key else ""
+        print(f"SSH:    ssh {key_arg}-p {port} {os.environ.get('VOLC_SSH_USER','root')}@{ip}")
+        alias = ssh_config_hosts().get(name.lower())
+        dynamic = alias and alias.get("proxycommand", "").split()[-2:] == ["ssh-proxy", it.get("Id")]
+        if dynamic or (alias and alias.get("hostname") == ip and str(alias.get("port")) == str(port)):
+            print(f"        也可以：ssh {name.lower()}  （~/.ssh/config 里有对应别名）")
+        else:
+            print("        提示：~/.ssh/config 里没有对应别名，建议补一条 Host 段（含 IdentityFile 与 Port），"
+                  "否则 ssh 简写会走 DNS 解析失败。")
+    else:
+        print("无可用公网 SSH 端口。")
+    if url:
+        print(f"WebIDE: {url}")
+    return 0
 
-def cmd_stop(target, force=False):
-    it, matches, err = resolve_instance(target)
+
+def cmd_start(args):
+    def report(message):
+        print(message, file=sys.stderr if args.json else sys.stdout)
+
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    iid, name = it.get("Id"), it.get("Name")
+    if state_of(it) == "Running":
+        report(f"{name} 已经在运行中。")
+        if args.json:
+            print(json.dumps({"id": iid, "name": name, "state": "Running"}))
+        return 0
+    report(f"正在启动 {name} ({iid}) ...")
+    _, err = run_ve("StartDevInstance", {"Id": iid})
     if err:
-        print(f"❌ 错误: {err}")
-        return
-    if matches:
-        print(f"❌ 错误：输入 '{target}' 匹配到多个开发机，请使用全名指定：")
-        for m in matches:
-            print(f"  - {m.get('Name')} ({m.get('Id')})")
-        return
-    if not it:
-        print(f"❌ 未找到与 '{target}' 匹配的开发机。")
-        return
-    iid = it.get("Id")
+        report(f"❌ 启动指令发送失败: {err}")
+        return 1
+    st = None
+    for _ in range(10):
+        time.sleep(3)
+        out, _ = run_ve("GetDevInstance", {"Id": iid})
+        if not out:
+            continue
+        st = state_of(out)
+        if st == "Running":
+            report("✅ 已进入 Running，开始探测机内状态：")
+            return cmd_status(argparse.Namespace(target=iid, json=args.json, no_probe=False, no_key=False, show_secret=False))
+        if st in ("Deploying", "Starting", "Creating"):
+            report(f"  当前状态: {st}")
+    report("已下发启动请求，尚未确认 Running。")
+    if args.json:
+        print(json.dumps({"id": iid, "name": name, "state": st, "submitted": True}))
+    return 0
+
+
+def cmd_stop(args):
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    iid, name = it.get("Id"), it.get("Name")
+    if state_of(it) != "Running":
+        print(f"{name} 当前是 {state_of(it)}，无需关机。")
+        return 0
+    if not args.force:
+        ok, why = _stop_guard(it)
+        if not ok:
+            print(why)
+            return 1
+    print(f"正在停止 {name} ({iid}) 以释放算力 ...")
+    _, err = run_ve("StopDevInstance", {"Id": iid})
+    if err:
+        print(f"❌ 停止指令发送失败: {err}")
+        return 1
+    for _ in range(10):
+        time.sleep(3)
+        out, _ = run_ve("GetDevInstance", {"Id": iid})
+        if out and state_of(out) == "Stopped":
+            print(f"✅ {name} 已关机（Stopped），算力已释放。")
+            return 0
+    print(f"{name} 正在关机中，稍后确认。")
+    return 0
+
+
+def _stop_guard(it, action="stop"):
+    """关机/重启前检查；返回 (是否放行, 说明文本)。任何不确定都拦。"""
     name = it.get("Name")
-    
-    out, _ = run_mlp("get", "--id", iid, "--output", "json")
-    if out:
-        d = json.loads(out)
-        st = d.get("Status", {}).get("State")
-        if st == "Running" and not force:
-            ssh_ip, ssh_port = None, None
-            for p in d.get("Ports", []):
-                if p.get("Name") == "SSH连接" and p.get("Status", {}).get("State") == "Available":
-                    ssh_ip = p.get("ExternalIp")
-                    ssh_port = p.get("ExternalPort")
-                    break
-            
-            if ssh_ip and ssh_port:
-                key_path = resolve_ssh_key(name)
-                probe = probe_instance_workload(ssh_ip, ssh_port, key_path=key_path)
-                # 1. Fail-closed: probe failed
-                if not probe or not probe.get("success"):
-                    print(f"🛑 安全拦截：无法通过 SSH 确认机内计算状态 (网络未连通或探测超时)。")
-                    print(f"为防止强行关机导致正在跑的作业被杀死，已阻止关机！")
-                    print(f"若确定机器安全且执意关机，请附加参数：devctl stop {name} --force")
-                    return
-                # 2. Fail-closed: active calculation running
-                ranks = probe.get("vasp_ranks", 0)
-                gjobs = probe.get("general_jobs_count", 0)
-                load = probe.get("load_1m", 0)
-                if ranks > 0 or gjobs > 0 or load > 2.0:
-                    tasks = [t.get("session") for t in probe.get("tasks", [])]
-                    print(f"🚨 严重警告：开发机 {name} 内部正在进行密集计算！")
-                    if ranks > 0: print(f"  • VASP 进程占用: {ranks} 核")
-                    if gjobs > 0: print(f"  • 其他计算进程: {gjobs} 个")
-                    print(f"  • 系统负载: {load:.2f}")
-                    print(f"  • 运行中的会话: {tasks}")
-                    print(f"此时关机会导致计算直接中断丢步！")
-                    print(f"若确实需要强制关机，请附加参数：devctl stop {name} --force")
-                    return
+    verb = "重启" if action == "reboot" else "关机"
+    hint = f"devctl {action} {name} --force"
+    ip, port = ssh_endpoint(it)
+    if not ip:
+        return False, (f"🛑 安全拦截：{name} 没有可用公网 SSH 端口，无法确认机内状态。\\n"
+                       f"   确认安全后要强制{verb}：{hint}")
+    probe = probe_instance(it["Id"], ip, port, resolve_ssh_key(name, it))
+    if not probe.get("success"):
+        return False, (f"🛑 安全拦截：SSH 探针连不上 {name}（{probe.get('error')}），无法确认机内是否有作业。\\n"
+                       f"   确认安全后要强制{verb}：{hint}")
+    verdict, summary = verdict_of(probe)
+    if verdict == "busy":
+        lines = [f"🚨 {name} 机内有计算作业，已阻止{verb}：", f"   判定依据：{summary}"]
+        for j in (probe.get("jobs") or [])[:5]:
+            lines.append(f"   • [{j['pcpu']}%] {j['args'][:120]}")
+        lines.append(f"   确实要中断：{hint}")
+        return False, "\\n".join(lines)
+    if verdict == "serving":
+        lines = [f"🟠 {name} 没有计算作业，但机内有常驻服务在监听端口（{summary}）:"]
+        for s in (probe.get("serving") or [])[:6]:
+            lines.append(f"   • [{','.join(str(p) for p in s['ports'])}] {s['args'][:100]}")
+        lines.append(f"   这些服务{verb}后不会自愈，确认后：{hint}")
+        return False, "\\n".join(lines)
+    if verdict == "session":
+        return False, (f"🟡 {name} 没有计算作业，但机内有会话/交互进程（{summary}）。\\n"
+                       f"   这些会话{verb}会一起消失，确认后：{hint}")
+    if verdict != "idle":
+        return False, f"🛑 {name} 状态待确认：{summary}"
+    return True, ""
 
-    print(f"正在停止开发机 {name} ({iid}) 以释放算力...")
-    out, err = run_mlp("stop", "--id", iid)
+
+def cmd_stop_idle(args):
+    def report(message):
+        print(message, file=sys.stderr if args.json else sys.stdout)
+
+    items, err = get_my_instances()
     if err:
-        print(f"停止命令发送失败: {err}")
-        return
-    print("停止指令已下发，正在等待关机确认...")
-    for _ in range(8):
-        time.sleep(3)
-        chk, _ = run_mlp("get", "--id", iid, "--output", "json")
-        if chk:
-            st = json.loads(chk).get("Status", {}).get("State")
-            if st == "Stopped":
-                print(f"开发机 {name} 已成功关机 (Stopped)。算力已释放。")
-                return
-    print(f"开发机 {name} 正在关机中，请稍后确认。")
+        report(f"❌ 获取开发机列表失败: {err}")
+        return 1
+    running = [it for it in items if state_of(it) == "Running"]
+    if not running:
+        if args.json:
+            print("[]")
+        report("当前没有运行中的开发机。")
+        return 0
+    report(f"检查 {len(running)} 台运行中的开发机 ...")
+    rows = collect_probe_rows(running)
+
+    groups = {"idle": [], "serving": [], "session": [], "busy": [], "unknown": []}
+    for it in running:
+        row = rows.get(it.get("Id"), {})
+        groups.setdefault(row.get("verdict", "unknown"), []).append((it, row))
+
+    for key, label in (("busy", "计算中（跳过）"), ("serving", "有常驻服务（跳过）"),
+                       ("session", "有会话（跳过）"),
+                       ("unknown", "探针不可用（跳过，fail-closed）"), ("idle", "空闲（可关）")):
+        if groups.get(key):
+            report(f"\\n[{label}]")
+            for it, row in groups[key]:
+                report(f"  - {it.get('Name'):22s} {row.get('summary','-')}")
+
+    targets = [it for it, _ in groups.get("idle", [])]
+    if args.force_sessions:
+        targets += [it for it, _ in groups.get("session", [])]
+        targets += [it for it, _ in groups.get("serving", [])]
+    if not targets:
+        if args.json:
+            print("[]")
+        report("\\n没有可安全关机的机器。")
+        return 0
+
+    if args.json:
+        print(json.dumps([{"name": it.get("Name"), "id": it.get("Id")} for it in targets],
+                         ensure_ascii=False, indent=2))
+    if not args.apply:
+        report(f"\\n以上 {len(targets)} 台会关机：{[it.get('Name') for it in targets]}")
+        report("这是预演（未执行）。确认后加 --apply 真正关机。")
+        return 0
+
+    report(f"\\n开始关机 {len(targets)} 台 ...")
+    failed = []
+    for it in targets:
+        iid, name = it.get("Id"), it.get("Name")
+        _, err = run_ve("StopDevInstance", {"Id": iid})
+        if err:
+            report(f"  ❌ {name}: {err}")
+            failed.append(name)
+        else:
+            report(f"  ✅ {name}: 停止指令已下发")
+    if failed:
+        report(f"\\n失败 {len(failed)} 台：{failed}")
+        return 1
+    report("\\n全部指令已下发，稍后用 devctl list --probe 复核。")
+    return 0
+
+
+def cmd_doctor(args):
+    print("=== 依赖自检 ===")
+    print("ve CLI:       " + (shutil.which(os.environ.get("VOLC_VE_BIN", "ve")) or "❌ 未安装"))
+    cred = os.path.expanduser("~/.volc/credentials")
+    cfg = os.path.expanduser("~/.volc/config")
+    if os.path.exists(cred):
+        try:
+            import configparser
+            cp = configparser.ConfigParser()
+            cp.read(cred)
+            keys = {k.lower() for s in cp.sections() for k in cp[s]}
+            has = {"access_key_id", "secret_access_key"} <= keys
+            print(f"凭证文件:     {cred}（AK/SK {'已配置' if has else '❌ 缺失'}，未回显内容）")
+        except Exception as e:
+            print(f"凭证文件:     {cred}（解析失败: {e}）")
+    else:
+        print(f"凭证文件:     ❌ 不存在 {cred}")
+    print(f"配置文件:     {cfg if os.path.exists(cfg) else '❌ 不存在 ' + cfg}")
+    key = resolve_ssh_key("")
+    print(f"默认 SSH key: {key or '未找到默认私钥'}")
+    ruser, rtoken, rpath = registry_credentials()
+    r_src = "环境变量 VOLC_REGISTRY_USER/TOKEN" if os.environ.get("VOLC_REGISTRY_TOKEN") else rpath
+    if ruser and rtoken:
+        print(f"镜像仓库凭据: ✅ 已配置（来源 {r_src}，不回显内容）")
+    elif os.path.exists(rpath) or os.environ.get("VOLC_REGISTRY_TOKEN"):
+        print(f"镜像仓库凭据: ⚠️ 不完整（需要用户名与口令两项，来源 {r_src}）")
+    else:
+        print("镜像仓库凭据: - 未配置（仅在拉取私有仓库镜像时才需要）")
+
+    items, err = get_my_instances()
+    if err:
+        print(f"实例列表:     ❌ {err}")
+        return 1
+    running = [it for it in items if state_of(it) == "Running"]
+    print(f"实例列表:     ✅ 共 {len(items)} 台，运行中 {len(running)} 台")
+    print("\\n=== 运行中机器连通性 ===")
+    for it in running:
+        name = it.get("Name")
+        k = resolve_ssh_key(name, it)
+        ip, port = ssh_endpoint(it)
+        if not ip:
+            print(f"  {name:22s} 无 SSH 端口")
+            continue
+        cmd = ssh_command(it["Id"], ip, port, k) + ["command -v python3 >/dev/null && echo OK"]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=SSH_TIMEOUT + 10)
+            ok = "OK" in res.stdout
+            print(f"  {name:22s} {'✅ 可连（python3 就绪）' if ok else '⚠️ 连上但缺 python3' if res.returncode == 0 else '❌ SSH 失败: ' + (res.stderr or '').strip().splitlines()[-1][:80]}")
+        except Exception as e:
+            print(f"  {name:22s} ❌ {e}")
+    return 0
+
+
+def registry_credentials():
+    """镜像仓库凭据：环境变量优先，其次 ~/.volc/registry-cred。只返回，不打印。"""
+    user = os.environ.get("VOLC_REGISTRY_USER") or ""
+    token = os.environ.get("VOLC_REGISTRY_TOKEN") or ""
+    path = os.path.expanduser("~/.volc/registry-cred")
+    if (not user or not token) and os.path.exists(path):
+        try:
+            for raw in open(path, errors="ignore"):
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip().lower(), v.strip()
+                if k in ("username", "user") and not user:
+                    user = v
+                if k in ("token", "password", "secret") and not token:
+                    token = v
+        except Exception:
+            pass
+    return user, token, path
+
+
+def cmd_conf(args):
+    """把线上实例导出为 create/update 用的 YAML 模板。纯本地生成，不调写接口。"""
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    iid, name = it.get("Id"), it.get("Name")
+    detail = it
+    out, _ = run_ve("GetDevInstance", {"Id": iid})
+    if isinstance(out, dict) and out.get("Id") == iid:
+        detail = out
+    conf = conf_template(detail)
+    if args.name:
+        conf["Name"] = args.name
+    header = (f"# devctl 导出的创建/换镜像模板（源自实例 {name}，{iid}）\\n"
+              "# 实测必填：Image.Type、Volume.VolumeTypeId；ResourceQueueId 与 ResourceReservationPlanId 至少一个。\\n"
+              "# 预演会解析 YAML 并查询重名实例；提交后由 CreateDevInstance 校验请求字段。\\n"
+              "# VolumeTypeId 必须是 create 口径（如 ml.essd.pl1）；若导出的是 Extreme 这类旧写法，先改成 ml.essd.plX。\\n"
+              "# 创建前先跑 devctl create -f <本文件>（默认只预演），确认后再加 --apply。\\n")
+    text = header + dump_yaml(conf)
+    if args.out:
+        path = os.path.expanduser(args.out)
+        try:
+            with open(path, "w") as f:
+                f.write(text)
+            os.chmod(path, 0o600)
+        except Exception as e:
+            print(f"❌ 写入失败: {e}")
+            return 1
+        print(f"已写入 {path}（权限 600）")
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
+def _yaml_preview(path):
+    """解析预演和实际请求共用的 YAML 配置。"""
+    try:
+        sys.path.append(os.path.expanduser("~/.local/share/devctl/python"))
+        import yaml
+        with open(path, errors="ignore") as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def cmd_create(args):
+    """按 conf 创建开发机。默认只预演；--apply 才真正调接口。"""
+    path = os.path.expanduser(args.filename)
+    if not os.path.exists(path):
+        print(f"❌ 配置文件不存在: {path}")
+        return 1
+    data = _yaml_preview(path)
+    overrode = []
+    if args.queue:
+        overrode.append(f"ResourceQueueId={args.queue}")
+    if args.name:
+        overrode.append(f"Name={args.name}")
+    if data is not None:
+        if args.queue:
+            data["ResourceQueueId"] = args.queue
+            data.pop("ResourceReservationPlanId", None)
+        if args.name:
+            data["Name"] = args.name
+    else:
+        print("❌ 创建配置必须是可解析的 YAML 对象，请检查文件与 PyYAML。")
+        return 1
+    print(f"=== 创建开发机预览（{path}）===")
+    if overrode:
+        print(f"命令行覆盖: {', '.join(overrode)}")
+    if data:
+        img = data.get("Image") or {}
+        vol = data.get("Volume") or {}
+        claim = data.get("ResourceClaim") or {}
+        print(f"名称:       {data.get('Name') or '(未指定)'}")
+        print(f"镜像:       {img.get('Type', '-')}: {img.get('Url') or img.get('ImageId') or '-'}")
+        if img.get("ImageCredential"):
+            print("镜像凭据:   已提供（用户名/口令不回显）")
+        print(f"队列/预约:  {data.get('ResourceQueueId') or data.get('ResourceReservationPlanId') or '(未指定)'}")
+        print(f"计算规格:   {claim.get('InstanceTypeId') or data.get('InstanceTypeId') or '(未指定)'}")
+        print(f"云盘:       {vol.get('VolumeTypeId') or '-'} · {vol.get('Size') or '-'} GiB")
+        vtype = str(vol.get("VolumeTypeId") or "")
+        if vtype and not vtype.startswith("ml."):
+            print(f"            ⚠️ VolumeTypeId '{vtype}' 看着像 get 返回的旧写法，create 可能报 "
+                  "Invalid Volume Type；建议改成 ml.essd.plX（如 ml.essd.pl1）。")
+        if data.get("Storages"):
+            print(f"共享存储:   {len(data['Storages'])} 个挂载点")
+        if data.get("SshPublicKey"):
+            print(f"SSH 公钥:   {len(str(data['SshPublicKey']).strip().splitlines())} 把")
+        if data.get("Ports"):
+            print(f"端口:       {len(data['Ports'])} 条")
+
+
+    new_name = (data or {}).get("Name")
+    items, err = get_my_instances()
+    if err:
+        print(f"❌ 无法获取现有实例列表，为避免重名创建先停下: {err}")
+        return 1
+    if new_name and any(x.get("Name") == new_name for x in items):
+        print(f"🛑 已存在同名开发机 {new_name}，先改名或先处理旧实例。")
+        return 1
+    if not args.apply:
+        print(f"\\n这是预演，未调用创建接口。确认后执行：devctl create -f {path} --apply")
+        return 0
+
+    print("\\n开始创建 ...")
+    image = data.get("Image", {})
+    if "ImageCredential" in image:
+        image["Credential"] = image.pop("ImageCredential")
+    out, err = run_ve("CreateDevInstance", data, timeout=180)
+    if err:
+        print(f"❌ 创建失败: {err}")
+        return 1
+    iid = None
+    try:
+        iid = (out or {}).get("Id")
+    except Exception:
+        pass
+    if not iid and new_name:
+        items, _ = get_my_instances()
+        for x in items or []:
+            if x.get("Name") == new_name:
+                iid = x.get("Id")
+    if not iid:
+        print(f"✅ 创建指令已接受（{ (out or '').strip()[:120] }），用 devctl list 复核。")
+        return 0
+    print(f"实例已创建: {iid}，等待进入 Running ...")
+    for _ in range(20):
+        time.sleep(5)
+        got, _ = run_ve("GetDevInstance", {"Id": iid})
+        if not got:
+            continue
+        try:
+            st = state_of(got)
+        except Exception:
+            continue
+        print(f"  当前状态: {st}")
+        if st == "Running":
+            return cmd_status(argparse.Namespace(target=iid, json=False, no_probe=False,
+                                                  no_key=False, show_secret=False))
+        if st in ("Failed", "Error"):
+            print("❌ 实例进入失败状态，请到控制台查看事件。")
+            return 1
+    print(f"仍在启动中，稍后用 devctl status {iid} 查看。")
+    return 0
+
+
+def cmd_set_image(args):
+    """更换镜像（对应控制台的“更换镜像”）。要求已关机；--apply 才下发。"""
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    iid, name = it.get("Id"), it.get("Name")
+    cur_type, cur_url = image_of(it)
+    if state_of(it) != "Stopped" and not args.force:
+        print(f"🛑 {name} 当前是 {state_of(it)}，换镜像要求先关机。")
+        print(f"   先 devctl stop {name}（带防误杀检查），确认要跳过这个限制就加 --force。")
+        return 1
+    conf = {"Image": {"Type": args.image_type or cur_type, "Url": args.image_url}}
+    if args.username or args.token:
+        conf["Image"]["Credential"] = {"RegistryUsername": args.username or "",
+                                           "RegistryToken": args.token or ""}
+    print(f"=== 更换镜像预览：{name} ===")
+    print(f"当前:     {cur_type}: {cur_url}")
+    print(f"改为:     {conf['Image']['Type']}: {args.image_url}")
+    if "Credential" in conf["Image"]:
+        print("凭据:     已提供（口令不回显）")
+    if not args.apply:
+        print(f"\\n这是预演，未调用更新接口。确认后执行："
+              f"devctl set-image {args.target} --image-url {args.image_url} --apply")
+        return 0
+    _out, err = run_ve("RebuildDevInstance", {"Id": iid, **conf}, timeout=120)
+    if err:
+        print(f"❌ 更换镜像失败: {err}")
+        return 1
+    print(f"✅ 更换镜像指令已下发，用 devctl status {name} 复核。")
+    return 0
+
+
+def cmd_save_image(args):
+    """保存镜像：控制台专属能力，这里只报权限状态并给控制台地址，不做写操作。"""
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    t, url = image_of(it)
+    print(f"=== 保存镜像：{it.get('Name')} ===")
+    print(f"当前镜像:   {t}: {url}")
+    flag = "允许" if it.get("AllowImageBuild") else "未开通 / 不允许"
+    print(f"构建权限:   {flag}")
+    if it.get("IsBuildingImage"):
+        print("构建状态:   ⏳ 进行中")
+    print("说明:       把开发机环境固化成 CR 镜像是控制台专属能力，CLI 没有接口（ml_image register 已下线）。")
+    print(f"控制台:     {console_url('devinstance', it.get('Id'))}")
+    return 0
+
+
+def cmd_reboot(args):
+    """重启与关机同风险（会杀掉机内作业），复用同一套拦截。"""
+    it, matches, err = resolve_instance(args.target)
+    code = _handle_resolve(it, matches, err, args.target)
+    if code is not None:
+        return code
+    iid, name = it.get("Id"), it.get("Name")
+    if state_of(it) != "Running":
+        print(f"{name} 当前是 {state_of(it)}，无需重启。")
+        return 0
+    if not args.force:
+        ok, why = _stop_guard(it, action="reboot")
+        if not ok:
+            print(why)
+            return 1
+    print(f"正在重启 {name} ({iid}) ...")
+    _, err = run_ve("RebootDevInstance", {"Id": iid})
+    if err:
+        print(f"❌ 重启指令发送失败: {err}")
+        return 1
+    print(f"✅ 重启指令已下发，用 devctl status {name} 复核。")
+    return 0
+
+
+def _handle_resolve(it, matches, err, target):
+    """统一处理解析失败；返回退出码或 None 表示继续。"""
+    if err:
+        print(f"❌ 错误: {err}", file=sys.stderr)
+        return 1
+    if matches:
+        print(f"❌ '{target}' 匹配到多台开发机，请用完整名称或 ID：", file=sys.stderr)
+        for m in matches:
+            print(f"  - {m.get('Name')} ({m.get('Id')}) [{state_of(m)}]", file=sys.stderr)
+        return 1
+    if not it:
+        print(f"❌ 没有与 '{target}' 匹配的开发机，执行 devctl list 查看列表。", file=sys.stderr)
+        return 1
+    return None
+
+
+# ------------------------------------------------------------------- CLI
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="devctl",
+        description="火山 veMLP 开发机控制台（云端状态 + 机内算力作业探针）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例:
+  devctl list                    列出全部开发机（默认含已关机的）
+  devctl list --running          只看运行中的
+  devctl list --probe            并行探针，一次看全部机器的机内状态
+  devctl status example-instance             单机详情 + 机内探针（含镜像/云盘/共享存储/端口）
+  devctl probe example-instance              只跑机内探针（快）
+  devctl connect example-instance            输出 SSH / WebIDE 连接方式
+  devctl conf example-instance --out /tmp/x.yaml   导出创建/换镜像模板
+  devctl create -f /tmp/x.yaml   预演创建（加 --apply 才真正创建）
+  devctl set-image example-instance --image-url <url>   预演换镜像（要求已关机，--apply 执行）
+  devctl save-image example-instance         看保存镜像权限与控制台地址
+  devctl start example-instance              开机
+  devctl stop example-instance               关机（有作业/连不上会被拦，--force 强制）
+  devctl reboot example-instance             重启（与关机同风险，带拦截）
+  devctl stop-idle               预演：哪些空闲机器可以关
+  devctl stop-idle --apply       真正关掉这些空闲机器
+  devctl doctor                  依赖与连通性自检
+""")
+    sub = p.add_subparsers(dest="action")
+
+    sp = sub.add_parser("list", help="列出开发机")
+    sp.add_argument("-r", "--running", action="store_true", help="只看运行中的")
+    sp.add_argument("-p", "--probe", action="store_true", help="并行探针机内状态")
+    sp.add_argument("--all", action="store_true", help="同 --probe（一次看全部）")
+    sp.add_argument("--json", action="store_true", help="输出 JSON")
+    sp.set_defaults(func=cmd_list)
+
+    for name, aliases, fn, helptext in (
+        ("status", ("get", "info"), cmd_status, "查看单台开发机详情与机内探针"),
+        ("probe", (), cmd_probe, "只跑机内探针"),
+        ("state", (), cmd_state, "纯 API 快查开机状态（<1s，不跑探针；SSH 不通时先跑它）"),
+        ("connect", ("ssh",), cmd_connect, "输出 SSH / WebIDE 连接方式"),
+        ("start", ("on", "boot"), cmd_start, "启动开发机"),
+    ):
+        sp = sub.add_parser(name, aliases=list(aliases), help=helptext)
+        if name == "state":
+            sp.add_argument("target", nargs="?", default=None,
+                            help="开发机名称或实例 ID（省略则列出全部）")
+        else:
+            sp.add_argument("target", help="开发机名称或实例 ID")
+        sp.add_argument("--json", action="store_true", help="输出 JSON")
+        if name in ("status", "probe"):
+            sp.add_argument("--no-key", action="store_true", help="输出里隐藏本地私钥路径")
+        if name == "status":
+            sp.add_argument("--no-probe", action="store_true", help="跳过机内探针")
+        if name in ("status", "connect"):
+            sp.add_argument("--show-secret", action="store_true",
+                            help="显示 WebIDE 地址里的 password（默认脱敏）")
+        sp.set_defaults(func=fn)
+
+    sp = sub.add_parser("ssh-proxy", help="为 OpenSSH 转发到实例当前的 SSH 端口")
+    sp.add_argument("instance_id", help="开发机实例 ID")
+    sp.set_defaults(func=cmd_ssh_proxy)
+
+    sp = sub.add_parser("stop", aliases=["off", "shutdown"], help="安全关机（带防误杀拦截）")
+    sp.add_argument("target", help="开发机名称或实例 ID")
+    sp.add_argument("--force", action="store_true", help="跳过机内检查强制关机")
+    sp.set_defaults(func=cmd_stop)
+
+    reboot_help = "运行中的实例通过安全检查后立即重启"
+    sp = sub.add_parser("reboot", aliases=["restart"], help=reboot_help, description=reboot_help)
+    sp.add_argument("target", help="开发机名称或实例 ID")
+    sp.add_argument("--force", action="store_true", help="跳过机内检查强制重启")
+    sp.set_defaults(func=cmd_reboot)
+
+    sp = sub.add_parser("conf", help="把线上实例导出成 create/update 的 YAML 模板")
+    sp.add_argument("target", help="开发机名称或实例 ID")
+    sp.add_argument("--out", help="写入指定文件（0600）；不加则打到标准输出")
+    sp.add_argument("--name", help="覆盖模板里的 Name（方便建新机）")
+    sp.set_defaults(func=cmd_conf)
+
+    sp = sub.add_parser("create", help="按 conf 创建开发机（默认只预演，--apply 才创建）")
+    sp.add_argument("-f", "--filename", required=True, help="YAML 配置文件")
+    sp.add_argument("--apply", action="store_true", help="真正调用创建接口")
+    sp.add_argument("--queue", help="本次使用指定队列，覆盖模板中的队列或预约计划")
+    sp.add_argument("--name", help="覆盖 conf 里的 Name（同一模板连用两次很方便）")
+    sp.set_defaults(func=cmd_create)
+
+    sp = sub.add_parser("set-image", aliases=["image"], help="更换镜像（要求已关机；默认只预演）")
+    sp.add_argument("target", help="开发机名称或实例 ID")
+    sp.add_argument("--image-url", required=True, help="镜像地址（CR/DockerHub/NGC/自建）")
+    sp.add_argument("--image-type", help="Image.Type，默认沿用该实例现有类型（实测有 Custom / VolcEngine 等）")
+    sp.add_argument("--username", help="私有仓库用户名（对应控制台的 镜像URL-用户名）")
+    sp.add_argument("--token", help="私有仓库密钥/Token（不回显，建议改用环境变量）")
+    sp.add_argument("--apply", action="store_true", help="真正调用更新接口")
+    sp.add_argument("--force", action="store_true", help="实例未关机时也允许下发")
+    sp.set_defaults(func=cmd_set_image)
+
+    sp = sub.add_parser("save-image", help="保存镜像：权限状态 + 控制台地址（无写操作）")
+    sp.add_argument("target", help="开发机名称或实例 ID")
+    sp.set_defaults(func=cmd_save_image)
+
+    sp = sub.add_parser("stop-idle", help="批量关掉空闲开发机（默认只预演）")
+    sp.add_argument("--apply", action="store_true", help="真正执行关机；不加则只预演")
+    sp.add_argument("--force-sessions", action="store_true", help="连有会话但无作业的机器也关")
+    sp.add_argument("--json", action="store_true", help="输出待关机器 JSON")
+    sp.set_defaults(func=cmd_stop_idle)
+
+    sp = sub.add_parser("doctor", help="依赖与连通性自检")
+    sp.set_defaults(func=cmd_doctor)
+    return p
+
 
 def main():
-    if len(sys.argv) < 2:
-        print("用法: devctl <list | status <name/id> | start <name/id> | stop <name/id> [--force]>")
-        sys.exit(1)
-    
-    action = sys.argv[1].lower()
-    if action == "list":
-        cmd_list()
-    elif action in ("status", "get", "info"):
-        if len(sys.argv) < 3:
-            print("错误: 请指定开发机名称或 ID，例如: devctl status my-instance")
-            sys.exit(1)
-        cmd_status(sys.argv[2])
-    elif action in ("start", "on", "boot"):
-        if len(sys.argv) < 3:
-            print("错误: 请指定开发机名称或 ID，例如: devctl start my-instance")
-            sys.exit(1)
-        cmd_start(sys.argv[2])
-    elif action in ("stop", "off", "shutdown"):
-        if len(sys.argv) < 3:
-            print("错误: 请指定开发机名称或 ID，例如: devctl stop my-instance")
-            sys.exit(1)
-        cmd_stop(sys.argv[2], force="--force" in sys.argv)
-    else:
-        print(f"未知操作 '{action}'。支持的操作: list, status, start, stop")
-        sys.exit(1)
+    parser = build_parser()
+    args = parser.parse_args()
+    if not getattr(args, "action", None):
+        parser.print_help()
+        return 1
+    return args.func(args) or 0
+
 
 if __name__ == "__main__":
-    main()
-`;
+    sys.exit(main())
+`,
+  "keepalive": `#!/usr/bin/env python3
+"""keepalive — 阻止火山开发机被「闲时关机」回收。
 
-const VOLC_DEVINSTANCE_FILES: Record<string, string> = {
-  devctl: VOLC_DEVCTL,
+背景（2026-10-27/28 实测）：一台开发机一天被回收五次。原因是跑的都是 CPU/IO 型常驻服务
+（知识库/MCP/Web/向量检索），GPU 利用率恒 0，平台的闲时关机规则判定为空闲。
+
+平台规则本身是**队列级**的（控制台 → 资源组管理 → 队列 → 规则设置），
+\`mlp\` CLI 和 DevInstance OpenAPI 都**不能读写**该规则（字段全被判 unused）。
+但 OpenAPI 提供 \`CancelIdleShutdown\`：在实例进入"待关机"状态时取消它。
+
+本脚本轮询 GetDevInstance；一旦发现 \`ExpectedStopTime\` 被设置（或进入 Stopping），
+立刻调用 CancelIdleShutdown。必须跑在**别的机器**上，否则本机被关心跳也没了。
+
+用法:
+    keepalive <实例ID> [间隔秒=30]
+    keepalive --check <实例ID>     # 只查询一次
+    keepalive --once <实例ID>      # 单次保活，必要时取消闲时关机
+"""
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.request
+
+ENDPOINT = "open.volcengineapi.com"
+REGION = "cn-beijing"
+SERVICE = "ml_platform"
+VERSION = "2024-07-01"
+CRED_FILE = os.path.expanduser("~/.volc/credentials")
+
+
+def load_creds():
+    ak = sk = None
+    section = None
+    for line in open(CRED_FILE, errors="ignore"):
+        s = line.strip()
+        if s.startswith("["):
+            section = s.strip("[]")
+            continue
+        if section == "default" and "=" in s:
+            k, v = s.split("=", 1)
+            if k.strip() == "access_key_id":
+                ak = v.strip()
+            elif k.strip() == "secret_access_key":
+                sk = v.strip()
+    return ak, sk
+
+
+def _hmac(key, msg):
+    import hashlib
+    import hmac
+    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+
+def sign_and_call(action, body):
+    """Volcengine V4 签名 + POST。不依赖 SDK，只用标准库。"""
+    import hashlib
+    import datetime
+
+    ak, sk = load_creds()
+    if not ak or not sk:
+        raise RuntimeError("读不到 AK/SK（~/.volc/credentials）")
+
+    payload = json.dumps(body, separators=(",", ":"))
+    payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    xdate = now.strftime("%Y%m%dT%H%M%SZ")
+    short = xdate[:8]
+
+    query = f"Action={action}&Version={VERSION}"
+    signed_headers = "content-type;host;x-content-sha256;x-date"
+    canonical_headers = (
+        "content-type:application/json\\n"
+        f"host:{ENDPOINT}\\n"
+        f"x-content-sha256:{payload_hash}\\n"
+        f"x-date:{xdate}\\n"
+    )
+    canonical_request = "\\n".join([
+        "POST", "/", query, canonical_headers, signed_headers, payload_hash,
+    ])
+    cred_scope = f"{short}/{REGION}/{SERVICE}/request"
+    string_to_sign = "\\n".join([
+        "HMAC-SHA256", xdate, cred_scope,
+        hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+    ])
+    k_date = _hmac(sk.encode("utf-8"), short)
+    k_region = _hmac(k_date, REGION)
+    k_service = _hmac(k_region, SERVICE)
+    k_signing = _hmac(k_service, "request")
+    signature = _hmac(k_signing, string_to_sign).hex()
+
+    authorization = (
+        f"HMAC-SHA256 Credential={ak}/{cred_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "Host": ENDPOINT,
+        "X-Date": xdate,
+        "X-Content-Sha256": payload_hash,
+        "Authorization": authorization,
+    }
+    url = f"https://{ENDPOINT}/?{query}"
+    req = urllib.request.Request(url, data=payload.encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        try:
+            return e.code, json.loads(raw)
+        except Exception:
+            return e.code, {"raw": raw}
+    except Exception as e:
+        # URLError / socket.timeout / ConnectionReset 等网络类异常。
+        # 2026-10-29 实测：只捕 HTTPError 时，一次 urlopen 超时就把进程打死，
+        # 而它距离真正的关机窗口只剩 1 小时。看门狗的底线是「永不因网络退出」。
+        return 0, {"network_error": "%s: %s" % (type(e).__name__, str(e)[:120])}
+
+
+def state_of(iid):
+    code, data = sign_and_call("GetDevInstance", {"Id": iid})
+    if code == 0:
+        return None, "网络错误: " + str(data.get("network_error"))[:120]
+    if code != 200 or (data.get("ResponseMetadata") or {}).get("Error"):
+        err = (data.get("ResponseMetadata") or {}).get("Error") or {}
+        return None, f"HTTP {code}: {err.get('Code')} {err.get('Message', '')[:120]}"
+    res = data.get("Result") or {}
+    if res.get("Id") != iid or not (res.get("Status") or {}).get("State"):
+        return None, "查询返回的实例 ID 或状态无效"
+    return res, None
+
+
+def main():
+    parser = argparse.ArgumentParser(description="监测开发机闲时关机倒计时")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="只查询一次状态和倒计时")
+    mode.add_argument("--once", action="store_true", help="执行一轮保活，必要时取消闲时关机")
+    parser.add_argument("instance_id", help="开发机实例 ID")
+    parser.add_argument("interval", nargs="?", type=int, default=30, help="轮询间隔秒数")
+    args = parser.parse_args()
+    if args.interval < 1:
+        parser.error("轮询间隔必须大于零")
+    iid = args.instance_id
+    single = args.check or args.once
+    cancelled = 0
+    rounds = 0
+    while True:
+        rounds += 1
+        try:
+            res, err = state_of(iid)
+        except Exception as exc:  # 最后一道兜底：任何异常都不许退出
+            res, err = None, "未捕获异常 %s: %s" % (type(exc).__name__, str(exc)[:120])
+        if err:
+            print(f"查询失败: {err}", file=sys.stderr, flush=True)
+            if single:
+                return 1
+        else:
+            state = (res.get("Status") or {}).get("State", "?")
+            expected = res.get("ExpectedStopTime") or ""
+            tag = f"{state}"
+            if expected:
+                tag += f"  待关机={expected}"
+            if rounds % 120 == 0:
+                print(f"  [{time.strftime('%H:%M:%S')}] 心跳 第{rounds}轮 · {tag}", flush=True)
+            else:
+                print(f"  [{time.strftime('%H:%M:%S')}] {tag}", flush=True)
+            if args.check:
+                return 0
+            if expected or state == "Stopping":
+                code, data = sign_and_call("CancelIdleShutdown", {"Id": iid})
+                if code == 200 and not (data.get("ResponseMetadata") or {}).get("Error"):
+                    cancelled += 1
+                    print(f"      ✅ CancelIdleShutdown 成功（累计 {cancelled} 次）", flush=True)
+                else:
+                    err2 = (data.get("ResponseMetadata") or {}).get("Error") or {}
+                    print(f"      ⚠️ 取消失败 HTTP {code}: {err2.get('Code')} {err2.get('Message','')[:120]}", flush=True)
+                    if single:
+                        return 1
+        if single:
+            return 0
+        time.sleep(args.interval)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
+`,
+  "references/operations.md": `# 开发机操作参考
+
+## 依赖
+
+- 火山通用 CLI \`ve\`（npm 包 \`@volcengine/cli\`），由 PATH 或 \`VOLC_VE_BIN\` 定位。Mac 版读取旧机 \`~/.volc/credentials\` 的 default AK/SK 和 \`~/.volc/config\` 的区域。只读验收用 \`devctl list --json\`、\`devctl status <ID> --no-probe --json\`。
+- SSH 私钥解析顺序：\`VOLC_SSH_KEY\` → \`~/.ssh/config\` 对应 Host 的 \`IdentityFile\` → 实例 \`SshPublicKey\` 的注释名（如注释是 \`dev-key\` 就取 \`~/.ssh/dev-key\`）→ 按公钥指纹在 \`~/.ssh\` 下反查私钥 → \`~/.ssh/<名称小写>\` → \`~/.ssh/id_ed25519\`。
+- 机内需要 \`python3\`；\`tmux\`、\`nvidia-smi\` 缺失时自动降级，不算失败。
+- 可调环境变量：\`VOLC_SSH_USER\`（默认 root）、\`VOLC_SSH_TIMEOUT\`（默认 8s）、\`VOLC_PROBE_PARALLEL\`（默认 6）、\`VOLC_REGISTRY_USER\` / \`VOLC_REGISTRY_TOKEN\`（私有仓库凭据，也可放 \`~/.volc/registry-cred\` 的 \`username=\` / \`token=\` 两行）。
+- 创建配置用 PyYAML 解析；本机工具专用依赖位于 \`~/.local/share/devctl/python\`。
+
+## 镜像与创建（v3）
+
+### 镜像三种来源（对齐控制台「创建开发机」表单）
+
+| 控制台选项 | 实际形态 | devctl 怎么用 |
+|---|---|---|
+| 预置镜像 | \`vemlp-<region>.cr.volces.com/preset-images/<name>:<tag>\`，Type 常见 \`Preset\` / \`VolcEngine\` | \`list\`/\`status\` 直接显示；选镜像只能去控制台或 \`conf\` 模板里改 \`Image.Url\` |
+| 自定义镜像 | 火山引擎容器镜像仓库 CR（如 \`<registry>.cr.volces.com/<ns>/<repo>\`），Type 常见 \`Custom\` | 同上；仓库列表只有控制台接口（\`ListImageRepos\` / \`ListVolcImageRepos\`），CLI 无对应命令 |
+| 镜像URL | 任意公网可达仓库（CR / DockerHub / NGC / 自建），私有仓库要 \`RegistryUsername\` + \`RegistryToken\` | \`set-image --image-url ... --username ... --token ...\`，或写进 \`conf\` 的 \`Image.ImageCredential\` |
+
+四类凭据面：AK/SK（\`~/.volc/credentials\`）、SSH 公钥（登录）、镜像仓库用户名+口令（拉私有镜像）、\`AllowImageBuild\`（能不能保存镜像）。
+
+### 写操作的默认姿态
+
+- \`create\` / \`set-image\` **默认只预演**：打印将创建/将变成什么，不调用任何写接口；必须显式 \`--apply\`。
+- \`create --apply\` 前会先查重名；\`set-image\` 要求实例已关机（对应控制台规则），跳过要 \`--force\`。
+- \`set-image --apply\` 通过 \`ve\` 提交 \`RebuildDevInstance\` 请求。
+- \`save-image\` 不做写操作：镜像构建是控制台专属能力，这里只报权限状态并给控制台地址。
+- 创建/换镜像前建议先 \`devctl conf <现有实例>\` 拿一份线上模板，改 \`Name\`/\`Image\` 再走预演。
+
+### 创建前如何校验配置
+
+运行 \`devctl create -f <conf.yaml>\` 会解析 YAML、显示配置摘要，并查询当前账号创建的开发机以检查重名。只有加 \`--apply\` 才会通过 \`ve\` 提交 \`CreateDevInstance\` 请求，由服务端校验字段和值。
+
+从现有实例导出模板后，检查 \`Image.Type\` 和 \`Volume.VolumeTypeId\`（例如 \`ml.essd.pl1\`），并指定队列 \`ResourceQueueId\` 或预约计划 \`ResourceReservationPlanId\`。从旧实例导出的云盘类型（例如 \`Extreme\`）可能需要改成创建接口接受的值。
+
+**排队与配额**：队列剩余配额不足时，实例会在 \`Pending\` 停住并带原因文案（“当前队列剩余配额不足，需要等待其他负载资源释放”）；pending 不占算力，但占队列位与云盘，演练完应主动删掉。
+`,
+  "references/shared-pi.md": `# 在开发机上使用共享 Pi
+
+用 \`devctl status <实例> --no-probe\` 确认共享存储的挂载路径与读写权限。把项目放在自己的持久目录中，避免依赖实例重建时可能变化的软链接。重建后重新验证容器的子目录挂载。
+
+将 Node、Pi 入口和共享的 agent 配置放在共享盘自己的目录，使用绝对路径启动。选择与最老目标镜像兼容的 Node，同一时间只在一台机器上更新共享安装。模型凭据放在实例本地，仅允许所有者读写；实例重建后单独配置。
+`,
+  "references/field-notes.md": `# 排查闲时关机
+
+纯 CPU 或 I/O 服务可能被队列的 GPU 闲时规则回收。查看目标队列的实际指标、阈值、观察窗口和倒计时，不要将某一队列的配置套用到其他实例。
+
+\`keepalive --check <ID>\` 查询状态与倒计时。需要保护特定任务时，从另一台机器运行保活；\`CancelIdleShutdown\` 只取消当前倒计时。服务重启后的恢复和计算作业的检查点需要单独配置。
+`,
 };
 
 export const DEFAULT_SKILLS: DefaultSkill[] = [

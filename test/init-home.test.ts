@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,7 +56,13 @@ test("init installs default Feishu Skills without overwriting user edits", () =>
   assert.ok(existsSync(devctlPath));
   const devctlBody = readFileSync(devctlPath, "utf8");
   assert.doesNotMatch(devctlBody, /\/home\/dministrator/);
-  assert.match(devctlBody, /find_mlp_bin/);
+  assert.match(execFileSync(devctlPath, ["--help"], { encoding: "utf8" }), /ssh-proxy/);
+  const volcDir = join(agent, "skills", "volc-devinstance");
+  assert.match(execFileSync(join(volcDir, "keepalive"), ["--help"], { encoding: "utf8" }), /--check/);
+  const instructions = readFileSync(join(volcDir, "SKILL.md"), "utf8");
+  const references = [...instructions.matchAll(/\]\((references\/[^)]+)\)/g)];
+  assert.equal(references.length, 3);
+  for (const [, ref] of references) assert.ok(existsSync(join(volcDir, ref)));
   const hermesPaths = readFileSync(join(agent, "skills", "feishu-hermes-memory", "SKILL.md"), "utf8");
   assert.match(hermesPaths, /~\/\.feishu-agent\/pi-hermes-memory/);
   assert.match(hermesPaths, /PI_CODING_AGENT_DIR/);
